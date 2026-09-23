@@ -17,7 +17,9 @@ const list = (v, d) => (v == null || v === '' ? d : String(v).split(',').map(s =
  * source, so a service can only ever publish into its own namespace (svc:live -> live.*).
  */
 const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openre', 'billing', 'tips',
-    'vip', 'ai', 'games', 'tools', 'codes', 'host'];
+    'vip', 'ai', 'games', 'tools', 'codes', 'host', 'sources', 'search',
+    // Publication products (Waves 16-19): each publishes <product>.<type>.<action> via openvibe-publishing.
+    'wiki', 'blog', 'news', 'reviews', 'deals', 'coupons', 'trade'];
 
 function sourcePrefixes(env) {
     let map = Object.fromEntries(DEFAULT_SOURCES.map(s => [s, [`${s}.`]]));
