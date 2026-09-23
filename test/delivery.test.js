@@ -1,6 +1,7 @@
 'use strict';
 const assert = require('assert');
-const { verifyDelivery } = require('../lib/client');
+const crypto = require('crypto');
+const { verifyDelivery, verifyDeliveryV2, signV2, sign } = require('../lib/client');
 const { boot, request, serviceToken, envelope, subscriber, suite, sleep } = require('./helpers');
 
 const t = suite('delivery');
@@ -17,6 +18,37 @@ async function publish(env) {
     assert.ok(r.status === 201 || r.status === 200, r.text);
     return r.body;
 }
+
+t('signV2 / verifyDeliveryV2: HMAC of "<t>.<raw body>", ±300 s, constant-time', async () => {
+    const secret = `whsec_${'cd'.repeat(32)}`;
+    const raw = Buffer.from(JSON.stringify({ event: { event_id: 'evt_1' }, seq: 3 }));
+    const now = 1790000000000;
+    const t = Math.floor(now / 1000);
+    const v2 = signV2(raw, secret, t);
+    assert.strictEqual(v2, `t=${t},v2=${crypto.createHmac('sha256', secret).update(`${t}.${raw}`).digest('hex')}`);
+    const headers = { 'x-openvibe-timestamp': String(t), 'x-openvibe-signature-v2': v2, 'x-openvibe-signature': sign(raw, secret) };
+    assert.ok(verifyDeliveryV2(raw, headers, secret, { now }));
+    assert.ok(verifyDeliveryV2(raw.toString(), new Headers(headers), secret, { now }), 'Fetch Headers and string bodies');
+    assert.ok(verifyDeliveryV2(raw, { 'X-OpenVibe-Signature-V2': v2 }, secret, { now }), 'any header case; X-OpenVibe-Timestamp optional');
+    assert.ok(verifyDeliveryV2(raw, headers, secret, { now: now + 300000 }), 'edge of the window');
+    assert.ok(verifyDeliveryV2(raw, headers, secret, { now: now - 300000 }));
+    assert.ok(!verifyDeliveryV2(raw, headers, secret, { now: now + 301000 }), 'too old');
+    assert.ok(!verifyDeliveryV2(raw, headers, secret, { now: now - 301000 }), 'too far in the future');
+    assert.ok(verifyDeliveryV2(raw, headers, secret, { now: now + 3600000, toleranceSec: 3601 }));
+    assert.ok(!verifyDeliveryV2(raw, headers, 'whsec_other', { now }));
+    assert.ok(!verifyDeliveryV2(Buffer.from(raw.toString().replace('3', '4')), headers, secret, { now }), 'body changed');
+    assert.ok(!verifyDeliveryV2(raw, { ...headers, 'x-openvibe-signature-v2': v2.replace(`t=${t}`, `t=${t + 1}`) }, secret, { now }), 'timestamp changed');
+    assert.ok(!verifyDeliveryV2(raw, { ...headers, 'x-openvibe-timestamp': String(t + 1) }, secret, { now }), 'X-OpenVibe-Timestamp must match t');
+    assert.ok(verifyDeliveryV2(raw, { 'x-openvibe-signature-v2': `${v2},v2=${'0'.repeat(64)}` }, secret, { now }), 'one of several v2 values');
+    for (const bad of [undefined, '', 'v2=abc', `t=${t}`, `t=${t},t=${t},${v2.split(',')[1]}`, `t=x${t},${v2.split(',')[1]}`, `t=${t},v2=00`, 'garbage', sign(raw, secret)]) {
+        assert.ok(!verifyDeliveryV2(raw, { 'x-openvibe-signature-v2': bad }, secret, { now }), String(bad));
+    }
+    assert.ok(!verifyDeliveryV2(raw, headers, '', { now }));
+    assert.ok(!verifyDeliveryV2(null, headers, secret, { now }));
+    assert.throws(() => verifyDeliveryV2(raw, headers, secret, { toleranceSec: -1 }), TypeError);
+    assert.throws(() => signV2(raw, secret, 1.5), TypeError);
+    assert.match(signV2(raw, secret), /^t=\d{10},v2=[0-9a-f]{64}$/, 'defaults to now');
+});
 
 t('boot', async () => { h = await boot(); });
 
@@ -75,6 +107,12 @@ t('success: signed POST, verified by verifyDelivery; trace propagated', async ()
     assert.ok(verifyDelivery(call.rawBody, call.headers['x-openvibe-signature'], sub.secret));
     assert.ok(!verifyDelivery(call.rawBody, call.headers['x-openvibe-signature'], 'whsec_wrong_secret_wrong_secret_wrong'));
     assert.ok(!verifyDelivery(Buffer.concat([call.rawBody, Buffer.from(' ')]), call.headers['x-openvibe-signature'], sub.secret));
+    const ts = Number(call.headers['x-openvibe-timestamp']);
+    assert.strictEqual(ts, Math.floor(h.clock.now() / 1000), 'X-OpenVibe-Timestamp is the attempt time in unix seconds');
+    assert.match(call.headers['x-openvibe-signature-v2'], new RegExp(`^t=${ts},v2=[0-9a-f]{64}$`));
+    assert.ok(verifyDeliveryV2(call.rawBody, call.headers, sub.secret, { now: h.clock.now() }));
+    assert.ok(!verifyDeliveryV2(call.rawBody, call.headers, 'whsec_wrong_secret_wrong_secret_wrong', { now: h.clock.now() }));
+    assert.ok(!verifyDeliveryV2(call.rawBody, call.headers, sub.secret, { now: h.clock.now() + 301000 }), 'a replay after the window fails');
     assert.strictEqual(call.headers['x-openvibe-event-id'], env.event_id);
     assert.match(call.headers.traceparent, /^00-4bf92f3577b34da6a3ce929d0e0e4736-[0-9a-f]{16}-01$/);
     assert.deepStrictEqual(call.body.event.payload, env.payload);
@@ -96,6 +134,10 @@ t('retries with backoff (injectable clock), then DLQ after 8 attempts, then repl
     for (let attempt = 1; attempt <= 8; attempt++) {
         await h.worker.drain();
         assert.strictEqual(stub.calls.length, attempt, `attempt ${attempt} made`);
+        const call = stub.calls[attempt - 1];
+        assert.strictEqual(call.headers['x-openvibe-timestamp'], String(Math.floor(h.clock.now() / 1000)), 'every retry is signed with a fresh timestamp');
+        assert.ok(verifyDeliveryV2(call.rawBody, call.headers, sub.secret, { now: h.clock.now() }));
+        if (attempt > 1) assert.notStrictEqual(call.headers['x-openvibe-signature-v2'], stub.calls[attempt - 2].headers['x-openvibe-signature-v2']);
         const d = h.store.getDelivery(env.event_id, sub.id);
         assert.strictEqual(d.attempt, attempt);
         if (attempt < 8) {

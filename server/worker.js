@@ -5,7 +5,9 @@
  *   { "event": <envelope>, "seq": <n> }
  *
  * with X-OpenVibe-Event-Id, X-OpenVibe-Signature (sha256=<HMAC of the raw body with the
- * subscription secret>), traceparent (the event's trace). A 2xx is delivered; anything else
+ * subscription secret>), X-OpenVibe-Timestamp (unix seconds, new on every attempt) and
+ * X-OpenVibe-Signature-V2 (t=<that timestamp>,v2=<HMAC of "<t>.<raw body>">; consumers reject it
+ * outside ±300 s, so a captured delivery cannot be replayed later), traceparent (the event's trace). A 2xx is delivered; anything else
  * (including redirects, which are never followed) is retried with backoff 1s, 5s, 30s, 2m, 10m, 1h
  * up to maxAttempts, then the delivery is `dead` (the DLQ; replay requeues it).
  *
@@ -18,7 +20,7 @@
  * most maxAppInflight to developer-app endpoints (so apps can never hold every slot).
  */
 const crypto = require('crypto');
-const { sign } = require('../lib/client');
+const { sign, signV2 } = require('../lib/client');
 const { rowToEnvelope } = require('./store');
 const { checkEndpoint } = require('./endpoints');
 const { createGuardedPost } = require('./egress');
@@ -51,6 +53,7 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
         let outcome;
         try {
             const body = JSON.stringify({ event: rowToEnvelope(row), seq: row.seq });
+            const timestamp = Math.floor(clock.now() / 1000);   // per attempt: a retry is signed afresh
             const headers = {
                 'Content-Type': 'application/json',
                 'User-Agent': 'OpenVibe.Events/0.1',
@@ -61,6 +64,8 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
                 'X-OpenVibe-Delivery-Attempt': String(attempt),
                 'X-OpenVibe-Hops': String(row.hops),
                 'X-OpenVibe-Signature': sign(body, sub.secret),
+                'X-OpenVibe-Timestamp': String(timestamp),
+                'X-OpenVibe-Signature-V2': signV2(body, sub.secret, timestamp),
                 traceparent: `00-${row.trace_id}-${crypto.randomBytes(8).toString('hex')}-01`,
             };
             let res;

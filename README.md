@@ -63,7 +63,9 @@ POST /api/v1/subscriptions
 
 Topic patterns are dot-separated segments where `*` stands for one or more whole segments (`media.vod.*`, `*.created`, `media.*.ready`, `*`). Endpoints must be `http(s)` on `127.0.0.1` or `openvibe.<tld>`/its subdomains (`EVENTS_ENDPOINT_HOSTS`); redirects are never followed.
 
-Each delivery is `POST <endpoint>` with body `{ "event": <envelope>, "seq": n }` and headers `X-OpenVibe-Event-Id`, `X-OpenVibe-Event-Type`, `X-OpenVibe-Seq`, `X-OpenVibe-Subscription-Id`, `X-OpenVibe-Delivery-Attempt`, `X-OpenVibe-Signature: sha256=<HMAC-SHA256 of the raw body with the subscription secret>` and `traceparent` (the event's trace). Any 2xx is delivered. Anything else is retried after 1 s, 5 s, 30 s, 2 min, 10 min, 1 h (then hourly) up to 8 attempts, after which the delivery is `dead`. Priority classes go first (`critical`, `important`, `low`, then seq); one delivery per subscription is in flight at a time and at most 20 overall. Delivery is at least once and not strictly ordered; consumers dedupe with an inbox and order with `subject.revision`.
+Each delivery is `POST <endpoint>` with body `{ "event": <envelope>, "seq": n }` and headers `X-OpenVibe-Event-Id`, `X-OpenVibe-Event-Type`, `X-OpenVibe-Seq`, `X-OpenVibe-Subscription-Id`, `X-OpenVibe-Delivery-Attempt`, `X-OpenVibe-Signature: sha256=<HMAC-SHA256 of the raw body with the subscription secret>`, `X-OpenVibe-Timestamp: <unix seconds>`, `X-OpenVibe-Signature-V2: t=<that timestamp>,v2=<HMAC-SHA256 of "<t>.<raw body>">` and `traceparent` (the event's trace). Any 2xx is delivered. Anything else is retried after 1 s, 5 s, 30 s, 2 min, 10 min, 1 h (then hourly) up to 8 attempts, after which the delivery is `dead`. Priority classes go first (`critical`, `important`, `low`, then seq); one delivery per subscription is in flight at a time and at most 20 overall. Delivery is at least once and not strictly ordered; consumers dedupe with an inbox and order with `subject.revision`.
+
+**Replay window (signature v2).** v1 signs only the body, so a captured delivery verifies forever (the inbox's `event_id` dedupe is all that stops a replay). v2 signs the timestamp together with the body, and every attempt, retries included, is signed afresh with the time it is sent. Consumers check it with `verifyDeliveryV2(raw, headers, secret, { toleranceSec = 300, now })` (here) or openvibe-sdk ≥ 0.4.0 `parseDelivery(raw, headers, secret, { requireV2: true })` and reject anything more than 300 s from their clock either way. A v2 header that is present but wrong or stale is a failure: never fall back to v1 then. Rollout: Events sends both headers first, then each consumer requires v2; v1 stays on the wire until every consumer does. See [docs/replay-window-rollout.md](docs/replay-window-rollout.md).
 
 Operators: `GET /api/v1/deliveries?status=dead` is the dead-letter queue; `POST /api/v1/deliveries/replay { subscription_id, event_ids: [...] }` or `{ subscription_id, from_seq }` requeues retained events (that is also how a new subscription catches up on history).
 
@@ -98,7 +100,7 @@ curl -s -X POST "$EVENTS/api/v1/subscriptions" -H "Authorization: Bearer $TOKEN"
 
 **Sandbox.** Events store each app event's `project_id` and `env`. Apps see and receive only events of their own environment: sandbox events never reach production apps or production subscriptions, and production events never reach sandbox ones. First-party readers and subscribers never see sandbox events, and see production app events only through a pattern that starts with `app.`. Realtime (SSE) never streams app events. Sandbox events are pruned after `EVENTS_APP_SANDBOX_RETENTION_DAYS` (7).
 
-**Webhook endpoints (SSRF guard, [server/egress.js](server/egress.js)).** An app subscription's endpoint must be `https`, without credentials, and its hostname must resolve only to public unicast addresses (loopback, RFC 1918, link-local and cloud metadata, CGNAT, multicast, documentation and benchmarking ranges, unique-local IPv6, and v4-in-v6 forms of any of those are refused). This is checked when the subscription is created and again on every delivery attempt, inside the connection's own DNS lookup, so the socket goes to the address that was checked. A refused address is a permanent failure (dead at once; replayable). Redirects are never followed (a `3xx` is a failed attempt). Deliveries are signed exactly like first-party ones (`X-OpenVibe-Signature`).
+**Webhook endpoints (SSRF guard, [server/egress.js](server/egress.js)).** An app subscription's endpoint must be `https`, without credentials, and its hostname must resolve only to public unicast addresses (loopback, RFC 1918, link-local and cloud metadata, CGNAT, multicast, documentation and benchmarking ranges, unique-local IPv6, and v4-in-v6 forms of any of those are refused). This is checked when the subscription is created and again on every delivery attempt, inside the connection's own DNS lookup, so the socket goes to the address that was checked. A refused address is a permanent failure (dead at once; replayable). Redirects are never followed (a `3xx` is a failed attempt). Deliveries are signed exactly like first-party ones (`X-OpenVibe-Signature`, and `X-OpenVibe-Timestamp` with `X-OpenVibe-Signature-V2`).
 
 **Quotas** (per project and environment, enforced here, `429 events.quota_exceeded` with `quota` = `publish_rate` (plus `Retry-After: 60`), `retained_bytes` or `subscriptions`):
 
@@ -131,11 +133,11 @@ db.transaction(() => {
 })();                     // the event exists if and only if the change committed
 outbox.start();           // relay: publishes pending rows, marks them sent, backs off on failure
 
-// Consumer: signed webhook + exactly-once effects in the consumer's own database
+// Consumer: signed webhook (v2: signature plus a 300 s replay window) + exactly-once effects in the consumer's own database
 const inbox = events.createInbox(db);
 inbox.ensureSchema();
 app.post('/internal/events', express.json({ verify: (req, _res, buf) => { req.rawBody = buf; } }), (req, res) => {
-    if (!events.verifyDelivery(req.rawBody, req.get('X-OpenVibe-Signature'), SECRET)) return res.sendStatus(401);
+    if (!events.verifyDeliveryV2(req.rawBody, req.headers, SECRET)) return res.sendStatus(401);
     inbox.once('live', req.body.event.event_id, () => { /* synchronous db writes */ });
     res.sendStatus(204);
 });
