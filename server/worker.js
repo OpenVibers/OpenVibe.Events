@@ -14,7 +14,8 @@
  * address, redirects refused. A refused address is permanent (dead at once; replay requeues it).
  *
  * Scheduling: a setTimeout chain (never overlapping ticks); priority classes critical > important >
- * low, then seq; one delivery in flight per subscription; at most maxInflight overall.
+ * low, then seq; one delivery in flight per subscription; at most maxInflight overall, of which at
+ * most maxAppInflight to developer-app endpoints (so apps can never hold every slot).
  */
 const crypto = require('crypto');
 const { sign } = require('../lib/client');
@@ -27,6 +28,7 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
     const opts = config.worker;
     const busy = new Set();          // subscription ids with a delivery in flight
     const inflight = new Set();      // promises
+    let appInflight = 0;             // of which to developer-app endpoints (at most opts.maxAppInflight)
     let timer = null;
     let running = false;
     let lastTickAt = null;
@@ -103,19 +105,36 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
         lastTickAt = Date.now();
         const room = opts.maxInflight - inflight.size;
         if (room <= 0) return 0;
-        const due = store.dueDeliveries(clock.now(), room, [...busy]);
-        for (const d of due) {
-            busy.add(d.subscription_id);
-            const p = send(d)
-                .catch(err => log.error(`[worker] delivery ${d.event_id} -> ${d.subscription_id} crashed: ${err.stack || err}`))
-                .finally(() => {
-                    busy.delete(d.subscription_id);
-                    inflight.delete(p);
-                    if (running) schedule(0);
-                });
-            inflight.add(p);
-        }
-        return due.length;
+        let started = 0;
+        let skippedApp = false;
+        const startAll = (due) => {
+            for (const d of due) {
+                if (started >= room) return;
+                const isApp = Boolean(d.app_project_id);
+                if (isApp && appInflight >= opts.maxAppInflight) { skippedApp = true; continue; }
+                start(d, isApp);
+                started++;
+            }
+        };
+        startAll(store.dueDeliveries(clock.now(), room, [...busy], { firstPartyOnly: appInflight >= opts.maxAppInflight }));
+        // App deliveries (which can outrank first-party ones by priority) filled the app share: the
+        // rest of the room goes to first-party subscriptions.
+        if (skippedApp && started < room) startAll(store.dueDeliveries(clock.now(), room - started, [...busy], { firstPartyOnly: true }));
+        return started;
+    }
+
+    function start(d, isApp) {
+        busy.add(d.subscription_id);
+        if (isApp) appInflight++;
+        const p = send(d)
+            .catch(err => log.error(`[worker] delivery ${d.event_id} -> ${d.subscription_id} crashed: ${err.stack || err}`))
+            .finally(() => {
+                busy.delete(d.subscription_id);
+                if (isApp) appInflight--;
+                inflight.delete(p);
+                if (running) schedule(0);
+            });
+        inflight.add(p);
     }
 
     function schedule(ms) {

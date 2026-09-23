@@ -45,6 +45,7 @@ function load(env = process.env) {
     const nodeEnv = env.NODE_ENV || 'development';
     const isProduction = nodeEnv === 'production';
     const port = int(env.PORT, 4300);
+    const maxInflight = int(env.EVENTS_MAX_INFLIGHT, 20);
     return {
         port,
         host: env.HOST || '127.0.0.1',
@@ -77,7 +78,9 @@ function load(env = process.env) {
         worker: {
             enabled: env.EVENTS_WORKER !== 'off',
             intervalMs: int(env.EVENTS_WORKER_INTERVAL_MS, 500),
-            maxInflight: int(env.EVENTS_MAX_INFLIGHT, 20),
+            maxInflight,
+            // Developer-app deliveries share at most this many of the slots (default: half).
+            maxAppInflight: Math.max(1, Math.min(maxInflight, int(env.EVENTS_APP_MAX_INFLIGHT, Math.floor(maxInflight / 2)))),
             timeoutMs: int(env.EVENTS_DELIVERY_TIMEOUT_MS, 10000),
             maxAttempts: int(env.EVENTS_MAX_ATTEMPTS, 8),
             // Wait after attempt n fails = backoffMs[n-1] (the last value repeats).

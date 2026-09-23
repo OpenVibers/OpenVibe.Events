@@ -193,7 +193,12 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
         nextSeq: db.prepare("UPDATE sequences SET value = value + 1 WHERE name = 'events' RETURNING value"),
         lastSeq: db.prepare("SELECT value FROM sequences WHERE name = 'events'"),
         minSeq: db.prepare('SELECT MIN(seq) AS s FROM events'),
-        chainHops: db.prepare('SELECT MAX(hops) AS h FROM events WHERE trace_id = ? AND source != ?'),
+        // Hop depth counts only rows the publisher's own tenancy can have caused: a first-party
+        // publish ignores app events (an app that saw a public trace_id cannot poison that trace), an
+        // app publish counts first-party rows plus its own project and environment.
+        chainHops: db.prepare('SELECT MAX(hops) AS h FROM events WHERE trace_id = ? AND source != ? AND project_id IS NULL'),
+        chainHopsApp: db.prepare(`SELECT MAX(hops) AS h FROM events WHERE trace_id = ? AND source != ?
+            AND (project_id IS NULL OR (project_id = ? AND env = ?))`),
         selfRepeats: db.prepare(`SELECT COUNT(*) AS n FROM events WHERE trace_id = ? AND source = ? AND event_type = ?
             AND subject_type = ? AND subject_id = ? AND (request_id IS NULL OR request_id != ?)`),
         insertEvent: db.prepare(`INSERT INTO events (id, seq, event_type, version, source, actor, subject_type, subject_id,
@@ -252,7 +257,10 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
             }
             // Loop guard: depth of the cross-service chain in this trace, and how often this exact
             // (source, type, subject) already happened in the trace from other publish calls.
-            const chain = (q.chainHops.get(env.trace_id, env.source).h || 0) + 1;
+            const chainRow = project
+                ? q.chainHopsApp.get(env.trace_id, env.source, project.projectId, project.env)
+                : q.chainHops.get(env.trace_id, env.source);
+            const chain = (chainRow.h || 0) + 1;
             const repeats = q.selfRepeats.get(env.trace_id, env.source, env.event_type, env.subject.type, env.subject.id, requestId || '').n + 1;
             const hops = Math.max(chain, repeats);
             if (hops > maxHops) {
@@ -416,12 +424,14 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
      * Next due delivery per subscription (at most one each, so per-subscription concurrency stays 1),
      * ordered by priority class, then seq. `busy` are subscription ids with a delivery in flight.
      */
-    function dueDeliveries(now, limit, busy = []) {
+    function dueDeliveries(now, limit, busy = [], { firstPartyOnly = false } = {}) {
+        // app_project_id: set for developer-app subscriptions (the worker caps their share of slots).
         const rows = db.prepare(`
             SELECT * FROM (
-                SELECT d.*, ROW_NUMBER() OVER (PARTITION BY d.subscription_id ORDER BY d.priority, d.seq) AS rn
+                SELECT d.*, s.project_id AS app_project_id, ROW_NUMBER() OVER (PARTITION BY d.subscription_id ORDER BY d.priority, d.seq) AS rn
                 FROM deliveries d JOIN subscriptions s ON s.id = d.subscription_id
                 WHERE d.status IN ('pending', 'failed') AND d.next_attempt_at <= ? AND s.enabled = 1
+                ${firstPartyOnly ? 'AND s.project_id IS NULL' : ''}
             ) WHERE rn = 1 ORDER BY priority, seq LIMIT ?`).all(now, limit + busy.length);
         const skip = new Set(busy);
         return rows.filter(r => !skip.has(r.subscription_id)).slice(0, limit);

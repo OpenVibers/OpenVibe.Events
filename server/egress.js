@@ -119,14 +119,15 @@ async function checkAppEndpoint(endpoint, { lookup } = {}) {
  * POST to an app endpoint through the guard. Returns { status } or throws (err.permanent = true
  * when the endpoint itself is refused). `requestImpl`/`isAllowed` exist for tests only.
  */
-function createGuardedPost({ lookup = dns.lookup, requestImpl = https.request, isAllowed = isPublicAddress, maxResponseBytes = 64 * 1024 } = {}) {
+function createGuardedPost({ lookup = dns.lookup, requestImpl = https.request, isAllowed = isPublicAddress } = {}) {
     return function guardedPost(endpoint, { headers, body, timeoutMs = 10000 }) {
         const p = parseAppEndpoint(endpoint);
         if (!p.ok) return Promise.reject(Object.assign(new Error(`endpoint not allowed: ${p.reason}`), { permanent: true }));
         if (p.literal && !isAllowed(p.host)) return Promise.reject(Object.assign(new Error('endpoint not allowed: not a public address'), { permanent: true }));
         return new Promise((resolve, reject) => {
             let settled = false;
-            const done = (fn, v) => { if (!settled) { settled = true; fn(v); } };
+            let deadline = null;
+            const done = (fn, v) => { if (!settled) { settled = true; clearTimeout(deadline); fn(v); } };
             // The socket's own lookup: the address we connect to is the one we checked.
             const guardedLookup = (hostname, opts, cb) => {
                 if (typeof opts === 'function') { cb = opts; opts = {}; }
@@ -150,13 +151,16 @@ function createGuardedPost({ lookup = dns.lookup, requestImpl = https.request, i
                 servername: p.literal ? undefined : p.host,
                 timeout: timeoutMs,
             }, (res) => {
-                let n = 0;
-                res.on('data', (c) => { n += c.length; if (n > maxResponseBytes) res.destroy(); });
-                res.on('end', () => done(resolve, { status: res.statusCode }));
-                res.on('close', () => done(resolve, { status: res.statusCode }));
-                res.on('error', () => done(resolve, { status: res.statusCode }));
+                // The status is all a delivery needs: settle now and drop the body, so an endpoint
+                // that drips its response cannot keep this attempt (and its worker slot) open.
+                done(resolve, { status: res.statusCode });
+                res.destroy();
             });
-            req.on('timeout', () => { req.destroy(Object.assign(new Error('timeout'), { name: 'TimeoutError' })); });
+            const timeout = () => { req.destroy(Object.assign(new Error('timeout'), { name: 'TimeoutError' })); };
+            // `timeout` above is only the socket's idle timer; this bounds the whole attempt, however
+            // slowly the endpoint trickles its status line and headers.
+            deadline = setTimeout(timeout, timeoutMs);
+            req.on('timeout', timeout);
             req.on('error', (err) => {
                 if (err.code === 'EOV_NOT_PUBLIC' || (err.cause && err.cause.code === 'EOV_NOT_PUBLIC')) err.permanent = true;
                 done(reject, err);
