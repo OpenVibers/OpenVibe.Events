@@ -11,12 +11,13 @@
  *   --db <file>       the Events database (default: $EVENTS_DB_PATH, else data/events.db; relative
  *                     paths from the repo root; production: /var/lib/openvibe-events/events.db)
  *   --batch <n>       messages per write transaction (default 500, at most 1000)
+ *   --include-missing also redact events about messages Chat no longer has at all (hard-deleted)
  *
  * A chat event is redacted when it is a first-party `chat` event about a `chat_message` subject
  * that Chat marks deleted (is_deleted = 1, or an auto-delete time that has passed). It becomes the
  * same tombstone a live chat.message.deleted produces (payload { redacted, redacted_at,
  * redacted_by: "backfill" }, actor service:chat), at the same seq. Messages Chat does not have at
- * all are counted and left alone. Idempotent: redacted events are never selected again, so a
+ * all are counted and left alone, unless --include-missing (Chat hard-deleted them). Idempotent: redacted events are never selected again, so a
  * second run changes nothing.
  *
  * --apply refuses to run without --backup <file>: a new file, mode 0600, an sqlite online backup of
@@ -45,6 +46,7 @@ function parseArgs(argv) {
         else if (k === '--chat-db') a.chatDb = val();
         else if (k === '--db') a.db = val();
         else if (k === '--batch') a.batch = Number(val());
+        else if (k === '--include-missing') a.includeMissing = true;
         else if (k === '-h' || k === '--help') a.help = true;
         else throw new Error(`unknown option ${k}`);
     }
@@ -115,13 +117,16 @@ async function main(argv, log = console.log) {
             byMessage.get(r.subject_id).push(r);
         }
         const { deleted, missing } = classify(chat, [...byMessage.keys()]);
-        const toRedact = deleted.flatMap(id => byMessage.get(id)).sort((x, y) => x.seq - y.seq);
+        // --include-missing: a message Chat no longer has at all was hard-deleted (by hand, or by its
+        // expiry sweep), so its text must not outlive it here either.
+        const gone = args.includeMissing ? deleted.concat(missing) : deleted;
+        const toRedact = gone.flatMap(id => byMessage.get(id)).sort((x, y) => x.seq - y.seq);
         const walBytes = fileBytes(dbPath + '-wal');
         log(`events db  ${dbPath} (${mb(fileBytes(dbPath))} + ${mb(walBytes)} WAL)`);
         log(`chat db    ${chatPath} (read-only)`);
         log(`chat events about messages, not redacted: ${rows.length} events, ${byMessage.size} messages`);
         log(`deleted in Chat: ${deleted.length} messages, ${toRedact.length} events to redact${toRedact.length ? ` (seq ${toRedact[0].seq}..${toRedact.at(-1).seq})` : ''}`);
-        log(`not in Chat's database (left alone): ${missing.length} messages`);
+        log(`not in Chat's database: ${missing.length} messages${args.includeMissing ? ' (redacted: --include-missing)' : ' (left alone; --include-missing redacts them)'}`);
 
         if (!args.apply) {
             log('\ndry run: nothing changed. Re-run with --apply --backup <new file>.');
@@ -149,7 +154,7 @@ async function main(argv, log = console.log) {
         db.pragma('secure_delete = ON');
         const store = createStore(db);
         let redacted = 0;
-        for (const part of chunks(deleted, args.batch)) {
+        for (const part of chunks(gone, args.batch)) {
             redacted += store.redact('chat', { subject_type: 'chat_message', subject_ids: part }, { by: BY }).length;
         }
         log(`redacted   ${redacted} events`);

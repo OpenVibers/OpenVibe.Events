@@ -52,7 +52,7 @@ t('dry run: counts, changes nothing', async () => {
     assert.strictEqual(r.code, 0, r.out);
     assert.match(r.out, /not redacted: 4 events, 4 messages/);
     assert.match(r.out, /deleted in Chat: 2 messages, 2 events to redact/);
-    assert.match(r.out, /not in Chat's database \(left alone\): 1 messages/);
+    assert.match(r.out, /not in Chat's database: 1 messages \(left alone; --include-missing redacts them\)/);
     assert.match(r.out, /dry run: nothing changed/);
     for (const id of [ev.m1, ev.m3]) assert.ok(!store.getEvent(id).redacted_at);
 });
@@ -91,6 +91,16 @@ t('--apply --backup: verified 0600 backup first, then exactly the deleted messag
     assert.ok(!store.getEvent(ev.live).redacted_at, "another source's event about the same id is untouched");
     const seqs = db.prepare('SELECT seq FROM events ORDER BY seq').pluck().all();
     assert.deepStrictEqual(seqs, [1, 2, 3, 4, 5], 'no row removed, sequence intact');
+});
+
+t('--include-missing: a message Chat no longer has (hard-deleted) is redacted too', async () => {
+    const r = await run('--apply', '--include-missing', '--backup', path.join(dir, 'backup-missing.db'));
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /not in Chat's database: 1 messages \(redacted: --include-missing\)/);
+    const row = store.getEvent(ev.m4);
+    assert.strictEqual(row.redacted_by, 'backfill');
+    assert.ok(!/never in chat/.test(row.payload));
+    assert.match(store.getEvent(ev.m2).payload, /still here/, 'a live message is still untouched');
 });
 
 t('idempotent: a second run finds nothing and changes nothing', async () => {
