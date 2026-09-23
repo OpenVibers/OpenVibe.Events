@@ -1,0 +1,34 @@
+[Unit]
+Description=OpenVibe.Events — durable events, signed delivery, dead letters, replay and the SSE realtime gateway
+# Network (openvibe-network) signs the tokens this service verifies. Events starts without it
+# and keeps retrying the JWKS fetch; /api/ready stays 503 until the key has loaded.
+After=network.target
+Wants=openvibe-network.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/openvibe.events
+EnvironmentFile=/etc/openvibe/events.env
+Environment=NODE_ENV=production
+Environment=PORT=4300
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node /opt/openvibe.events/server/index.js
+Restart=always
+RestartSec=5
+# SIGTERM: stop accepting, let in-flight deliveries finish (they are retried anyway if cut short).
+KillSignal=SIGTERM
+TimeoutStopSec=15
+# Up to REALTIME_MAX_CONNECTIONS long-lived SSE sockets plus delivery sockets.
+LimitNOFILE=16384
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# The code tree stays read-only; the event store lives in /var/lib/openvibe-events.
+StateDirectory=openvibe-events
+Environment=EVENTS_DB_PATH=/var/lib/openvibe-events/events.db
+
+[Install]
+WantedBy=multi-user.target

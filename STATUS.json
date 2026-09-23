@@ -1,7 +1,15 @@
 {
   "repository": "OpenVibers/OpenVibe.Events",
-  "stage": "placeholder",
-  "code": false,
+  "stage": "alpha",
+  "code": true,
+  "wave": "W3",
   "plan": "OpenVibe End-to-End Realignment & Implementation Plan, revision 3 (20 Sep 2026)",
-  "updated": "2026-09-21"
+  "runtime": "node 22, express, better-sqlite3",
+  "port": 4300,
+  "domain": "events.openvibe.network",
+  "contracts": "openvibe-contracts v0.5.1",
+  "capabilities": ["events.publish", "events.subscribe", "events.read", "events.admin"],
+  "capabilitiesRegistered": false,
+  "deployed": false,
+  "updated": "2026-09-22"
 }
