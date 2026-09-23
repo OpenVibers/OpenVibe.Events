@@ -84,6 +84,8 @@ t('release.json', async () => {
     const r = await request(h.base, 'GET', '/release.json');
     assert.strictEqual(r.status, 200);
     assert.strictEqual(r.body.service, 'events');
+    assert.deepStrictEqual(require('openvibe-contracts').validate('registry.release-manifest@1', r.body).errors, []);
+    assert.strictEqual(r.body.metrics_url, '/release-metrics');
 });
 
 t('a stopped worker makes the service unready', async () => {

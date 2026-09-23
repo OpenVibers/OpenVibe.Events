@@ -18,9 +18,10 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     const release = createRelease({ service: 'events', root: path.join(__dirname, '..') });
     // HTTP golden signals by route template + GET /metrics (direct loopback callers only). An SSE
     // connection is a session, not a request, so it is counted by events_realtime_connections instead.
-    instrument(app, { service: 'events', release: release.release, registry: metrics && metrics.registry, skip: (req) => req.path === '/realtime/stream' });
+    const instrumented = instrument(app, { service: 'events', release: release.release, registry: metrics && metrics.registry, skip: (req) => req.path === '/realtime/stream' });
     app.use(http.middleware());
-    app.get('/release.json', release.handler);
+    // GET /release.json (ADR-016) and POST /release-metrics (open tabs' update reports into /metrics).
+    release.mount(app, { registry: instrumented.registry });
     app.use((req, res, next) => {
         res.setHeader('X-Content-Type-Options', 'nosniff');
         next();
