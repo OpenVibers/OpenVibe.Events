@@ -14,11 +14,16 @@
  * `event_type` must start with `app.<project_key>.`, and `actor` must be the app itself or the user
  * the token acts for. The event is stored with the token's project_id and env, under the project's
  * publish-rate and retained-bytes quotas (429 events.quota_exceeded).
+ *
+ * Redaction (server/redaction.js): an event whose payload carries `redacts` turns the named earlier
+ * events of the same source into tombstones when it is stored. A malformed directive is 422
+ * events.invalid_redaction; naming another source's event is 403 events.redaction_not_allowed.
  */
 const express = require('express');
 const { validate, http } = require('openvibe-contracts');
 const { StoreError } = require('../store');
 const { CAPS } = require('../auth');
+const { parseDirective } = require('../redaction');
 
 function normalize(input, ctx) {
     const env = { ...input };
@@ -43,6 +48,8 @@ function publishRouter({ config, store, auth, worker, realtime }) {
         if (Buffer.byteLength(JSON.stringify(env.payload)) > config.maxPayloadBytes) {
             return { status: 413, code: 'events.payload_too_large', detail: `payload is larger than ${config.maxPayloadBytes} bytes` };
         }
+        const directive = parseDirective(env.payload);
+        if (directive && directive.error) return { status: 422, code: 'events.invalid_redaction', detail: directive.error };
         if (principal.kind === 'app') return checkApp(env, principal);
         if (env.source !== principal.service) {
             return { status: 403, code: 'events.source_mismatch', detail: `source "${env.source}" is not the calling service "${principal.service}"` };

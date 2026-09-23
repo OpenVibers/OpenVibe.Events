@@ -29,7 +29,7 @@ async function start({
     // appPost / dnsLookup: developer-app delivery and the subscribe-time DNS check (server/egress.js);
     // injectable for tests only.
     const worker = createWorker({ store, config, clock, fetchImpl: deliveryFetch, appPost: appPost || createGuardedPost({ lookup: dnsLookup }), log, observe: metrics.observe });
-    const realtime = createRealtime({ store, auth, config, log });
+    const realtime = createRealtime({ store, auth, config, clock, log });
     metrics.bind({ realtime });
     const app = createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, log });
 

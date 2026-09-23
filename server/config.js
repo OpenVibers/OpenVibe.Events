@@ -119,6 +119,8 @@ function load(env = process.env) {
             maxTopics: int(env.REALTIME_MAX_TOPICS, 20),
             heartbeatMs: int(env.REALTIME_HEARTBEAT_MS, 25000),
             replayMax: int(env.REALTIME_REPLAY_MAX, 1000),
+            // Browsers are replayed public events this recent only (0: none); older ones are a gap.
+            publicReplaySeconds: Math.max(0, int(env.REALTIME_PUBLIC_REPLAY_SECONDS, 300)),
             allowAnonymous: env.REALTIME_ALLOW_ANONYMOUS !== 'false',
             // Extra exact origins allowed besides https://*.openvibe.* (dev: http://localhost:3000).
             extraOrigins: list(env.REALTIME_CORS_ORIGINS, []),

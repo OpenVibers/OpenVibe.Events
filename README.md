@@ -53,6 +53,23 @@ Errors are RFC 9457 problem+json (`openvibe-contracts` `http.problem`) with a st
 - Loop guard: an event whose trace already carries 8 hops (the cross-service chain depth, or the same source/type/subject repeating in the trace) is refused with `409 events.loop_detected`. The chain depth of a first-party publish counts first-party events only (developer-app events in the same trace never count toward it), so an app cannot poison a trace it has seen.
 - Each accepted event gets a global `seq` and is committed with one delivery row per matching subscription before anything is sent.
 
+### Redaction
+
+A producer takes back what it published (a deleted chat message) with a directive in the payload of any event it publishes, normally its own `*.deleted` event ([server/redaction.js](server/redaction.js)):
+
+```json
+{ "event_type": "chat.message.deleted", "source": "chat", "visibility": "public",
+  "subject": { "type": "chat_message", "id": "123" },
+  "payload": { "message_ids": [123], "redacts": { "subject_type": "chat_message", "subject_ids": ["123"] } } }
+```
+
+- `redacts.event_ids` (up to 1000 `evt_…`) names events directly; `subject_type` + `subject_ids` (up to 1000) names every stored event of the same source about those subjects.
+- In the transaction that stores the directive, each target becomes a **tombstone**: `payload` is replaced by `{ "redacted": true, "redacted_at": "<ISO>", "redacted_by": "<the redacting event_id>" }` and `actor` by the producer itself (`{ "type": "service", "id": "<source>" }`, or the app). `event_id`, `seq`, `event_type`, `subject`, `timestamp` and `visibility` stay, so sequences have no holes. The old payload is overwritten on disk (`secure_delete`), not just hidden.
+- Every read path serves the tombstone from then on: pull, `GET /api/v1/events/:id`, SSE replay (anonymous, signed in or service), queued deliveries and DLQ replays. First-party consumers get the tombstone at the original seq and then the deletion event itself; they should check `payload.redacted`.
+- Authority is the publish rule: only the owning source (for an app, its own project and environment) can redact. Naming another source's event by id refuses the whole publish with `403 events.redaction_not_allowed`; a subject match never reaches another source. A malformed directive is `422 events.invalid_redaction`. Events carrying a directive are never redacted themselves. No capability beyond `events.event.publish` is needed.
+- Redaction applies to what is stored when the directive arrives; it does not block later events about the same subject.
+- Events stored before a producer published deletions: [scripts/redact-backfill.js](scripts/redact-backfill.js) (chat only; dry run by default, `--apply` needs `--backup <new file>`).
+
 ## Subscriptions and delivery
 
 ```http
@@ -156,6 +173,8 @@ es.addEventListener('gap', (m) => { /* events were missed: refetch state */ });
 - Auth: the Network `ov_token` cookie or a Bearer user JWT; a service token with `events.event.read`; or nobody (public events only, `REALTIME_ALLOW_ANONYMOUS`). An expired cookie degrades to anonymous; a bad Bearer is a 401.
 - Visibility: `public` events go to anyone subscribed to the topic; `subject` events only to the user whose subject id (`usr_…`) is the event's `actor.id` or its user `subject.id`; `internal` events never reach a browser. A guessed topic yields nothing.
 - Resume: the SSE `id` is the seq, so the browser's automatic `Last-Event-ID` (or `?last_event_id=`) replays what was missed. A cursor older than retention first gets `event: gap` (`{ reason, from_seq, to_seq }`), as does a replay that hits `REALTIME_REPLAY_MAX`.
+- Public replay window: browsers (signed out or signed in) are replayed `public` events received in the last `REALTIME_PUBLIC_REPLAY_SECONDS` (300; 0 = none), enough to ride out a reconnect. Older public events are not replayed: the stream opens with `event: gap` (`reason: "public_window"`, `window_seconds`), and the client refetches state from the owning service. `subject` events addressed to the viewer, and service viewers, keep the whole retention. This keeps the stream from paging through a month of public history, chat lines included; nothing in the network needs more (no browser surface replays public events today).
+- Redacted events are replayed as their tombstones ([Redaction](#redaction)).
 - Heartbeat comment every 25 s; at most 20 topics per connection and `REALTIME_MAX_CONNECTIONS` (2000) overall; CORS with credentials for `https://*.openvibe.*` only.
 
 ## Owns

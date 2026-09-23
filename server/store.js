@@ -10,6 +10,7 @@ const path = require('path');
 const Database = require('better-sqlite3');
 const topics = require('./topics');
 const apps = require('./apps');
+const redaction = require('./redaction');
 
 const PRIORITY_RANK = { critical: 0, important: 1, low: 2 };
 const RANK_PRIORITY = ['critical', 'important', 'low'];
@@ -110,9 +111,13 @@ const PUBLISH_RECEIPT = 'events:publish';  // receipts' consumer column for acce
  * with ALTER TABLE; every row stored before is a first-party production row.
  *   events.project_id / env / size_bytes    who owns an app event, its environment, stored bytes
  *   subscriptions.project_id / env          an app subscription's scope (NULL project = first-party)
+ * and redaction (server/redaction.js):
+ *   events.redacted_at / redacted_by        set when the row became a tombstone (ms, the redacting event_id)
+ *   events.redacts                          1 when the row carries a payload.redacts directive
  */
 const ADDED_COLUMNS = {
-    events: [['project_id', 'TEXT'], ['env', "TEXT NOT NULL DEFAULT 'production'"], ['size_bytes', 'INTEGER NOT NULL DEFAULT 0']],
+    events: [['project_id', 'TEXT'], ['env', "TEXT NOT NULL DEFAULT 'production'"], ['size_bytes', 'INTEGER NOT NULL DEFAULT 0'],
+        ['redacted_at', 'INTEGER'], ['redacted_by', 'TEXT'], ['redacts', 'INTEGER NOT NULL DEFAULT 0']],
     subscriptions: [['project_id', 'TEXT'], ['env', "TEXT NOT NULL DEFAULT 'production'"]],
 };
 
@@ -122,7 +127,8 @@ function migrate(db) {
         for (const [name, type] of cols) if (!have.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
     }
     db.exec(`CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id, env, received_at) WHERE project_id IS NOT NULL;
-             CREATE INDEX IF NOT EXISTS idx_subscriptions_project ON subscriptions(project_id, env) WHERE project_id IS NOT NULL;`);
+             CREATE INDEX IF NOT EXISTS idx_subscriptions_project ON subscriptions(project_id, env) WHERE project_id IS NOT NULL;
+             CREATE INDEX IF NOT EXISTS idx_events_subject ON events(source, subject_type, subject_id);`);
 }
 
 function openDb(dbPath) {
@@ -132,6 +138,8 @@ function openDb(dbPath) {
     db.pragma('synchronous = NORMAL');
     db.pragma('foreign_keys = ON');
     db.pragma('busy_timeout = 5000');
+    // A redacted payload (and a pruned row) is overwritten with zeros, not left in free pages.
+    db.pragma('secure_delete = ON');
     db.exec(SCHEMA);
     migrate(db);
     db.prepare("INSERT OR IGNORE INTO sequences (name, value) VALUES ('events', 0)").run();
@@ -203,10 +211,15 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
             AND subject_type = ? AND subject_id = ? AND (request_id IS NULL OR request_id != ?)`),
         insertEvent: db.prepare(`INSERT INTO events (id, seq, event_type, version, source, actor, subject_type, subject_id,
             subject_revision, trace_id, priority, visibility, occurred_at, received_at, payload, hops, publisher, request_id,
-            project_id, env, size_bytes)
+            project_id, env, size_bytes, redacts)
             VALUES (@id, @seq, @event_type, @version, @source, @actor, @subject_type, @subject_id, @subject_revision,
             @trace_id, @priority, @visibility, @occurred_at, @received_at, @payload, @hops, @publisher, @request_id,
-            @project_id, @env, @size_bytes)`),
+            @project_id, @env, @size_bytes, @redacts)`),
+        redactBySubject: db.prepare(`SELECT * FROM events WHERE source = ? AND subject_type = ? AND subject_id = ?
+            AND redacted_at IS NULL AND redacts = 0`),
+        applyTombstone: db.prepare(`UPDATE events SET payload = @payload, actor = @actor, size_bytes = @size_bytes,
+            redacted_at = @redacted_at, redacted_by = @redacted_by WHERE id = @id AND redacted_at IS NULL`),
+        firstSeqSince: db.prepare('SELECT MIN(seq) AS s FROM events WHERE received_at >= ?'),
         enabledSubs: db.prepare('SELECT id, topic_pattern, project_id, env FROM subscriptions WHERE enabled = 1'),
         projectRecent: db.prepare('SELECT COUNT(*) AS n FROM events WHERE project_id = ? AND env = ? AND received_at > ?'),
         projectBytes: db.prepare('SELECT COALESCE(SUM(size_bytes), 0) AS b FROM events WHERE project_id = ? AND env = ?'),
@@ -306,7 +319,11 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
                 project_id: project ? project.projectId : null,
                 env: project ? project.env : 'production',
                 size_bytes: sizeBytes,
+                redacts: 0,
             };
+            const directive = redaction.parseDirective(env.payload);
+            if (directive && directive.error) throw new StoreError(422, 'events.invalid_redaction', directive.error, { event_id: env.event_id });
+            if (directive) row.redacts = 1;
             q.insertEvent.run(row);
             q.addReceipt.run(PUBLISH_RECEIPT, env.event_id, now);
             for (const s of subs) {
@@ -317,8 +334,60 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
             revocationHook(row, now);
             results.push({ event_id: env.event_id, seq, duplicate: false });
             inserted.push(row);
+            if (directive) {
+                const redacted = applyRedaction(row, directive, now);
+                // Rows stored earlier in this batch are fanned out after the commit from memory: they
+                // must go out as the tombstones they now are.
+                for (const t of redacted) {
+                    const mine = inserted.find(r => r.id === t.id);
+                    if (mine) Object.assign(mine, t.columns);
+                }
+            }
         }
         return { results, inserted };
+    });
+
+    /**
+     * Turn the targets of `directive` (server/redaction.js) into tombstones on behalf of `by` (the
+     * stored row of the redacting event). Throws StoreError 403 when an event id names an event of
+     * another owner. Returns [{ id, seq, columns }] for the rows it rewrote.
+     */
+    function applyRedaction(by, directive, now) {
+        const targets = new Map();
+        for (const id of directive.eventIds) {
+            const r = q.getEvent.get(id);
+            if (!r) continue;   // never stored, or pruned already
+            if (!redaction.sameOwner(by, r)) {
+                throw new StoreError(403, 'events.redaction_not_allowed', `event ${id} belongs to ${r.source}; ${by.source} may redact only its own events`,
+                    { event_id: by.id, target: id });
+            }
+            if (r.redacted_at == null && !r.redacts) targets.set(r.id, r);
+        }
+        if (directive.subjectType) {
+            for (const subjectId of directive.subjectIds) {
+                for (const r of q.redactBySubject.all(by.source, directive.subjectType, subjectId)) {
+                    if (redaction.sameOwner(by, r)) targets.set(r.id, r);
+                }
+            }
+        }
+        const out = [];
+        for (const r of targets.values()) {
+            if (r.id === by.id) continue;
+            const columns = redaction.tombstone(r, { by: by.id, at: now });
+            if (q.applyTombstone.run({ id: r.id, ...columns }).changes) out.push({ id: r.id, seq: r.seq, columns });
+        }
+        return out;
+    }
+
+    /**
+     * Operator redaction (scripts/redact-backfill.js): what an event of first-party `source` carrying
+     * `directive` (the payload.redacts object) would have redacted. The tombstones name `by` as
+     * redacted_by. Same owner rule as a publish. Returns the rewritten [{ id, seq }].
+     */
+    const redact = db.transaction((source, directive, { by = 'operator', now = clock.now() } = {}) => {
+        const parsed = redaction.parseDirective({ redacts: directive });
+        if (!parsed || parsed.error) throw new StoreError(422, 'events.invalid_redaction', parsed ? parsed.error : 'nothing to redact');
+        return applyRedaction({ id: by, source, project_id: null, env: 'production' }, parsed, now).map(({ id, seq }) => ({ id, seq }));
     });
 
     /**
@@ -354,6 +423,12 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
 
     function lastSeq() {
         return q.lastSeq.get().value;
+    }
+
+    /** First seq received at or after `ms`; the next seq to be handed out when there is none. */
+    function firstSeqSince(ms) {
+        const m = q.firstSeqSince.get(ms).s;
+        return m == null ? lastSeq() + 1 : m;
     }
 
     /** Oldest seq still stored; when the table is empty, the next seq to be handed out. */
@@ -529,7 +604,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
     }
 
     return {
-        db, insertBatch, getEvent, revokedAt, lastSeq, oldestSeq, scan,
+        db, insertBatch, redact, getEvent, revokedAt, lastSeq, oldestSeq, firstSeqSince, scan,
         createSubscription, getSubscription, listSubscriptions, countSubscriptions, countProjectSubscriptions, setSubscriptionEnabled,
         dueDeliveries, recordAttempt, getDelivery, listDeliveries, requeue, deliveryCounts,
         getCheckpoint, setCheckpoint, prune, ping,

@@ -15,6 +15,13 @@
  * Resume: `Last-Event-ID` (or ?last_event_id=) is a seq. Missed events are replayed first; when the
  * cursor is older than retention an `event: gap` message comes first, so the client knows to
  * refetch state. Heartbeat comment every 25 s.
+ *
+ * Public replay window: a browser (signed out or signed in) is replayed `public` events received in
+ * the last REALTIME_PUBLIC_REPLAY_SECONDS (300) only, enough to ride out a reconnect. Anything
+ * older comes as `event: gap` with reason `public_window`, so the stream cannot be used to page
+ * through a month of public history (chat lines among it). `subject` events addressed to the viewer,
+ * and service viewers, keep the whole retention. Redacted events (server/redaction.js) are
+ * replayed as their tombstones.
  */
 const { http } = require('openvibe-contracts');
 const topics = require('./topics');
@@ -23,7 +30,7 @@ const { rowToEnvelope } = require('./store');
 const ORIGIN_RE = /^https:\/\/(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*openvibe\.[a-z]{2,63}$/;
 const MAX_BUFFERED = 1024 * 1024; // a client this far behind is dropped; it resumes with Last-Event-ID
 
-function createRealtime({ store, auth, config, log = console }) {
+function createRealtime({ store, auth, config, clock = { now: () => Date.now() }, log = console }) {
     const opts = config.realtime;
     const conns = new Set();
     let heartbeat = null;
@@ -142,8 +149,17 @@ function createRealtime({ store, auth, config, log = console }) {
                     sendGap(conn, { reason: 'retention', from_seq: lastId + 1, to_seq: oldest - 1, latest_seq: latest });
                     cursor = oldest - 1;
                 }
+                // Browsers: public events older than the window are not replayed (a gap says so).
+                const publicFrom = viewer.kind === 'service' ? 0
+                    : opts.publicReplaySeconds > 0 ? store.firstSeqSince(clock.now() - opts.publicReplaySeconds * 1000) : latest + 1;
+                if (cursor < publicFrom - 1) {
+                    sendGap(conn, { reason: 'public_window', from_seq: cursor + 1, to_seq: publicFrom - 1, latest_seq: latest, window_seconds: opts.publicReplaySeconds });
+                    // Signed out, only public events are visible: nothing before the window to scan.
+                    if (viewer.kind === 'anonymous') cursor = publicFrom - 1;
+                }
+                const accept = (row) => visibleTo(viewer, row) && !(row.visibility === 'public' && row.seq < publicFrom);
                 const { rows, cursor: scanned } = store.scan(cursor, {
-                    patterns: wanted, limit: opts.replayMax, scanMax: opts.replayMax * 50, accept: row => visibleTo(viewer, row),
+                    patterns: wanted, limit: opts.replayMax, scanMax: opts.replayMax * 50, accept,
                 });
                 for (const row of rows) sendEvent(conn, row);
                 if (scanned < latest) {
