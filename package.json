@@ -1,0 +1,25 @@
+{
+  "name": "openvibe-events",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenVibe.Events: durable events, subscriptions, signed delivery with retry, dead letters and replay, plus the browser realtime (SSE) gateway. lib/client.js is the producer/consumer helper other services depend on.",
+  "main": "lib/client.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "NODE_ENV=development node server/index.js",
+    "test": "node test/run.js"
+  },
+  "keywords": ["openvibe", "events", "outbox", "webhooks", "sse"],
+  "author": "OpenVibers",
+  "license": "AGPL-3.0-only",
+  "repository": "github:OpenVibers/OpenVibe.Events",
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "openvibe-contracts": "https://codeload.github.com/OpenVibers/OpenVibe.Contracts/tar.gz/refs/tags/v0.5.1"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
