@@ -1,0 +1,26 @@
+{
+  "version": "0.1.0",
+  "contractRanges": {
+    "openvibe-contracts": ">=0.5.1 <1.0.0"
+  },
+  "id": "events",
+  "name": "OpenVibe.Events",
+  "status": "alpha",
+  "repository": "OpenVibers/OpenVibe.Events",
+  "domains": [
+    "events.openvibe.network"
+  ],
+  "publicOrigin": "https://events.openvibe.network",
+  "health": "/api/health",
+  "ready": "/api/ready",
+  "capabilities": [
+    "events.publish",
+    "events.subscribe",
+    "events.read",
+    "events.admin"
+  ],
+  "eventsProduced": [],
+  "eventsConsumed": [],
+  "namespacesOwned": [],
+  "notes": "Durable events, subscriptions, signed delivery with retry, dead letters and replay; SSE realtime gateway at /realtime/stream until ADR-005 decides where Realtime lives."
+}

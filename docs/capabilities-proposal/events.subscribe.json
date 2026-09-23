@@ -1,0 +1,23 @@
+{
+  "id": "events.subscribe",
+  "version": "1.0",
+  "owner": "events",
+  "status": "active",
+  "visibility": "internal",
+  "description": "Create, list, disable and enable the calling service's own webhook subscriptions (topic pattern + allow-listed internal endpoint, HMAC-signed deliveries with retry and dead letters).",
+  "permissions": [
+    "events:subscribe"
+  ],
+  "resourceConstraints": [
+    "owner"
+  ],
+  "quotaClass": "events-subscribe",
+  "events": [],
+  "implementedBy": [
+    "POST /api/v1/subscriptions",
+    "GET /api/v1/subscriptions",
+    "GET /api/v1/subscriptions/:id",
+    "POST /api/v1/subscriptions/:id/disable",
+    "POST /api/v1/subscriptions/:id/enable"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "id": "events.admin",
+  "version": "1.0",
+  "owner": "events",
+  "status": "active",
+  "visibility": "internal",
+  "description": "Operator access: inspect deliveries (including the dead-letter queue) and replay events to any subscription.",
+  "permissions": [
+    "events:admin"
+  ],
+  "resourceConstraints": [
+    "none"
+  ],
+  "quotaClass": "events-admin",
+  "events": [],
+  "implementedBy": [
+    "GET /api/v1/deliveries",
+    "POST /api/v1/deliveries/replay"
+  ]
+}

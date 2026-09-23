@@ -1,0 +1,24 @@
+{
+  "id": "events.read",
+  "version": "1.0",
+  "owner": "events",
+  "status": "active",
+  "visibility": "internal",
+  "description": "Read retained events of every visibility with a seq cursor (pull consumers), keep per-consumer checkpoints, and open realtime streams as a service principal.",
+  "outputSchema": "events.event-envelope@1",
+  "permissions": [
+    "events:read"
+  ],
+  "resourceConstraints": [
+    "none"
+  ],
+  "quotaClass": "events-read",
+  "events": [],
+  "implementedBy": [
+    "GET /api/v1/events",
+    "GET /api/v1/events/:event_id",
+    "GET /api/v1/checkpoints",
+    "PUT /api/v1/checkpoints",
+    "GET /realtime/stream"
+  ]
+}

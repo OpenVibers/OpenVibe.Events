@@ -1,0 +1,20 @@
+{
+  "id": "events.publish",
+  "version": "1.0",
+  "owner": "events",
+  "status": "active",
+  "visibility": "internal",
+  "description": "Publish durable events (events.event-envelope@1) as the calling service: source must be the principal's service slug and event_type must use a prefix that source owns. Idempotent on event_id.",
+  "inputSchema": "events.event-envelope@1",
+  "permissions": [
+    "events:write"
+  ],
+  "resourceConstraints": [
+    "owner"
+  ],
+  "quotaClass": "events-publish",
+  "events": [],
+  "implementedBy": [
+    "POST /api/v1/events"
+  ]
+}
