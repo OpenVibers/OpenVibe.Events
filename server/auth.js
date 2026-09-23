@@ -6,20 +6,28 @@
  *     openvibe.events), verified with openvibe-contracts serviceAuth.verifyServiceToken.
  *   - Browsers: Network user JWTs (RS256, same key), cookie `ov_token` or Bearer.
  *
- * Capability ids events.event.publish / events.subscription.manage / events.event.read / events.delivery.admin are proposed in
- * docs/capabilities-proposal/ and are not in openvibe-contracts yet. capabilities.check() answers
- * capability.unknown for an id it does not know; until the release that defines them, hasCap()
- * decides with the same grant rule (exact id, or a `family.*` grant).
+ *   - Developer apps (ADR-014): app tokens (sub app:app_<ULID>, project_id, env) holding
+ *     events.app.publish / events.app.read / events.app.subscribe, on the routes that accept them
+ *     (appOrService guard). Only there is a sandbox token (env=sandbox) accepted; every other route
+ *     refuses it with token.sandbox_refused.
+ *
+ * The service capabilities are in openvibe-contracts since v0.7; events.app.* arrive in v0.28.
+ * capabilities.check() answers capability.unknown for an id the installed release does not know;
+ * until then hasCap() decides with the same grant rule (exact id, or a `family.*` grant).
  */
 const crypto = require('crypto');
 const { serviceAuth, capabilities, http } = require('openvibe-contracts');
+const apps = require('./apps');
 
-/** The capability ids this service enforces (manifests: docs/capabilities-proposal/). */
+/** The capability ids this service enforces. */
 const CAPS = Object.freeze({
     publish: 'events.event.publish',
     subscribe: 'events.subscription.manage',
     read: 'events.event.read',
     admin: 'events.delivery.admin',
+    appPublish: 'events.app.publish',
+    appRead: 'events.app.read',
+    appSubscribe: 'events.app.subscribe',
 });
 
 // ── Network public key ─────────────────────────────────────
@@ -147,12 +155,15 @@ function serviceSlug(sub) {
     return m ? m[1] : null;
 }
 
-function createAuth({ config, keys }) {
+function createAuth({ config, keys, store = null }) {
     // Token lifetimes are judged on wall-clock time, never on the worker's (injectable) clock.
-    function verifyService(token) {
+    function verifyService(token, { acceptSandbox = false } = {}) {
         const publicKey = keys.get();
         if (!publicKey) return { ok: false, code: 'token.unavailable', reason: 'signing key not loaded yet' };
-        return serviceAuth.verifyServiceToken(token, { publicKey, issuer: config.issuer, audience: config.audience });
+        const r = serviceAuth.verifyServiceToken(token, { publicKey, issuer: config.issuer, audience: config.audience, acceptSandbox });
+        // Belt and braces for a contracts release that does not know `env` yet.
+        if (r.ok && r.claims.env === 'sandbox' && !acceptSandbox) return { ok: false, code: 'token.sandbox_refused', reason: 'sandbox tokens are not accepted here' };
+        return r;
     }
 
     function verifyUser(token) {
@@ -170,11 +181,40 @@ function createAuth({ config, keys }) {
             if (!token) return http.sendProblem(res, 401, 'token.missing', { detail: 'a service token is required', ctx });
             const r = verifyService(token);
             if (!r.ok) return http.sendProblem(res, r.code === 'token.unavailable' ? 503 : 401, r.code, { detail: r.reason, ctx });
+            // Developer apps only ever act through events.app.* (appOrService); a first-party
+            // capability in an app token is never honoured.
+            if (/^app:/.test(String(r.claims.sub))) return http.sendProblem(res, 403, 'capability.denied', { detail: 'app tokens are not accepted on this route', ctx });
             const c = allows(r.claims, id);
             if (!c.allowed) return http.sendProblem(res, 403, c.code, { detail: c.reason, ctx });
             const service = serviceSlug(r.claims.sub);
             if (requireService && !service) return http.sendProblem(res, 403, 'capability.denied', { detail: 'only service principals may do this', ctx });
-            req.principal = { sub: r.claims.sub, service, cap: r.claims.cap, ns: r.claims.ns || [], jti: r.claims.jti };
+            req.principal = { kind: 'service', sub: r.claims.sub, service, cap: r.claims.cap, ns: r.claims.ns || [], jti: r.claims.jti };
+            return next();
+        };
+    }
+
+    /**
+     * A route shared by first-party services (serviceCap) and developer apps (appCap). An app token
+     * is judged only on appCap and becomes req.principal = { kind: 'app', sub, appId, projectId,
+     * projectKey, source, prefix, env, onBehalfOf }; sandbox tokens are accepted for apps only.
+     * Anything else goes through requireCap(serviceCap).
+     */
+    function appOrService(serviceCap, appCap, { requireService = false } = {}) {
+        const serviceGuard = requireCap(serviceCap, { requireService });
+        return function appOrServiceGuard(req, res, next) {
+            const ctx = req.ov;
+            const token = bearer(req);
+            if (!token || !config.apps.enabled) return serviceGuard(req, res, next);
+            const r = verifyService(token, { acceptSandbox: true });
+            if (!r.ok || !/^app:/.test(String(r.claims.sub))) return serviceGuard(req, res, next);
+            const principal = apps.appPrincipal(r.claims);
+            if (principal.error) return http.sendProblem(res, 401, 'token.invalid_claims', { detail: principal.error, ctx });
+            // Network revoked this app after the token was issued (network.app.revoked reached us).
+            const revoked = store && store.revokedAt(principal.sub, 'app');
+            if (revoked && r.claims.iat * 1000 <= revoked) return http.sendProblem(res, 401, 'token.revoked', { detail: 'this app was revoked', ctx });
+            const c = allows(r.claims, appCap);
+            if (!c.allowed) return http.sendProblem(res, 403, c.code, { detail: c.reason, ctx });
+            req.principal = { ...principal, cap: r.claims.cap, jti: r.claims.jti, iat: r.claims.iat };
             return next();
         };
     }
@@ -210,7 +250,7 @@ function createAuth({ config, keys }) {
         return { kind: 'user', subjectId, sub: String(claims.sub) };
     }
 
-    return { verifyService, verifyUser, requireCap, realtimeViewer };
+    return { verifyService, verifyUser, requireCap, appOrService, realtimeViewer };
 }
 
 module.exports = { CAPS, createKeyStore, createAuth, hasCap, allows, verifyUserJwt, serviceSlug, bearer, cookie };

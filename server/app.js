@@ -11,7 +11,7 @@ const { subscriptionsRouter } = require('./api/subscriptions');
 const { readRouter } = require('./api/read');
 const pkg = require('../package.json');
 
-function createApp({ config, store, auth, keys, worker, realtime, metrics, log = console }) {
+function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, log = console }) {
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', 'loopback');
@@ -66,16 +66,16 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, log =
     app.get('/api/ready', readiness.handler);
 
     app.use(publishRouter({ config, store, auth, worker, realtime }));
-    app.use(subscriptionsRouter({ config, store, auth }));
+    app.use(subscriptionsRouter({ config, store, auth, dnsLookup }));
     app.use(readRouter({ store, auth, worker }));
 
     app.get('/', (_req, res) => {
         res.type('text/plain').send([
             'OpenVibe.Events: durable events, subscriptions, signed delivery, dead letters and replay.',
             '',
-            'POST /api/v1/events              publish (service token, events.event.publish)',
-            'GET  /api/v1/events              pull with a cursor (events.event.read)',
-            '     /api/v1/subscriptions       webhook subscriptions (events.subscription.manage)',
+            'POST /api/v1/events              publish (service token, events.event.publish; app token, events.app.publish)',
+            'GET  /api/v1/events              pull with a cursor (events.event.read; app token, events.app.read)',
+            '     /api/v1/subscriptions       webhook subscriptions (events.subscription.manage; app token, events.app.subscribe)',
             '     /api/v1/deliveries          DLQ inspect and replay (events.delivery.admin)',
             'GET  /realtime/stream?topics=... server-sent events for browsers',
             'GET  /api/health, /api/ready, /release.json',

@@ -1,6 +1,7 @@
 'use strict';
 /**
- * POST /api/v1/events  (service token, audience openvibe.events, capability events.event.publish)
+ * POST /api/v1/events  (service token, audience openvibe.events, capability events.event.publish;
+ *                       or a developer app token with events.app.publish)
  *
  *   body: <envelope>            -> 201 { event_id, seq, duplicate: false } | 200 on a repeat
  *   body: { events: [...] }     -> 201 { results: [{ event_id, seq, duplicate }] } (<= 100, atomic)
@@ -8,6 +9,11 @@
  * Every envelope must validate against events.event-envelope@1; `source` must be the calling
  * service (svc:live -> 'live'); `event_type` must start with a prefix that source owns. A
  * re-published event_id is answered with the stored seq and never stored twice.
+ *
+ * Developer apps (ADR-014, server/apps.js): `source` must be the app's `app-<lowercased ULID>`,
+ * `event_type` must start with `app.<project_key>.`, and `actor` must be the app itself or the user
+ * the token acts for. The event is stored with the token's project_id and env, under the project's
+ * publish-rate and retained-bytes quotas (429 events.quota_exceeded).
  */
 const express = require('express');
 const { validate, http } = require('openvibe-contracts');
@@ -37,6 +43,7 @@ function publishRouter({ config, store, auth, worker, realtime }) {
         if (Buffer.byteLength(JSON.stringify(env.payload)) > config.maxPayloadBytes) {
             return { status: 413, code: 'events.payload_too_large', detail: `payload is larger than ${config.maxPayloadBytes} bytes` };
         }
+        if (principal.kind === 'app') return checkApp(env, principal);
         if (env.source !== principal.service) {
             return { status: 403, code: 'events.source_mismatch', detail: `source "${env.source}" is not the calling service "${principal.service}"` };
         }
@@ -48,7 +55,22 @@ function publishRouter({ config, store, auth, worker, realtime }) {
         return { env };
     }
 
-    router.post('/api/v1/events', auth.requireCap(CAPS.publish, { requireService: true }), (req, res) => {
+    function checkApp(env, app) {
+        if (env.source !== app.source) {
+            return { status: 403, code: 'events.source_mismatch', detail: `source must be your app's "${app.source}", not "${env.source}"` };
+        }
+        if (!env.event_type.startsWith(app.prefix)) {
+            return { status: 403, code: 'events.type_not_allowed', detail: `an app may publish ${app.prefix}<name> only, not ${env.event_type}` };
+        }
+        const a = env.actor || {};
+        const actorOk = (a.type === 'app' && a.id === app.appId) || (app.onBehalfOf && a.type === 'user' && a.id === app.onBehalfOf);
+        if (!actorOk) {
+            return { status: 403, code: 'events.actor_mismatch', detail: `actor must be { type: 'app', id: '${app.appId}' }${app.onBehalfOf ? ' or the user the token acts for' : ''}` };
+        }
+        return { env };
+    }
+
+    router.post('/api/v1/events', auth.appOrService(CAPS.publish, CAPS.appPublish, { requireService: true }), (req, res) => {
         const ctx = req.ov;
         const body = req.body;
         const isBatch = body && typeof body === 'object' && !Array.isArray(body) && Array.isArray(body.events) && body.event_id === undefined;
@@ -76,9 +98,14 @@ function publishRouter({ config, store, auth, worker, realtime }) {
 
         let out;
         try {
-            out = store.insertBatch(envelopes, { publisher: req.principal.sub, requestId: ctx.requestId });
+            const p = req.principal;
+            const project = p.kind === 'app' ? { projectId: p.projectId, env: p.env, ...config.apps.quotas[p.env] } : null;
+            out = store.insertBatch(envelopes, { publisher: p.sub, requestId: ctx.requestId, project });
         } catch (err) {
-            if (err instanceof StoreError) return http.sendProblem(res, err.status, err.code, { detail: err.message, ctx, extra: err.extra });
+            if (err instanceof StoreError) {
+                if (err.status === 429 && err.extra && err.extra.retry_after) res.setHeader('Retry-After', String(err.extra.retry_after));
+                return http.sendProblem(res, err.status, err.code, { detail: err.message, ctx, extra: err.extra });
+            }
             throw err;
         }
         if (out.inserted.length) {

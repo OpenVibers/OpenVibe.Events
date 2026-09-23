@@ -10,6 +10,7 @@
  *   subject   only the user whose subject id is the event's actor.id or its subject.id (subject
  *             type user); a guessed topic yields nothing for anyone else
  *   internal  service principals (token with events.event.read) only, never a browser
+ * Developer-app events (app.<project_key>.*, events.app.publish) are never streamed here, to anyone.
  *
  * Resume: `Last-Event-ID` (or ?last_event_id=) is a seq. Missed events are replayed first; when the
  * cursor is older than retention an `event: gap` message comes first, so the client knows to
@@ -51,6 +52,8 @@ function createRealtime({ store, auth, config, log = console }) {
     }
 
     function visibleTo(viewer, row) {
+        // Developer-app events (and anything sandbox) never reach realtime: apps pull or subscribe.
+        if (row.project_id || (row.env && row.env !== 'production')) return false;
         if (row.visibility === 'public') return true;
         if (viewer.kind === 'service') return true;
         if (row.visibility !== 'subject' || viewer.kind !== 'user' || !viewer.subjectId) return false;

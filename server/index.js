@@ -14,18 +14,24 @@ const { createWorker } = require('./worker');
 const { createRealtime } = require('./realtime');
 const { createApp } = require('./app');
 const { createMetrics } = require('./metrics');
+const { createGuardedPost } = require('./egress');
 
-async function start({ config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, deliveryFetch = fetchImpl, log = console, listen = true } = {}) {
+async function start({
+    config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, deliveryFetch = fetchImpl,
+    appPost = undefined, dnsLookup = undefined, log = console, listen = true,
+} = {}) {
     config = config || load();
     const db = openDb(config.dbPath);
     const store = createStore(db, { clock, maxHops: config.maxHops });
     const keys = createKeyStore({ urls: [config.networkInternalUrl, config.networkUrl], pem: config.networkPublicKey, fetchImpl, log });
-    const auth = createAuth({ config, keys });
+    const auth = createAuth({ config, keys, store });
     const metrics = createMetrics({ store });
-    const worker = createWorker({ store, config, clock, fetchImpl: deliveryFetch, log, observe: metrics.observe });
+    // appPost / dnsLookup: developer-app delivery and the subscribe-time DNS check (server/egress.js);
+    // injectable for tests only.
+    const worker = createWorker({ store, config, clock, fetchImpl: deliveryFetch, appPost: appPost || createGuardedPost({ lookup: dnsLookup }), log, observe: metrics.observe });
     const realtime = createRealtime({ store, auth, config, log });
     metrics.bind({ realtime });
-    const app = createApp({ config, store, auth, keys, worker, realtime, metrics, log });
+    const app = createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, log });
 
     // The key loads in the background (retrying while Network boots); /api/ready says when it has.
     const keyLoaded = keys.start().catch(() => null);
@@ -34,7 +40,7 @@ async function start({ config, clock = { now: () => Date.now() }, fetchImpl = gl
 
     const prune = () => {
         try {
-            const r = store.prune({ retentionDays: config.retentionDays, receiptRetentionDays: config.receiptRetentionDays });
+            const r = store.prune({ retentionDays: config.retentionDays, receiptRetentionDays: config.receiptRetentionDays, sandboxRetentionDays: config.apps.sandboxRetentionDays });
             if (r.events || r.receipts) log.log(`[retention] pruned ${r.events} events, ${r.receipts} receipts`);
         } catch (err) {
             log.error(`[retention] prune failed: ${err.message}`);

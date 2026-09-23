@@ -10,6 +10,12 @@
  *   GET /api/v1/checkpoints?topic=…  /  PUT /api/v1/checkpoints { topic, cursor }
  *       a consumer's own stored cursor per topic pattern (consumer = calling principal)
  *
+ * Developer apps (events.app.read) use the same routes with an app token: only their project's
+ * events in the token's environment plus public first-party events (server/apps.js); every topic
+ * pattern must start with a literal segment, and app.* patterns must name the app's project_key.
+ * Checkpoints are per app. First-party readers never see sandbox events, and see app events only
+ * through patterns that start with `app.`.
+ *
  * Operators (events.delivery.admin):
  *
  *   GET  /api/v1/deliveries?status=dead&subscription_id=&after_seq=&limit=
@@ -20,6 +26,23 @@ const { http } = require('openvibe-contracts');
 const topics = require('../topics');
 const { rowToEnvelope } = require('../store');
 const { CAPS } = require('../auth');
+const apps = require('../apps');
+
+/** Why an app may not use these patterns (null for services and for allowed patterns). */
+function scopeError(principal, patterns) {
+    if (principal.kind !== 'app') return null;
+    for (const p of patterns) {
+        const err = apps.patternScopeError(p, principal);
+        if (err) return `${p}: ${err}`;
+    }
+    return null;
+}
+
+/** Row filter for a reader: an app's scope, or a first-party reader's (no sandbox; app events via app.*). */
+function acceptFor(principal, patterns) {
+    if (principal.kind === 'app') return (row) => apps.visibleToApp(row, principal);
+    return (row) => patterns.some(p => apps.serviceMatches(p, row));
+}
 
 const intParam = (v, d, min, max) => {
     if (v === undefined || v === '') return d;
@@ -29,7 +52,7 @@ const intParam = (v, d, min, max) => {
 
 function readRouter({ store, auth, worker }) {
     const router = express.Router();
-    const canRead = auth.requireCap(CAPS.read);
+    const canRead = auth.appOrService(CAPS.read, CAPS.appRead);
     const isAdmin = auth.requireCap(CAPS.admin);
 
     router.get('/api/v1/events', canRead, (req, res) => {
@@ -38,6 +61,8 @@ function readRouter({ store, auth, worker }) {
         if (!patterns.length || patterns.length > 20 || !patterns.every(topics.isValidPattern)) {
             return http.sendProblem(res, 400, 'events.bad_topic', { detail: 'topic must be 1..20 comma-separated patterns', ctx });
         }
+        const scopeErr = scopeError(req.principal, patterns);
+        if (scopeErr) return http.sendProblem(res, 403, 'events.topic_not_allowed', { detail: scopeErr, ctx });
         const after = intParam(req.query.after_seq, 0, 0, Number.MAX_SAFE_INTEGER);
         const limit = intParam(req.query.limit, 100, 1, 1000);
         if (Number.isNaN(after) || Number.isNaN(limit)) {
@@ -50,7 +75,7 @@ function readRouter({ store, auth, worker }) {
             out.gap = { from_seq: after + 1, to_seq: oldest - 1 };
             from = oldest - 1;
         }
-        const { rows, cursor } = store.scan(from, { patterns, limit });
+        const { rows, cursor } = store.scan(from, { patterns, limit, accept: acceptFor(req.principal, patterns) });
         out.events = rows.map(r => ({ seq: r.seq, event: rowToEnvelope(r) }));
         out.next_after_seq = cursor;
         out.latest_seq = store.lastSeq();
@@ -59,7 +84,8 @@ function readRouter({ store, auth, worker }) {
 
     router.get('/api/v1/events/:id', canRead, (req, res) => {
         const row = store.getEvent(String(req.params.id));
-        if (!row) return http.sendProblem(res, 404, 'events.not_found', { detail: 'no such event (or pruned by retention)', ctx: req.ov });
+        const visible = row && (req.principal.kind === 'app' ? apps.visibleToApp(row, req.principal) : (row.env || 'production') === 'production');
+        if (!visible) return http.sendProblem(res, 404, 'events.not_found', { detail: 'no such event (or pruned by retention)', ctx: req.ov });
         return res.json({ seq: row.seq, event: rowToEnvelope(row) });
     });
 
@@ -68,6 +94,8 @@ function readRouter({ store, auth, worker }) {
     router.get('/api/v1/checkpoints', canRead, (req, res) => {
         const topic = String(req.query.topic || '');
         if (!topics.isValidPattern(topic)) return http.sendProblem(res, 400, 'events.bad_topic', { detail: 'topic is required', ctx: req.ov });
+        const scopeErr = scopeError(req.principal, [topic]);
+        if (scopeErr) return http.sendProblem(res, 403, 'events.topic_not_allowed', { detail: scopeErr, ctx: req.ov });
         const cp = store.getCheckpoint(consumerOf(req), topic);
         res.json({ consumer: consumerOf(req), topic, cursor: cp ? cp.cursor : 0, updated_at: cp ? cp.updated_at : null });
     });
@@ -77,6 +105,8 @@ function readRouter({ store, auth, worker }) {
         if (!topics.isValidPattern(b.topic) || !Number.isInteger(b.cursor) || b.cursor < 0) {
             return http.sendProblem(res, 400, 'events.bad_request', { detail: 'topic (pattern) and cursor (integer >= 0) are required', ctx: req.ov });
         }
+        const scopeErr = scopeError(req.principal, [b.topic]);
+        if (scopeErr) return http.sendProblem(res, 403, 'events.topic_not_allowed', { detail: scopeErr, ctx: req.ov });
         const cp = store.setCheckpoint(consumerOf(req), b.topic, b.cursor);
         res.json({ consumer: consumerOf(req), topic: b.topic, ...cp });
     });

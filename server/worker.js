@@ -9,6 +9,10 @@
  * (including redirects, which are never followed) is retried with backoff 1s, 5s, 30s, 2m, 10m, 1h
  * up to maxAttempts, then the delivery is `dead` (the DLQ; replay requeues it).
  *
+ * App subscriptions (events.app.subscribe) go through server/egress.js instead of fetch: https to a
+ * public address only, re-resolved and checked on every attempt, the connection pinned to the checked
+ * address, redirects refused. A refused address is permanent (dead at once; replay requeues it).
+ *
  * Scheduling: a setTimeout chain (never overlapping ticks); priority classes critical > important >
  * low, then seq; one delivery in flight per subscription; at most maxInflight overall.
  */
@@ -16,9 +20,10 @@ const crypto = require('crypto');
 const { sign } = require('../lib/client');
 const { rowToEnvelope } = require('./store');
 const { checkEndpoint } = require('./endpoints');
+const { createGuardedPost } = require('./egress');
 
 // observe (optional): { delivered(seconds, row), attempt(outcome) } — metrics hooks, never required.
-function createWorker({ store, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, observe = null }) {
+function createWorker({ store, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, appPost = createGuardedPost(), log = console, observe = null }) {
     const opts = config.worker;
     const busy = new Set();          // subscription ids with a delivery in flight
     const inflight = new Set();      // promises
@@ -43,29 +48,36 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
         const { maxAttempts, backoffMs } = policy(sub);
         let outcome;
         try {
-            // Re-check the endpoint at send time too (the allow-list may have been tightened).
-            const check = checkEndpoint(sub.endpoint, config.endpointHosts);
-            if (!check.ok) throw Object.assign(new Error(`endpoint not allowed: ${check.reason}`), { permanent: true });
             const body = JSON.stringify({ event: rowToEnvelope(row), seq: row.seq });
-            const res = await fetchImpl(sub.endpoint, {
-                method: 'POST',
-                redirect: 'manual',
-                signal: AbortSignal.timeout(opts.timeoutMs),
-                headers: {
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'OpenVibe.Events/0.1',
-                    'X-OpenVibe-Event-Id': row.id,
-                    'X-OpenVibe-Event-Type': row.event_type,
-                    'X-OpenVibe-Seq': String(row.seq),
-                    'X-OpenVibe-Subscription-Id': sub.id,
-                    'X-OpenVibe-Delivery-Attempt': String(attempt),
-                    'X-OpenVibe-Hops': String(row.hops),
-                    'X-OpenVibe-Signature': sign(body, sub.secret),
-                    traceparent: `00-${row.trace_id}-${crypto.randomBytes(8).toString('hex')}-01`,
-                },
-                body,
-            });
-            try { await res.body?.cancel(); } catch { /* body is not needed */ }
+            const headers = {
+                'Content-Type': 'application/json',
+                'User-Agent': 'OpenVibe.Events/0.1',
+                'X-OpenVibe-Event-Id': row.id,
+                'X-OpenVibe-Event-Type': row.event_type,
+                'X-OpenVibe-Seq': String(row.seq),
+                'X-OpenVibe-Subscription-Id': sub.id,
+                'X-OpenVibe-Delivery-Attempt': String(attempt),
+                'X-OpenVibe-Hops': String(row.hops),
+                'X-OpenVibe-Signature': sign(body, sub.secret),
+                traceparent: `00-${row.trace_id}-${crypto.randomBytes(8).toString('hex')}-01`,
+            };
+            let res;
+            if (sub.project_id) {
+                // Developer-app endpoint: public https only, checked again now (egress.js).
+                res = await appPost(sub.endpoint, { headers, body, timeoutMs: opts.timeoutMs });
+            } else {
+                // Re-check the endpoint at send time too (the allow-list may have been tightened).
+                const check = checkEndpoint(sub.endpoint, config.endpointHosts);
+                if (!check.ok) throw Object.assign(new Error(`endpoint not allowed: ${check.reason}`), { permanent: true });
+                res = await fetchImpl(sub.endpoint, {
+                    method: 'POST',
+                    redirect: 'manual',
+                    signal: AbortSignal.timeout(opts.timeoutMs),
+                    headers,
+                    body,
+                });
+                try { await res.body?.cancel(); } catch { /* body is not needed */ }
+            }
             if (res.status >= 200 && res.status < 300) outcome = { ok: true, attempt, status: res.status };
             else outcome = { ok: false, attempt, status: res.status, error: `HTTP ${res.status}` };
         } catch (err) {

@@ -29,6 +29,16 @@ function serviceToken(slug, cap, { aud = 'openvibe.events', exp = Math.floor(Dat
     }, key);
 }
 
+/** A developer-app token as Network mints it (ADR-014): sub app:app_…, project_id, env, ns [project_id]. */
+function appToken({ appId = ids.newId('app'), projectId = `prj_${ids.ulid()}`, env = 'sandbox', cap = [], onBehalfOf, iat, exp, key = privateKey } = {}) {
+    const now = Math.floor(Date.now() / 1000);
+    return serviceAuth.signServiceToken({
+        iss: ISSUER, sub: `app:${appId}`, actor_type: 'app', aud: ['openvibe.events'], cap, ns: [projectId], project_id: projectId, env,
+        ...(onBehalfOf ? { on_behalf_of: onBehalfOf } : {}),
+        iat: iat ?? now, exp: exp ?? now + 300, jti: `tok_${crypto.randomBytes(8).toString('hex')}`,
+    }, key);
+}
+
 function userToken({ subjectId = ids.newId('user'), aud = ['openvibe.live', 'openvibe.network'], exp = Math.floor(Date.now() / 1000) + 3600, key = privateKey } = {}) {
     return serviceAuth.signServiceToken({
         sub: 57, id: 57, subject_id: subjectId, username: 'viewer', role: 'user', iss: ISSUER, aud, iat: Math.floor(Date.now() / 1000), exp,
@@ -50,7 +60,7 @@ function tmpDir() {
 }
 
 /** Boot the service. env overrides go through config.load(); `worker: 'manual'` keeps the loop off. */
-async function boot({ env = {}, clock = manualClock(), worker = 'manual', fetchImpl, deliveryFetch } = {}) {
+async function boot({ env = {}, clock = manualClock(), worker = 'manual', fetchImpl, deliveryFetch, appPost, dnsLookup } = {}) {
     const dir = tmpDir();
     const config = load({
         NODE_ENV: 'test',
@@ -60,7 +70,7 @@ async function boot({ env = {}, clock = manualClock(), worker = 'manual', fetchI
         EVENTS_WORKER: worker === 'manual' ? 'off' : 'on',
         ...env,
     });
-    const h = await start({ config, clock, log: silent, fetchImpl, deliveryFetch });
+    const h = await start({ config, clock, log: silent, fetchImpl, deliveryFetch, appPost, dnsLookup });
     const base = `http://127.0.0.1:${h.server.address().port}`;
     return {
         ...h, base, clock, dir,
@@ -189,6 +199,6 @@ function suite(name) {
 }
 
 module.exports = {
-    ISSUER, privateKey, publicKey, silent, serviceToken, userToken, manualClock, tmpDir, boot, request,
+    ISSUER, privateKey, publicKey, silent, serviceToken, appToken, userToken, manualClock, tmpDir, boot, request,
     envelope, subscriber, sse, sleep, suite,
 };

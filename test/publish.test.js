@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('assert');
 const { ids } = require('openvibe-contracts');
-const { boot, request, serviceToken, envelope, suite } = require('./helpers');
+const { boot, request, serviceToken, appToken, envelope, suite } = require('./helpers');
 
 const t = suite('publish');
 let h;
@@ -78,11 +78,18 @@ t('unknown source (not in the manifest map) -> 403', async () => {
     assert.strictEqual(r.body.code, 'events.unknown_source');
 });
 
-t('app principals cannot publish', async () => {
-    const r = await request(h.base, 'POST', '/api/v1/events', {
-        token: serviceToken('x', ['events.event.publish'], { sub: `app:${ids.newId('app')}` }), body: envelope('live'),
+t('app principals cannot publish as a service', async () => {
+    // A first-party capability in an app token is never honoured (apps publish with events.app.publish).
+    let r = await request(h.base, 'POST', '/api/v1/events', {
+        token: appToken({ cap: ['events.event.publish'], env: 'production' }), body: envelope('live'),
     });
     assert.strictEqual(r.status, 403);
+    // An app token without a project is not a usable app token at all.
+    r = await request(h.base, 'POST', '/api/v1/events', {
+        token: serviceToken('x', ['events.event.publish'], { sub: `app:${ids.newId('app')}` }), body: envelope('live'),
+    });
+    assert.strictEqual(r.status, 401);
+    assert.strictEqual(r.body.code, 'token.invalid_claims');
 });
 
 t('idempotent repeat: same event_id -> 200, same seq, stored once', async () => {

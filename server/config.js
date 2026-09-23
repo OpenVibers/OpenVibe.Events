@@ -29,6 +29,8 @@ function sourcePrefixes(env) {
     }
     for (const [source, prefixes] of Object.entries(map)) {
         if (!/^[a-z][a-z0-9-]{1,39}$/.test(source)) throw new Error(`EVENTS_SOURCE_PREFIXES: bad source "${source}"`);
+        // app.* event types and app-<ulid> sources belong to developer apps (events.app.publish) only.
+        if (source === 'app' || source.startsWith('app-')) throw new Error(`EVENTS_SOURCE_PREFIXES: "${source}" is reserved for developer apps`);
         if (!Array.isArray(prefixes) || !prefixes.length) throw new Error(`EVENTS_SOURCE_PREFIXES: ${source} needs at least one prefix`);
         for (const p of prefixes) {
             if (typeof p !== 'string' || p.split('.')[0] !== source) {
@@ -84,8 +86,29 @@ function load(env = process.env) {
         // /api/ready reports `dlq` degraded (still ready) once more dead deliveries than this wait for replay.
         dlqDegradedAt: int(env.EVENTS_DLQ_DEGRADED_AT, 100),
         maxSubscriptionsPerConsumer: int(env.EVENTS_MAX_SUBSCRIPTIONS, 100),
-        // Hostname patterns a subscription endpoint may point at (SSRF guard).
+        // Hostname patterns a first-party subscription endpoint may point at (SSRF guard). App
+        // subscriptions (events.app.subscribe) use server/egress.js instead: public https only.
         endpointHosts: list(env.EVENTS_ENDPOINT_HOSTS, ['127.0.0.1', '*.openvibe.*']),
+
+        // Developer apps (ADR-014; events.app.publish|read|subscribe). Quotas are per project and
+        // environment and enforced here; 0 turns a limit off.
+        apps: {
+            enabled: env.EVENTS_APPS !== 'off',
+            quotas: {
+                production: {
+                    publishPerMinute: int(env.EVENTS_APP_PUBLISH_PER_MINUTE, 120),
+                    retainedBytes: int(env.EVENTS_APP_RETAINED_BYTES, 50 * 1024 * 1024),
+                    maxSubscriptions: int(env.EVENTS_APP_MAX_SUBSCRIPTIONS, 20),
+                },
+                sandbox: {
+                    publishPerMinute: int(env.EVENTS_APP_SANDBOX_PUBLISH_PER_MINUTE, 30),
+                    retainedBytes: int(env.EVENTS_APP_SANDBOX_RETAINED_BYTES, 5 * 1024 * 1024),
+                    maxSubscriptions: int(env.EVENTS_APP_SANDBOX_MAX_SUBSCRIPTIONS, 5),
+                },
+            },
+            // Sandbox events are pruned sooner than everything else.
+            sandboxRetentionDays: int(env.EVENTS_APP_SANDBOX_RETENTION_DAYS, 7),
+        },
 
         // Realtime (SSE) gateway
         realtime: {

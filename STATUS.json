@@ -7,9 +7,17 @@
   "runtime": "node 22, express, better-sqlite3",
   "port": 4300,
   "domain": "events.openvibe.network",
-  "contracts": "openvibe-contracts v0.5.1",
-  "capabilities": ["events.event.publish", "events.subscription.manage", "events.event.read", "events.delivery.admin"],
-  "capabilitiesRegistered": false,
+  "contracts": "openvibe-contracts v0.28.0",
+  "capabilities": [
+    "events.event.publish",
+    "events.subscription.manage",
+    "events.event.read",
+    "events.delivery.admin",
+    "events.app.publish",
+    "events.app.read",
+    "events.app.subscribe"
+  ],
+  "capabilitiesRegistered": true,
   "deployed": false,
-  "updated": "2026-09-22"
+  "updated": "2026-09-23"
 }

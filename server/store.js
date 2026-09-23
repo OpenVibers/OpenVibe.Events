@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
 const topics = require('./topics');
+const apps = require('./apps');
 
 const PRIORITY_RANK = { critical: 0, important: 1, low: 2 };
 const RANK_PRIORITY = ['critical', 'important', 'low'];
@@ -82,6 +83,16 @@ CREATE TABLE IF NOT EXISTS consumer_checkpoints (
     PRIMARY KEY (consumer, topic_pattern)
 );
 
+-- Developer apps whose access Network revoked (network.app.revoked -> scope 'app') or whose
+-- events.app.subscribe grant it withdrew (scope 'events.app.subscribe'). An app token issued at or
+-- before revoked_at (ms, the revocation's own timestamp) is refused for that scope.
+CREATE TABLE IF NOT EXISTS app_revocations (
+    consumer   TEXT NOT NULL,
+    scope      TEXT NOT NULL,
+    revoked_at INTEGER NOT NULL,
+    PRIMARY KEY (consumer, scope)
+);
+
 -- Publish receipts: remember accepted event ids for longer than the events themselves, so a
 -- producer that re-publishes an old id after retention is still answered "duplicate".
 CREATE TABLE IF NOT EXISTS idempotency_receipts (
@@ -94,6 +105,26 @@ CREATE TABLE IF NOT EXISTS idempotency_receipts (
 
 const PUBLISH_RECEIPT = 'events:publish';  // receipts' consumer column for accepted publishes
 
+/**
+ * Columns added after the first release (developer apps, ADR-014). Existing databases get them
+ * with ALTER TABLE; every row stored before is a first-party production row.
+ *   events.project_id / env / size_bytes    who owns an app event, its environment, stored bytes
+ *   subscriptions.project_id / env          an app subscription's scope (NULL project = first-party)
+ */
+const ADDED_COLUMNS = {
+    events: [['project_id', 'TEXT'], ['env', "TEXT NOT NULL DEFAULT 'production'"], ['size_bytes', 'INTEGER NOT NULL DEFAULT 0']],
+    subscriptions: [['project_id', 'TEXT'], ['env', "TEXT NOT NULL DEFAULT 'production'"]],
+};
+
+function migrate(db) {
+    for (const [table, cols] of Object.entries(ADDED_COLUMNS)) {
+        const have = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name));
+        for (const [name, type] of cols) if (!have.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
+    }
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id, env, received_at) WHERE project_id IS NOT NULL;
+             CREATE INDEX IF NOT EXISTS idx_subscriptions_project ON subscriptions(project_id, env) WHERE project_id IS NOT NULL;`);
+}
+
 function openDb(dbPath) {
     if (dbPath !== ':memory:') fs.mkdirSync(path.dirname(path.resolve(dbPath)), { recursive: true });
     const db = new Database(dbPath);
@@ -102,6 +133,7 @@ function openDb(dbPath) {
     db.pragma('foreign_keys = ON');
     db.pragma('busy_timeout = 5000');
     db.exec(SCHEMA);
+    migrate(db);
     db.prepare("INSERT OR IGNORE INTO sequences (name, value) VALUES ('events', 0)").run();
     return db;
 }
@@ -145,6 +177,10 @@ function subscriptionView(row, { withSecret = false } = {}) {
         created_at: new Date(row.created_at).toISOString(),
         updated_at: new Date(row.updated_at).toISOString(),
     };
+    if (row.project_id) {
+        out.project_id = row.project_id;
+        out.env = row.env || 'production';
+    }
     if (withSecret) out.secret = row.secret;
     return out;
 }
@@ -161,10 +197,18 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
         selfRepeats: db.prepare(`SELECT COUNT(*) AS n FROM events WHERE trace_id = ? AND source = ? AND event_type = ?
             AND subject_type = ? AND subject_id = ? AND (request_id IS NULL OR request_id != ?)`),
         insertEvent: db.prepare(`INSERT INTO events (id, seq, event_type, version, source, actor, subject_type, subject_id,
-            subject_revision, trace_id, priority, visibility, occurred_at, received_at, payload, hops, publisher, request_id)
+            subject_revision, trace_id, priority, visibility, occurred_at, received_at, payload, hops, publisher, request_id,
+            project_id, env, size_bytes)
             VALUES (@id, @seq, @event_type, @version, @source, @actor, @subject_type, @subject_id, @subject_revision,
-            @trace_id, @priority, @visibility, @occurred_at, @received_at, @payload, @hops, @publisher, @request_id)`),
-        enabledSubs: db.prepare('SELECT id, topic_pattern FROM subscriptions WHERE enabled = 1'),
+            @trace_id, @priority, @visibility, @occurred_at, @received_at, @payload, @hops, @publisher, @request_id,
+            @project_id, @env, @size_bytes)`),
+        enabledSubs: db.prepare('SELECT id, topic_pattern, project_id, env FROM subscriptions WHERE enabled = 1'),
+        projectRecent: db.prepare('SELECT COUNT(*) AS n FROM events WHERE project_id = ? AND env = ? AND received_at > ?'),
+        projectBytes: db.prepare('SELECT COALESCE(SUM(size_bytes), 0) AS b FROM events WHERE project_id = ? AND env = ?'),
+        disableAppSubs: db.prepare('UPDATE subscriptions SET enabled = 0, updated_at = ? WHERE consumer = ? AND enabled = 1'),
+        revoke: db.prepare(`INSERT INTO app_revocations (consumer, scope, revoked_at) VALUES (?, ?, ?)
+            ON CONFLICT(consumer, scope) DO UPDATE SET revoked_at = MAX(revoked_at, excluded.revoked_at)`),
+        revokedAt: db.prepare('SELECT revoked_at FROM app_revocations WHERE consumer = ? AND scope = ?'),
         insertDelivery: db.prepare(`INSERT OR IGNORE INTO deliveries (event_id, subscription_id, seq, priority, attempt, status,
             next_attempt_at, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 'pending', ?, ?, ?)`),
         afterSeq: db.prepare('SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?'),
@@ -176,13 +220,23 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
     /**
      * Store a batch atomically. `items` are validated envelopes with defaults filled. Returns
      * { results: [{ event_id, seq, duplicate }], inserted: [row] }. Throws StoreError for an id
-     * conflict or a detected loop; nothing of the batch is stored then.
+     * conflict, a detected loop or an exceeded project quota; nothing of the batch is stored then.
+     *
+     * `project` ({ projectId, env, publishPerMinute, retainedBytes }) marks an app publish: the rows
+     * carry project_id and env, and the project's rate and retained-bytes quotas are checked here,
+     * inside the transaction, against what is already stored.
      */
-    const insertBatch = db.transaction((items, { publisher, requestId }) => {
+    const insertBatch = db.transaction((items, { publisher, requestId, project = null }) => {
         const now = clock.now();
         const results = [];
         const inserted = [];
         const subs = q.enabledSubs.all();
+        let recent = null;
+        let bytes = null;
+        if (project) {
+            recent = q.projectRecent.get(project.projectId, project.env, now - 60 * 1000).n;
+            bytes = q.projectBytes.get(project.projectId, project.env).b;
+        }
         for (const env of items) {
             const existing = q.getEvent.get(env.event_id);
             if (existing) {
@@ -206,6 +260,21 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
                     `trace ${env.trace_id} already carries ${hops - 1} hops for ${env.event_type}; refusing to extend a probable loop`,
                     { event_id: env.event_id, hops: hops - 1, max_hops: maxHops });
             }
+            const payloadJson = JSON.stringify(env.payload);
+            const actorJson = JSON.stringify(env.actor);
+            const sizeBytes = Buffer.byteLength(payloadJson) + Buffer.byteLength(actorJson) + env.event_type.length + env.subject.id.length;
+            if (project) {
+                recent += 1;
+                bytes += sizeBytes;
+                if (project.publishPerMinute && recent > project.publishPerMinute) {
+                    throw new StoreError(429, 'events.quota_exceeded', `project ${project.projectId} (${project.env}) may publish at most ${project.publishPerMinute} events per minute`,
+                        { quota: 'publish_rate', limit: project.publishPerMinute, window: 'minute', retry_after: 60 });
+                }
+                if (project.retainedBytes && bytes > project.retainedBytes) {
+                    throw new StoreError(429, 'events.quota_exceeded', `project ${project.projectId} (${project.env}) may keep at most ${project.retainedBytes} bytes of events`,
+                        { quota: 'retained_bytes', limit: project.retainedBytes, used: bytes - sizeBytes });
+                }
+            }
             const seq = q.nextSeq.get().value;
             const row = {
                 id: env.event_id,
@@ -213,7 +282,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
                 event_type: env.event_type,
                 version: env.version,
                 source: env.source,
-                actor: JSON.stringify(env.actor),
+                actor: actorJson,
                 subject_type: env.subject.type,
                 subject_id: env.subject.id,
                 subject_revision: env.subject.revision ?? null,
@@ -222,23 +291,54 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
                 visibility: env.visibility,
                 occurred_at: env.timestamp,
                 received_at: now,
-                payload: JSON.stringify(env.payload),
+                payload: payloadJson,
                 hops,
                 publisher,
                 request_id: requestId || null,
+                project_id: project ? project.projectId : null,
+                env: project ? project.env : 'production',
+                size_bytes: sizeBytes,
             };
             q.insertEvent.run(row);
             q.addReceipt.run(PUBLISH_RECEIPT, env.event_id, now);
             for (const s of subs) {
-                if (topics.matches(s.topic_pattern, env.event_type)) {
+                if (apps.deliverable(s, row)) {
                     q.insertDelivery.run(env.event_id, s.id, seq, PRIORITY_RANK[env.priority], now, now, now);
                 }
             }
+            revocationHook(row, now);
             results.push({ event_id: env.event_id, seq, duplicate: false });
             inserted.push(row);
         }
         return { results, inserted };
     });
+
+    /**
+     * Network tells Events when an app loses its access (network.app.revoked, also sent for every
+     * app of an archived project) or its events.app.subscribe grant (network.grant.changed). The
+     * app's subscriptions stop at once, in the same transaction that stores the event, so a
+     * revocation reaches deliveries without waiting for anything else.
+     */
+    function revocationHook(row, now) {
+        if (row.source !== 'network' || row.project_id || row.subject_type !== 'app') return;
+        let payload = {};
+        try { payload = JSON.parse(row.payload) || {}; } catch { payload = {}; }
+        let scope = null;
+        if (row.event_type === 'network.app.revoked') scope = 'app';
+        else if (row.event_type === 'network.grant.changed' && ['events.app.subscribe', 'events.app.*', 'events.*'].includes(payload.capability)
+            && !['approved', 'requested'].includes(payload.to)) scope = 'events.app.subscribe';
+        if (!scope || !/^app_[0-9A-HJKMNP-TV-Z]{26}$/.test(row.subject_id)) return;
+        const consumer = `app:${row.subject_id}`;
+        const at = Date.parse(row.occurred_at);
+        q.revoke.run(consumer, scope, Number.isFinite(at) ? at : now);
+        q.disableAppSubs.run(now, consumer);
+    }
+
+    /** When Network revoked `consumer` (app:app_…) for `scope` ('app' | 'events.app.subscribe'), in ms; or null. */
+    function revokedAt(consumer, scope) {
+        const r = q.revokedAt.get(consumer, scope);
+        return r ? r.revoked_at : null;
+    }
 
     function getEvent(id) {
         return q.getEvent.get(id) || null;
@@ -285,11 +385,14 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
 
     // ── Subscriptions ────────────────────────────────────────
 
-    function createSubscription({ id, consumer, topicPattern, endpoint, secret, retryPolicy }) {
+    function createSubscription({ id, consumer, topicPattern, endpoint, secret, retryPolicy, projectId = null, env = 'production' }) {
         const now = clock.now();
-        db.prepare(`INSERT INTO subscriptions (id, consumer, topic_pattern, endpoint, secret, enabled, retry_policy, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)`).run(id, consumer, topicPattern, endpoint, secret, retryPolicy ? JSON.stringify(retryPolicy) : null, now, now);
+        db.prepare(`INSERT INTO subscriptions (id, consumer, topic_pattern, endpoint, secret, enabled, retry_policy, created_at, updated_at, project_id, env)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`).run(id, consumer, topicPattern, endpoint, secret, retryPolicy ? JSON.stringify(retryPolicy) : null, now, now, projectId, env);
         return getSubscription(id);
+    }
+    function countProjectSubscriptions(projectId, env) {
+        return db.prepare('SELECT COUNT(*) AS n FROM subscriptions WHERE project_id = ? AND env = ?').get(projectId, env).n;
     }
     function getSubscription(id) {
         return db.prepare('SELECT * FROM subscriptions WHERE id = ?').get(id) || null;
@@ -358,14 +461,16 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
     const requeue = db.transaction((sub, { fromSeq, eventIds, max = 10000 }) => {
         const now = clock.now();
         let rows;
+        const cols = 'id, seq, priority, event_type, visibility, project_id, env';
         if (Array.isArray(eventIds)) {
-            const get = db.prepare('SELECT id, seq, priority, event_type FROM events WHERE id = ?');
+            const get = db.prepare(`SELECT ${cols} FROM events WHERE id = ?`);
             rows = eventIds.map(id => get.get(id)).filter(Boolean);
         } else {
-            rows = db.prepare('SELECT id, seq, priority, event_type FROM events WHERE seq >= ? AND event_type GLOB ? ORDER BY seq LIMIT ?')
+            rows = db.prepare(`SELECT ${cols} FROM events WHERE seq >= ? AND event_type GLOB ? ORDER BY seq LIMIT ?`)
                 .all(fromSeq, topics.toGlob(sub.topic_pattern), max * 2);
         }
-        rows = rows.filter(r => topics.matches(sub.topic_pattern, r.event_type)).slice(0, max);
+        // Replay never widens a subscription's scope (app scope, sandbox separation).
+        rows = rows.filter(r => apps.deliverable(sub, r)).slice(0, max);
         const up = db.prepare(`INSERT INTO deliveries (event_id, subscription_id, seq, priority, attempt, status, next_attempt_at, created_at, updated_at)
             VALUES (?, ?, ?, ?, 0, 'pending', ?, ?, ?)
             ON CONFLICT(event_id, subscription_id) DO UPDATE SET status = 'pending', attempt = 0, next_attempt_at = excluded.next_attempt_at,
@@ -395,9 +500,15 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
 
     // ── Retention ────────────────────────────────────────────
 
-    /** Drop events (and their deliveries) older than retentionDays, and old publish receipts. */
-    function prune({ retentionDays = 30, receiptRetentionDays = 90, now = clock.now() } = {}) {
-        const events = db.prepare('DELETE FROM events WHERE received_at < ?').run(now - retentionDays * DAY_MS).changes;
+    /**
+     * Drop events (and their deliveries) older than retentionDays (sandbox events older than
+     * sandboxRetentionDays, when shorter), and old publish receipts.
+     */
+    function prune({ retentionDays = 30, receiptRetentionDays = 90, sandboxRetentionDays = retentionDays, now = clock.now() } = {}) {
+        let events = db.prepare('DELETE FROM events WHERE received_at < ?').run(now - retentionDays * DAY_MS).changes;
+        if (sandboxRetentionDays < retentionDays) {
+            events += db.prepare("DELETE FROM events WHERE env = 'sandbox' AND received_at < ?").run(now - sandboxRetentionDays * DAY_MS).changes;
+        }
         const receipts = db.prepare('DELETE FROM idempotency_receipts WHERE processed_at < ?')
             .run(now - Math.max(receiptRetentionDays, retentionDays) * DAY_MS).changes;
         return { events, receipts };
@@ -408,8 +519,8 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
     }
 
     return {
-        db, insertBatch, getEvent, lastSeq, oldestSeq, scan,
-        createSubscription, getSubscription, listSubscriptions, countSubscriptions, setSubscriptionEnabled,
+        db, insertBatch, getEvent, revokedAt, lastSeq, oldestSeq, scan,
+        createSubscription, getSubscription, listSubscriptions, countSubscriptions, countProjectSubscriptions, setSubscriptionEnabled,
         dueDeliveries, recordAttempt, getDelivery, listDeliveries, requeue, deliveryCounts,
         getCheckpoint, setCheckpoint, prune, ping,
     };
