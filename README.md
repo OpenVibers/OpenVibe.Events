@@ -30,10 +30,10 @@ Services call with an OpenVibe.Network client-credentials token (`POST /oauth/to
 
 | Capability | Routes |
 |---|---|
-| `events.publish` | `POST /api/v1/events` |
-| `events.subscribe` | `/api/v1/subscriptions…` (own subscriptions only) |
-| `events.read` | `GET /api/v1/events`, `GET /api/v1/events/:id`, `/api/v1/checkpoints`, realtime as a service |
-| `events.admin` | `GET /api/v1/deliveries`, `POST /api/v1/deliveries/replay` |
+| `events.event.publish` | `POST /api/v1/events` |
+| `events.subscription.manage` | `/api/v1/subscriptions…` (own subscriptions only) |
+| `events.event.read` | `GET /api/v1/events`, `GET /api/v1/events/:id`, `/api/v1/checkpoints`, realtime as a service |
+| `events.delivery.admin` | `GET /api/v1/deliveries`, `POST /api/v1/deliveries/replay` |
 
 These ids are not in `openvibe-contracts` yet; their manifests are proposed in [docs/capabilities-proposal/](docs/capabilities-proposal/) (with the service manifest). Until the contracts release defines them, `server/auth.js` grants them with the contracts rule (exact id or a `family.*` grant) and hands the decision to `capabilities.check()` as soon as contracts know the id.
 
@@ -102,7 +102,7 @@ es.onmessage = (m) => { const { seq, event } = JSON.parse(m.data); };
 es.addEventListener('gap', (m) => { /* events were missed: refetch state */ });
 ```
 
-- Auth: the Network `ov_token` cookie or a Bearer user JWT; a service token with `events.read`; or nobody (public events only, `REALTIME_ALLOW_ANONYMOUS`). An expired cookie degrades to anonymous; a bad Bearer is a 401.
+- Auth: the Network `ov_token` cookie or a Bearer user JWT; a service token with `events.event.read`; or nobody (public events only, `REALTIME_ALLOW_ANONYMOUS`). An expired cookie degrades to anonymous; a bad Bearer is a 401.
 - Visibility: `public` events go to anyone subscribed to the topic; `subject` events only to the user whose subject id (`usr_…`) is the event's `actor.id` or its user `subject.id`; `internal` events never reach a browser. A guessed topic yields nothing.
 - Resume: the SSE `id` is the seq, so the browser's automatic `Last-Event-ID` (or `?last_event_id=`) replays what was missed. A cursor older than retention first gets `event: gap` (`{ reason, from_seq, to_seq }`), as does a replay that hits `REALTIME_REPLAY_MAX`.
 - Heartbeat comment every 25 s; at most 20 topics per connection and `REALTIME_MAX_CONNECTIONS` (2000) overall; CORS with credentials for `https://*.openvibe.*` only.

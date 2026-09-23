@@ -5,8 +5,8 @@ const { boot, request, serviceToken, userToken, envelope, sse, sleep, suite } = 
 
 const t = suite('realtime');
 let h;
-const live = serviceToken('live', ['events.publish']);
-const network = serviceToken('network', ['events.publish']);
+const live = serviceToken('live', ['events.event.publish']);
+const network = serviceToken('network', ['events.event.publish']);
 const alice = ids.newId('user');
 const bob = ids.newId('user');
 const open = [];
@@ -29,7 +29,7 @@ t('visibility: public to everyone, subject only to that user, internal only to s
     const anon = await stream('topics=live.stream.*,network.notification.*');
     const a = await stream('topics=live.stream.*,network.notification.*', { Cookie: `theme=x; ov_token=${userToken({ subjectId: alice })}` });
     const b = await stream('topics=live.stream.*,network.notification.*', { Authorization: `Bearer ${userToken({ subjectId: bob })}` });
-    const svc = await stream('topics=live.stream.*,network.notification.*', { Authorization: `Bearer ${serviceToken('live', ['events.read'])}` });
+    const svc = await stream('topics=live.stream.*,network.notification.*', { Authorization: `Bearer ${serviceToken('live', ['events.event.read'])}` });
     assert.strictEqual(anon.status, 200);
     assert.match(anon.headers['content-type'], /text\/event-stream/);
     await sleep(50);
@@ -123,8 +123,8 @@ t('limits and auth errors', async () => {
     assert.strictEqual(r.status, 400);
     r = await request(h.base, 'GET', '/realtime/stream?topics=live.*', { headers: { Authorization: 'Bearer not.a.token' } });
     assert.strictEqual(r.status, 401, 'a bad Bearer is refused, not downgraded');
-    r = await request(h.base, 'GET', '/realtime/stream?topics=live.*', { token: serviceToken('live', ['events.publish']) });
-    assert.strictEqual(r.status, 403, 'service tokens need events.read');
+    r = await request(h.base, 'GET', '/realtime/stream?topics=live.*', { token: serviceToken('live', ['events.event.publish']) });
+    assert.strictEqual(r.status, 403, 'service tokens need events.event.read');
     const expired = await stream('topics=live.*', { Cookie: `ov_token=${userToken({ exp: Math.floor(Date.now() / 1000) - 3600 })}` });
     await sleep(30);
     assert.ok(expired.comments.includes('connected anonymous'), 'an expired cookie degrades to anonymous');

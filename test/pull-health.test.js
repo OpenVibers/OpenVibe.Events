@@ -9,8 +9,8 @@ const { boot, request, serviceToken, envelope, publicKey, suite, sleep } = requi
 
 const t = suite('pull-health');
 let h;
-const live = serviceToken('live', ['events.publish']);
-const reader = serviceToken('games', ['events.read']);
+const live = serviceToken('live', ['events.event.publish']);
+const reader = serviceToken('games', ['events.event.read']);
 
 t('topic patterns: * spans one or more segments', () => {
     const yes = [['media.vod.*', 'media.vod.ready'], ['media.vod.*', 'media.vod.clip.cut'], ['*.created', 'community.post.created'],
@@ -23,12 +23,12 @@ t('topic patterns: * spans one or more segments', () => {
 });
 
 t('capability grants: exact or family wildcard; contracts decide ids they know', () => {
-    assert.ok(hasCap({ cap: ['events.publish'] }, 'events.publish'));
-    assert.ok(hasCap({ cap: ['events.*'] }, 'events.admin'));
-    assert.ok(!hasCap({ cap: ['events.pub*'] }, 'events.publish'));
-    assert.ok(!hasCap({ cap: ['event.*'] }, 'events.publish'));
-    assert.ok(!hasCap({}, 'events.read'));
-    assert.strictEqual(allows({ cap: ['events.read'] }, 'events.read').allowed, true);
+    assert.ok(hasCap({ cap: ['events.event.publish'] }, 'events.event.publish'));
+    assert.ok(hasCap({ cap: ['events.*'] }, 'events.delivery.admin'));
+    assert.ok(!hasCap({ cap: ['events.pub*'] }, 'events.event.publish'));
+    assert.ok(!hasCap({ cap: ['event.*'] }, 'events.event.publish'));
+    assert.ok(!hasCap({}, 'events.event.read'));
+    assert.strictEqual(allows({ cap: ['events.event.read'] }, 'events.event.read').allowed, true);
     assert.strictEqual(allows({ cap: ['media.object.upload'] }, 'media.object.upload').allowed, true, 'known ids go through contracts');
 });
 
@@ -62,7 +62,7 @@ t('pull: cursor, topic filter, internal events included for services', async () 
     r = await request(h.base, 'GET', `/api/v1/events/${id3}`, { token: reader });
     assert.strictEqual(r.body.seq, s3);
     r = await request(h.base, 'GET', '/api/v1/events?topic=live.*', { token: live });
-    assert.strictEqual(r.status, 403, 'events.read is required');
+    assert.strictEqual(r.status, 403, 'events.event.read is required');
     r = await request(h.base, 'GET', '/api/v1/events?limit=5000', { token: reader });
     assert.strictEqual(r.status, 400);
 });
@@ -84,7 +84,7 @@ t('checkpoints: per consumer and topic', async () => {
     r = await request(h.base, 'GET', '/api/v1/checkpoints?topic=live.vod.*', { token: reader });
     assert.strictEqual(r.body.cursor, 42);
     assert.strictEqual(r.body.consumer, 'games');
-    r = await request(h.base, 'GET', '/api/v1/checkpoints?topic=live.vod.*', { token: serviceToken('tools', ['events.read']) });
+    r = await request(h.base, 'GET', '/api/v1/checkpoints?topic=live.vod.*', { token: serviceToken('tools', ['events.event.read']) });
     assert.strictEqual(r.body.cursor, 0, 'another consumer has its own');
 });
 

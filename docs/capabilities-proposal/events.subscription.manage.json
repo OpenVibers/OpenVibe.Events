@@ -1,5 +1,5 @@
 {
-  "id": "events.subscribe",
+  "id": "events.subscription.manage",
   "version": "1.0",
   "owner": "events",
   "status": "active",

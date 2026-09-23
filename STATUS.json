@@ -8,7 +8,7 @@
   "port": 4300,
   "domain": "events.openvibe.network",
   "contracts": "openvibe-contracts v0.5.1",
-  "capabilities": ["events.publish", "events.subscribe", "events.read", "events.admin"],
+  "capabilities": ["events.event.publish", "events.subscription.manage", "events.event.read", "events.delivery.admin"],
   "capabilitiesRegistered": false,
   "deployed": false,
   "updated": "2026-09-22"

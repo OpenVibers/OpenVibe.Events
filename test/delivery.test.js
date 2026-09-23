@@ -5,9 +5,9 @@ const { boot, request, serviceToken, envelope, subscriber, suite, sleep } = requ
 
 const t = suite('delivery');
 let h;
-const live = serviceToken('live', ['events.publish']);
-const media = serviceToken('media', ['events.subscribe']);
-const admin = serviceToken('ops', ['events.admin']);
+const live = serviceToken('live', ['events.event.publish']);
+const media = serviceToken('media', ['events.subscription.manage']);
+const admin = serviceToken('ops', ['events.delivery.admin']);
 
 async function subscribe(token, body) {
     return request(h.base, 'POST', '/api/v1/subscriptions', { token, body });
@@ -30,13 +30,13 @@ t('subscription API: create, list own, secret shown once', async () => {
     const list = await request(h.base, 'GET', '/api/v1/subscriptions', { token: media });
     assert.strictEqual(list.body.subscriptions.length, 1);
     assert.strictEqual(list.body.subscriptions[0].secret, undefined);
-    const other = await request(h.base, 'GET', '/api/v1/subscriptions', { token: serviceToken('games', ['events.subscribe']) });
+    const other = await request(h.base, 'GET', '/api/v1/subscriptions', { token: serviceToken('games', ['events.subscription.manage']) });
     assert.strictEqual(other.body.subscriptions.length, 0, 'consumers only see their own');
     const dup = await subscribe(media, { topic_pattern: 'live.demo.*', endpoint: stub.url });
     assert.strictEqual(dup.status, 409);
-    const foreign = await request(h.base, 'POST', `/api/v1/subscriptions/${r.body.id}/disable`, { token: serviceToken('games', ['events.subscribe']) });
+    const foreign = await request(h.base, 'POST', `/api/v1/subscriptions/${r.body.id}/disable`, { token: serviceToken('games', ['events.subscription.manage']) });
     assert.strictEqual(foreign.status, 404, 'cannot disable another consumer\'s subscription');
-    const noCap = await subscribe(serviceToken('media', ['events.read']), { topic_pattern: 'x.y.z', endpoint: stub.url });
+    const noCap = await subscribe(serviceToken('media', ['events.event.read']), { topic_pattern: 'x.y.z', endpoint: stub.url });
     assert.strictEqual(noCap.status, 403);
     await request(h.base, 'POST', `/api/v1/subscriptions/${r.body.id}/disable`, { token: media });
     await stub.close();
@@ -54,11 +54,11 @@ t('SSRF: only http(s) endpoints on 127.0.0.1 or *.openvibe.* are accepted', asyn
         assert.strictEqual(r.body.code, 'events.endpoint_not_allowed', endpoint);
     }
     for (const endpoint of ['http://127.0.0.1:3000/internal/events', 'https://openvibe.live/internal/events', 'https://live.openvibe.network/hook']) {
-        const r = await subscribe(serviceToken('ssrfok', ['events.subscribe']), { topic_pattern: 'nothing.matches.this', endpoint });
+        const r = await subscribe(serviceToken('ssrfok', ['events.subscription.manage']), { topic_pattern: 'nothing.matches.this', endpoint });
         assert.strictEqual(r.status, 201, endpoint);
     }
     // http://2130706433/ is 127.0.0.1 once parsed; it is stored normalised.
-    const r = await subscribe(serviceToken('ssrfok', ['events.subscribe']), { topic_pattern: 'nothing.matches.that', endpoint: 'http://2130706433:9/x' });
+    const r = await subscribe(serviceToken('ssrfok', ['events.subscription.manage']), { topic_pattern: 'nothing.matches.that', endpoint: 'http://2130706433:9/x' });
     assert.strictEqual(r.status, 201);
     assert.strictEqual(r.body.endpoint, 'http://127.0.0.1:9/x');
 });
@@ -155,7 +155,7 @@ t('priority classes: critical before important before low', async () => {
     const orders = [[], [], []];
     const stubs = [];
     for (let i = 0; i < 3; i++) stubs.push(await subscriber((c) => { orders[i].push(c.body.event.priority); return 204; }));
-    for (let i = 0; i < 3; i++) await subscribe(serviceToken(`prio${i}`, ['events.subscribe']), { topic_pattern: 'live.prio.*', endpoint: stubs[i].url });
+    for (let i = 0; i < 3; i++) await subscribe(serviceToken(`prio${i}`, ['events.subscription.manage']), { topic_pattern: 'live.prio.*', endpoint: stubs[i].url });
     // Low first, critical last: the queue must still send critical first.
     await publish(envelope('live', { event_type: 'live.prio.x', priority: 'low' }));
     await publish(envelope('live', { event_type: 'live.prio.x', priority: 'important' }));
@@ -184,7 +184,7 @@ t('backpressure: one in flight per subscription, <= maxInflight (20) overall', a
     };
     const bp = await boot({ deliveryFetch: fetchImpl });
     for (let i = 0; i < 25; i++) {
-        const r = await request(bp.base, 'POST', '/api/v1/subscriptions', { token: serviceToken(`bp${i}`, ['events.subscribe']), body: { topic_pattern: 'live.bp.*', endpoint: 'http://127.0.0.1:9/hook' } });
+        const r = await request(bp.base, 'POST', '/api/v1/subscriptions', { token: serviceToken(`bp${i}`, ['events.subscription.manage']), body: { topic_pattern: 'live.bp.*', endpoint: 'http://127.0.0.1:9/hook' } });
         assert.strictEqual(r.status, 201);
     }
     for (let i = 0; i < 3; i++) await request(bp.base, 'POST', '/api/v1/events', { token: live, body: envelope('live', { event_type: 'live.bp.x' }) });

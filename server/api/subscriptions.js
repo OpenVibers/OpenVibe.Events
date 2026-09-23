@@ -1,6 +1,6 @@
 'use strict';
 /**
- * Subscriptions (service token with events.subscribe; the consumer is always the calling service).
+ * Subscriptions (service token with events.subscription.manage; the consumer is always the calling service).
  *
  *   POST /api/v1/subscriptions               { topic_pattern, endpoint, secret?, retry_policy? }
  *                                            -> 201 subscription + secret (shown once)

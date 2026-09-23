@@ -6,7 +6,7 @@
  *     openvibe.events), verified with openvibe-contracts serviceAuth.verifyServiceToken.
  *   - Browsers: Network user JWTs (RS256, same key), cookie `ov_token` or Bearer.
  *
- * Capability ids events.publish / events.subscribe / events.read / events.admin are proposed in
+ * Capability ids events.event.publish / events.subscription.manage / events.event.read / events.delivery.admin are proposed in
  * docs/capabilities-proposal/ and are not in openvibe-contracts yet. capabilities.check() answers
  * capability.unknown for an id it does not know; until the release that defines them, hasCap()
  * decides with the same grant rule (exact id, or a `family.*` grant).
@@ -16,10 +16,10 @@ const { serviceAuth, capabilities, http } = require('openvibe-contracts');
 
 /** The capability ids this service enforces (manifests: docs/capabilities-proposal/). */
 const CAPS = Object.freeze({
-    publish: 'events.publish',
-    subscribe: 'events.subscribe',
-    read: 'events.read',
-    admin: 'events.admin',
+    publish: 'events.event.publish',
+    subscribe: 'events.subscription.manage',
+    read: 'events.event.read',
+    admin: 'events.delivery.admin',
 });
 
 // ── Network public key ─────────────────────────────────────

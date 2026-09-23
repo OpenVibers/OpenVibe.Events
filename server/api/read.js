@@ -1,6 +1,6 @@
 'use strict';
 /**
- * Pull consumers (service token with events.read):
+ * Pull consumers (service token with events.event.read):
  *
  *   GET /api/v1/events?topic=media.vod.*[,…]&after_seq=0&limit=100
  *       -> { events: [{ seq, event }], next_after_seq, latest_seq, gap? }
@@ -10,7 +10,7 @@
  *   GET /api/v1/checkpoints?topic=…  /  PUT /api/v1/checkpoints { topic, cursor }
  *       a consumer's own stored cursor per topic pattern (consumer = calling principal)
  *
- * Operators (events.admin):
+ * Operators (events.delivery.admin):
  *
  *   GET  /api/v1/deliveries?status=dead&subscription_id=&after_seq=&limit=
  *   POST /api/v1/deliveries/replay { subscription_id, from_seq | event_ids: [...] }

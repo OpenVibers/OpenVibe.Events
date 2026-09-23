@@ -1,6 +1,6 @@
 'use strict';
 /**
- * POST /api/v1/events  (service token, audience openvibe.events, capability events.publish)
+ * POST /api/v1/events  (service token, audience openvibe.events, capability events.event.publish)
  *
  *   body: <envelope>            -> 201 { event_id, seq, duplicate: false } | 200 on a repeat
  *   body: { events: [...] }     -> 201 { results: [{ event_id, seq, duplicate }] } (<= 100, atomic)

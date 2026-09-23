@@ -11,7 +11,7 @@ const t = suite('outbox-inbox');
 let h;
 let network;
 let tokenClient;
-const admin = serviceToken('ops', ['events.admin']);
+const admin = serviceToken('ops', ['events.delivery.admin']);
 
 function countIn(id) {
     return h.db.prepare('SELECT COUNT(*) AS n FROM events WHERE id = ?').get(id).n;
@@ -29,7 +29,7 @@ t('boot Events + a stub Network token endpoint', async () => {
             assert.strictEqual(p.get('audience'), 'openvibe.events');
             issued++;
             res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ access_token: serviceToken(p.get('client_id'), ['events.publish']), token_type: 'Bearer', expires_in: 300 }));
+            res.end(JSON.stringify({ access_token: serviceToken(p.get('client_id'), ['events.event.publish']), token_type: 'Bearer', expires_in: 300 }));
         });
     });
     await new Promise(r => network.listen(0, '127.0.0.1', r));
@@ -150,10 +150,10 @@ t('consumer crash mid-processing + redelivery + replay -> exactly one effect (cr
         if (mode === 'crash-after-commit') { mode = 'ok'; return 'destroy'; }  // effect committed, no response sent
         return 204;
     });
-    const media = serviceToken('media', ['events.subscribe']);
+    const media = serviceToken('media', ['events.subscription.manage']);
     const sub = (await request(h.base, 'POST', '/api/v1/subscriptions', { token: media, body: { topic_pattern: 'live.tip.*', endpoint: stub.url } })).body;
     secret = sub.secret;
-    const live = serviceToken('live', ['events.publish']);
+    const live = serviceToken('live', ['events.event.publish']);
     const effects = (id) => consumerDb.prepare('SELECT COUNT(*) AS n FROM credits WHERE event_id = ?').get(id).n;
 
     for (const first of ['crash-after-commit', 'crash-before-commit']) {

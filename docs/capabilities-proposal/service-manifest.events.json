@@ -14,10 +14,10 @@
   "health": "/api/health",
   "ready": "/api/ready",
   "capabilities": [
-    "events.publish",
-    "events.subscribe",
-    "events.read",
-    "events.admin"
+    "events.event.publish",
+    "events.subscription.manage",
+    "events.event.read",
+    "events.delivery.admin"
   ],
   "eventsProduced": [],
   "eventsConsumed": [],

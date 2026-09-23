@@ -1,5 +1,5 @@
 {
-  "id": "events.read",
+  "id": "events.event.read",
   "version": "1.0",
   "owner": "events",
   "status": "active",

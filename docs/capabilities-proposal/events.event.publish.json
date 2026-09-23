@@ -1,5 +1,5 @@
 {
-  "id": "events.publish",
+  "id": "events.event.publish",
   "version": "1.0",
   "owner": "events",
   "status": "active",

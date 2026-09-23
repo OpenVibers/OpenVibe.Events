@@ -9,7 +9,7 @@
  *   public    anyone subscribed to a matching topic (signed-out visitors too, unless disabled)
  *   subject   only the user whose subject id is the event's actor.id or its subject.id (subject
  *             type user); a guessed topic yields nothing for anyone else
- *   internal  service principals (token with events.read) only, never a browser
+ *   internal  service principals (token with events.event.read) only, never a browser
  *
  * Resume: `Last-Event-ID` (or ?last_event_id=) is a seq. Missed events are replayed first; when the
  * cursor is older than retention an `event: gap` message comes first, so the client knows to

@@ -5,7 +5,7 @@ const { boot, request, serviceToken, envelope, suite } = require('./helpers');
 
 const t = suite('publish');
 let h;
-const live = serviceToken('live', ['events.publish']);
+const live = serviceToken('live', ['events.event.publish']);
 
 t('boot', async () => { h = await boot(); });
 
@@ -14,15 +14,15 @@ t('no token -> 401, wrong audience -> 401, missing capability -> 403', async () 
     assert.strictEqual(r.status, 401);
     assert.strictEqual(r.body.code, 'token.missing');
     assert.match(r.headers.get('content-type'), /problem\+json/);
-    r = await request(h.base, 'POST', '/api/v1/events', { token: serviceToken('live', ['events.publish'], { aud: 'openvibe.media' }), body: envelope() });
+    r = await request(h.base, 'POST', '/api/v1/events', { token: serviceToken('live', ['events.event.publish'], { aud: 'openvibe.media' }), body: envelope() });
     assert.strictEqual(r.status, 401);
     assert.strictEqual(r.body.code, 'token.wrong_audience');
-    r = await request(h.base, 'POST', '/api/v1/events', { token: serviceToken('live', ['events.read']), body: envelope() });
+    r = await request(h.base, 'POST', '/api/v1/events', { token: serviceToken('live', ['events.event.read']), body: envelope() });
     assert.strictEqual(r.status, 403);
     assert.strictEqual(r.body.code, 'capability.denied');
 });
 
-t('a family grant (events.*) covers events.publish', async () => {
+t('a family grant (events.*) covers events.event.publish', async () => {
     const r = await request(h.base, 'POST', '/api/v1/events', { token: serviceToken('live', ['events.*']), body: envelope() });
     assert.strictEqual(r.status, 201);
 });
@@ -73,14 +73,14 @@ t('event_type must use a prefix the source owns', async () => {
 });
 
 t('unknown source (not in the manifest map) -> 403', async () => {
-    const r = await request(h.base, 'POST', '/api/v1/events', { token: serviceToken('stranger', ['events.publish']), body: envelope('stranger') });
+    const r = await request(h.base, 'POST', '/api/v1/events', { token: serviceToken('stranger', ['events.event.publish']), body: envelope('stranger') });
     assert.strictEqual(r.status, 403);
     assert.strictEqual(r.body.code, 'events.unknown_source');
 });
 
 t('app principals cannot publish', async () => {
     const r = await request(h.base, 'POST', '/api/v1/events', {
-        token: serviceToken('x', ['events.publish'], { sub: `app:${ids.newId('app')}` }), body: envelope('live'),
+        token: serviceToken('x', ['events.event.publish'], { sub: `app:${ids.newId('app')}` }), body: envelope('live'),
     });
     assert.strictEqual(r.status, 403);
 });
@@ -125,7 +125,7 @@ t('payload size limit', async () => {
 
 t('loop guard: a trace bouncing between services is refused at 8 hops', async () => {
     const trace = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-    const media = serviceToken('media', ['events.publish']);
+    const media = serviceToken('media', ['events.event.publish']);
     let last;
     for (let i = 0; i < 9; i++) {
         const src = i % 2 ? 'media' : 'live';
