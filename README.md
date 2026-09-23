@@ -2,8 +2,8 @@
 
 > Durable events, subscriptions, delivery, retry, dead letters and replay for the network.
 
-**Status:** alpha (roadmap Wave 3). Runs and is tested; no service publishes to it in production yet.  
-**Domain:** `events.openvibe.network` (the realtime gateway is served here too until ADR-005 decides where `realtime.openvibe.network` lives)  
+**Status:** alpha (roadmap Wave 3), deployed on `openvibe-ovh` (unit `openvibe-events`, 127.0.0.1:4300, public at `https://events.openvibe.network`). Live (`live.stream.*`), Media, Chat, Games, Network and OpenRe publish to it in production, and every consumer webhook requires signature v2. Few consumers act on the events yet: Media still reports finalisation to Live over `/internal/media-webhook`, and no browser surface uses the realtime stream.  
+**Domain:** `events.openvibe.network` (the realtime gateway is served here too: ADR-005 put Realtime inside Events, and `realtime.openvibe.network` has no runtime of its own)  
 **Plan:** OpenVibe End-to-End Realignment & Implementation Plan, revision 3 (20 Sep 2026), §6 and §6.3.  
 **License:** AGPL-3.0 (same as every OpenVibe service).
 

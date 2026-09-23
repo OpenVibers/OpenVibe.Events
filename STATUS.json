@@ -18,6 +18,7 @@
     "events.app.subscribe"
   ],
   "capabilitiesRegistered": true,
-  "deployed": false,
+  "deployed": true,
+  "deployment": "openvibe-ovh /opt/openvibe.events, unit openvibe-events, 127.0.0.1:4300; public at https://events.openvibe.network (realtime SSE, health, token-guarded /api/v1/events, /api/v1/subscriptions, /api/v1/checkpoints; /api/v1/deliveries host-local); release 5def126; real traffic since 2026-09-23 (Live, Media, Chat, Games, Network and OpenRe publish; 8 subscriptions, held by Search, Tips, VIP, News and Reviews); restore drill passed 2026-09-23",
   "updated": "2026-09-23"
 }
