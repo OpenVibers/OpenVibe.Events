@@ -17,7 +17,8 @@ const { sign } = require('../lib/client');
 const { rowToEnvelope } = require('./store');
 const { checkEndpoint } = require('./endpoints');
 
-function createWorker({ store, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console }) {
+// observe (optional): { delivered(seconds, row), attempt(outcome) } — metrics hooks, never required.
+function createWorker({ store, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, observe = null }) {
     const opts = config.worker;
     const busy = new Set();          // subscription ids with a delivery in flight
     const inflight = new Set();      // promises
@@ -76,6 +77,13 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
             if (outcome.dead) log.warn(`[worker] ${row.id} -> ${sub.id} dead after ${attempt} attempts: ${outcome.error}`);
         }
         store.recordAttempt(delivery.event_id, delivery.subscription_id, outcome);
+        if (observe) {
+            try {
+                observe.attempt(outcome.ok ? 'delivered' : outcome.dead ? 'dead' : 'retry');
+                // Acceptance to successful delivery, retries included.
+                if (outcome.ok) observe.delivered(Math.max(0, clock.now() - row.received_at) / 1000, row);
+            } catch { /* metrics never break delivery */ }
+        }
     }
 
     /** Start every due delivery there is room for. Returns how many were started. */

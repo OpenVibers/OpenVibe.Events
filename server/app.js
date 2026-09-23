@@ -1,17 +1,26 @@
 'use strict';
-/** Express app: request context, the v1 API, the realtime gateway, health/readiness. */
+/** Express app: request context, the v1 API, the realtime gateway, health/readiness, metrics. */
+const path = require('path');
 const express = require('express');
+const { instrument } = require('openvibe-shared/metrics');
+const { createReadiness } = require('openvibe-shared/ready');
+const { createRelease } = require('openvibe-shared/release');
 const { http } = require('openvibe-contracts');
 const { publishRouter } = require('./api/publish');
 const { subscriptionsRouter } = require('./api/subscriptions');
 const { readRouter } = require('./api/read');
 const pkg = require('../package.json');
 
-function createApp({ config, store, auth, keys, worker, realtime, log = console }) {
+function createApp({ config, store, auth, keys, worker, realtime, metrics, log = console }) {
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', 'loopback');
+    const release = createRelease({ service: 'events', root: path.join(__dirname, '..') });
+    // HTTP golden signals by route template + GET /metrics (direct loopback callers only). An SSE
+    // connection is a session, not a request, so it is counted by events_realtime_connections instead.
+    instrument(app, { service: 'events', release: release.release, registry: metrics && metrics.registry, skip: (req) => req.path === '/realtime/stream' });
     app.use(http.middleware());
+    app.get('/release.json', release.handler);
     app.use((req, res, next) => {
         res.setHeader('X-Content-Type-Options', 'nosniff');
         next();
@@ -27,20 +36,34 @@ function createApp({ config, store, auth, keys, worker, realtime, log = console 
         res.json({ status: 'ok', service: 'openvibe-events', version: pkg.version });
     });
 
-    app.get('/api/ready', (_req, res) => {
-        let dbOk = false;
-        try { dbOk = store.ping(); } catch { dbOk = false; }
-        const checks = { db: dbOk, worker: !config.worker.enabled || worker.running(), key: keys.loaded() };
-        const ready = Object.values(checks).every(Boolean);
-        res.status(ready ? 200 : 503).json({
-            status: ready ? 'ready' : 'not_ready',
-            checks,
-            latest_seq: dbOk ? store.lastSeq() : null,
-            deliveries: dbOk ? store.deliveryCounts() : null,
-            worker: worker.stats(),
-            realtime_connections: realtime.count(),
-        });
+    // Readiness (openvibe-shared/ready): 503 only when a required check fails. A DLQ past
+    // EVENTS_DLQ_DEGRADED_AT degrades the service (still ready: new events are accepted and delivered).
+    const checks = [
+        { name: 'db', required: true, check: () => store.ping() },
+        { name: 'network_jwks', required: true, check: () => keys.loaded() || 'Network signing key not loaded yet' },
+    ];
+    if (config.worker.enabled) checks.push({ name: 'delivery_worker', required: true, check: () => worker.running() || 'delivery worker is not running' });
+    checks.push({
+        name: 'dlq', required: false, check: () => {
+            const depth = store.deliveryCounts().dead;
+            return depth > config.dlqDegradedAt
+                ? { ok: false, error: `${depth} dead deliveries (threshold ${config.dlqDegradedAt})`, detail: { depth, threshold: config.dlqDegradedAt } }
+                : { ok: true, detail: { depth, threshold: config.dlqDegradedAt } };
+        },
     });
+    const readiness = createReadiness({
+        service: 'events', release: release.release, checks,
+        details: (body) => {
+            const dbOk = body.checks.db.status === 'ok';
+            return {
+                latest_seq: dbOk ? store.lastSeq() : null,
+                deliveries: dbOk ? store.deliveryCounts() : null,
+                worker: { enabled: config.worker.enabled, ...worker.stats() },
+                realtime_connections: realtime.count(),
+            };
+        },
+    });
+    app.get('/api/ready', readiness.handler);
 
     app.use(publishRouter({ config, store, auth, worker, realtime }));
     app.use(subscriptionsRouter({ config, store, auth }));
@@ -55,7 +78,7 @@ function createApp({ config, store, auth, keys, worker, realtime, log = console 
             '     /api/v1/subscriptions       webhook subscriptions (events.subscription.manage)',
             '     /api/v1/deliveries          DLQ inspect and replay (events.delivery.admin)',
             'GET  /realtime/stream?topics=... server-sent events for browsers',
-            'GET  /api/health, /api/ready',
+            'GET  /api/health, /api/ready, /release.json',
             '',
             'Source: https://github.com/OpenVibers/OpenVibe.Events',
             '',

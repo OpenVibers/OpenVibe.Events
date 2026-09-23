@@ -204,7 +204,7 @@ t('the real loop delivers without drain()', async () => {
     assert.strictEqual(stub.calls.length, 1);
     const ready = await request(loop.base, 'GET', '/api/ready');
     assert.strictEqual(ready.status, 200);
-    assert.strictEqual(ready.body.checks.worker, true);
+    assert.strictEqual(ready.body.checks.delivery_worker.status, 'ok');
     await loop.stop();
     await stub.close();
 });

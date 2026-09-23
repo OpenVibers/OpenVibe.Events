@@ -13,6 +13,7 @@ const { createKeyStore, createAuth } = require('./auth');
 const { createWorker } = require('./worker');
 const { createRealtime } = require('./realtime');
 const { createApp } = require('./app');
+const { createMetrics } = require('./metrics');
 
 async function start({ config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, deliveryFetch = fetchImpl, log = console, listen = true } = {}) {
     config = config || load();
@@ -20,9 +21,11 @@ async function start({ config, clock = { now: () => Date.now() }, fetchImpl = gl
     const store = createStore(db, { clock, maxHops: config.maxHops });
     const keys = createKeyStore({ urls: [config.networkInternalUrl, config.networkUrl], pem: config.networkPublicKey, fetchImpl, log });
     const auth = createAuth({ config, keys });
-    const worker = createWorker({ store, config, clock, fetchImpl: deliveryFetch, log });
+    const metrics = createMetrics({ store });
+    const worker = createWorker({ store, config, clock, fetchImpl: deliveryFetch, log, observe: metrics.observe });
     const realtime = createRealtime({ store, auth, config, log });
-    const app = createApp({ config, store, auth, keys, worker, realtime, log });
+    metrics.bind({ realtime });
+    const app = createApp({ config, store, auth, keys, worker, realtime, metrics, log });
 
     // The key loads in the background (retrying while Network boots); /api/ready says when it has.
     const keyLoaded = keys.start().catch(() => null);
@@ -65,7 +68,7 @@ async function start({ config, clock = { now: () => Date.now() }, fetchImpl = gl
         db.close();
     }
 
-    return { config, db, store, keys, keyLoaded, auth, worker, realtime, app, server, close, prune };
+    return { config, db, store, keys, keyLoaded, auth, worker, realtime, metrics, app, server, close, prune };
 }
 
 if (require.main === module) {

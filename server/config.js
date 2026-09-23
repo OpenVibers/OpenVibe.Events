@@ -81,6 +81,8 @@ function load(env = process.env) {
             // Wait after attempt n fails = backoffMs[n-1] (the last value repeats).
             backoffMs: list(env.EVENTS_BACKOFF_MS, ['1000', '5000', '30000', '120000', '600000', '3600000']).map(Number),
         },
+        // /api/ready reports `dlq` degraded (still ready) once more dead deliveries than this wait for replay.
+        dlqDegradedAt: int(env.EVENTS_DLQ_DEGRADED_AT, 100),
         maxSubscriptionsPerConsumer: int(env.EVENTS_MAX_SUBSCRIPTIONS, 100),
         // Hostname patterns a subscription endpoint may point at (SSRF guard).
         endpointHosts: list(env.EVENTS_ENDPOINT_HOSTS, ['127.0.0.1', '*.openvibe.*']),

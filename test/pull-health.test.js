@@ -93,7 +93,10 @@ t('health and ready', async () => {
     assert.deepStrictEqual([r.status, r.body.status, r.body.service], [200, 'ok', 'openvibe-events']);
     r = await request(h.base, 'GET', '/api/ready');
     assert.strictEqual(r.status, 200);
-    assert.deepStrictEqual(r.body.checks, { db: true, worker: true, key: true });
+    assert.strictEqual(r.body.ready, true);
+    assert.deepStrictEqual(Object.keys(r.body.checks), ['db', 'network_jwks', 'dlq'], 'worker off in this boot: no delivery_worker check');
+    assert.strictEqual(r.body.checks.db.status, 'ok');
+    assert.strictEqual(r.body.checks.network_jwks.status, 'ok');
     r = await request(h.base, 'GET', '/nope');
     assert.strictEqual(r.status, 404);
     assert.strictEqual(r.body.code, 'events.not_found');
@@ -118,7 +121,8 @@ t('key loader: JWKS {keys:[jwk]} and legacy {public_key}; ready is 503 until it 
         await x.keyLoaded;
         let r = await request(x.base, 'GET', '/api/ready');
         assert.strictEqual(r.status, 503);
-        assert.strictEqual(r.body.checks.key, false);
+        assert.strictEqual(r.body.checks.network_jwks.status, 'fail');
+        assert.deepStrictEqual(r.body.failed, ['network_jwks']);
         r = await request(x.base, 'POST', '/api/v1/events', { token: live, body: envelope() });
         assert.strictEqual(r.status, 503, 'no key yet: service unavailable, not unauthorized');
         shape = s;
