@@ -139,6 +139,25 @@ function subscriptionsRouter({ config, store, auth, dnsLookup }) {
         if (sub) res.json(subscriptionView(sub));
     });
 
+    // POST /api/v1/subscriptions/:id/rotate-secret { secret?, overlap_s? } -> the new secret (shown once). The old
+    // secret keeps signing next to it for overlap_s (default 1 day, at most 7), so the consumer can switch without
+    // missing a delivery.
+    router.post('/api/v1/subscriptions/:id/rotate-secret', guard, express.json({ limit: '4kb' }), (req, res) => {
+        const sub = own(req, res);
+        if (!sub) return;
+        const b = req.body || {};
+        if (b.secret !== undefined && (typeof b.secret !== 'string' || b.secret.length < 32 || b.secret.length > 256)) {
+            return http.sendProblem(res, 422, 'events.bad_request', { detail: 'secret must be a string of 32..256 characters', ctx: req.ov });
+        }
+        const overlapS = b.overlap_s === undefined ? 86400 : Number(b.overlap_s);
+        if (!Number.isFinite(overlapS) || overlapS < 0 || overlapS > 7 * 86400) {
+            return http.sendProblem(res, 422, 'events.bad_request', { detail: 'overlap_s is 0..604800', ctx: req.ov });
+        }
+        const secret = b.secret || `whsec_${crypto.randomBytes(32).toString('hex')}`;
+        const out = store.rotateSubscriptionSecret(sub.id, secret, overlapS * 1000);
+        res.json({ ...subscriptionView(out), secret, previous_secret_valid_until: new Date(out.previous_secret_until).toISOString() });
+    });
+
     for (const [action, enabled] of [['disable', false], ['enable', true]]) {
         router.post(`/api/v1/subscriptions/:id/${action}`, guard, (req, res) => {
             if (enabled && subscribeRevoked(req, res)) return;

@@ -251,6 +251,29 @@ t('the real loop delivers without drain()', async () => {
     await stub.close();
 });
 
+t('secret rotation: both secrets sign during the overlap, only the new one after it', async () => {
+    const stub = await subscriber();
+    const sub = (await subscribe(media, { topic_pattern: 'live.rotate.*', endpoint: stub.url })).body;
+    const r = await request(h.base, 'POST', `/api/v1/subscriptions/${sub.id}/rotate-secret`, { token: media, body: { overlap_s: 3600 } });
+    assert.strictEqual(r.status, 200);
+    assert.ok(r.body.secret && r.body.secret !== sub.secret && r.body.previous_secret_valid_until);
+    assert.ok(!('previous_secret' in r.body), 'the old secret is never echoed');
+    const other = await request(h.base, 'POST', `/api/v1/subscriptions/${sub.id}/rotate-secret`, { token: serviceToken('someone', ['events.subscription.manage']), body: {} });
+    assert.strictEqual(other.status, 404, 'only the consumer rotates its own subscription');
+    await publish(envelope('live', { event_type: 'live.rotate.one' }));
+    await h.worker.drain();
+    let call = stub.calls.pop();
+    assert.ok(verifyDeliveryV2(call.rawBody, call.headers, sub.secret, { now: h.clock.now() }), 'the old secret still verifies');
+    assert.ok(verifyDeliveryV2(call.rawBody, call.headers, r.body.secret, { now: h.clock.now() }), 'the new secret verifies');
+    h.clock.advance(3601 * 1000);
+    await publish(envelope('live', { event_type: 'live.rotate.two' }));
+    await h.worker.drain();
+    call = stub.calls.pop();
+    assert.ok(!verifyDeliveryV2(call.rawBody, call.headers, sub.secret, { now: h.clock.now() }), 'after the overlap the old secret no longer verifies');
+    assert.ok(verifyDeliveryV2(call.rawBody, call.headers, r.body.secret, { now: h.clock.now() }));
+    await stub.close();
+});
+
 t('stop', async () => { await h.stop(); });
 
 t.run();

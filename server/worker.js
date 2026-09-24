@@ -21,6 +21,19 @@
  */
 const crypto = require('crypto');
 const { sign, signV2 } = require('../lib/client');
+
+/**
+ * The v2 header for a delivery. During a secret rotation's overlap it carries a second v2= signature made
+ * with the previous secret, so a consumer still configured with either secret accepts it (openvibe-sdk's
+ * verifyDeliveryV2 checks every v2= value).
+ */
+function signatureV2(sub, body, timestamp, nowMs) {
+    const header = signV2(body, sub.secret, timestamp);
+    if (sub.previous_secret && Number(sub.previous_secret_until) > nowMs) {
+        return `${header},v2=${signV2(body, sub.previous_secret, timestamp).split('v2=')[1]}`;
+    }
+    return header;
+}
 const { rowToEnvelope } = require('./store');
 const { checkEndpoint } = require('./endpoints');
 const { createGuardedPost } = require('./egress');
@@ -65,7 +78,7 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
                 'X-OpenVibe-Hops': String(row.hops),
                 'X-OpenVibe-Signature': sign(body, sub.secret),
                 'X-OpenVibe-Timestamp': String(timestamp),
-                'X-OpenVibe-Signature-V2': signV2(body, sub.secret, timestamp),
+                'X-OpenVibe-Signature-V2': signatureV2(sub, body, timestamp, clock.now()),
                 traceparent: `00-${row.trace_id}-${crypto.randomBytes(8).toString('hex')}-01`,
             };
             let res;

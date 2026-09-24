@@ -118,7 +118,7 @@ const PUBLISH_RECEIPT = 'events:publish';  // receipts' consumer column for acce
 const ADDED_COLUMNS = {
     events: [['project_id', 'TEXT'], ['env', "TEXT NOT NULL DEFAULT 'production'"], ['size_bytes', 'INTEGER NOT NULL DEFAULT 0'],
         ['redacted_at', 'INTEGER'], ['redacted_by', 'TEXT'], ['redacts', 'INTEGER NOT NULL DEFAULT 0']],
-    subscriptions: [['project_id', 'TEXT'], ['env', "TEXT NOT NULL DEFAULT 'production'"]],
+    subscriptions: [['project_id', 'TEXT'], ['env', "TEXT NOT NULL DEFAULT 'production'"], ['previous_secret', 'TEXT'], ['previous_secret_until', 'INTEGER']],
 };
 
 function migrate(db) {
@@ -488,6 +488,14 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
     function countSubscriptions(consumer) {
         return db.prepare('SELECT COUNT(*) AS n FROM subscriptions WHERE consumer = ?').get(consumer).n;
     }
+    /** Rotate a subscription's secret: the old one keeps signing (next to the new) until overlapMs from now. */
+    function rotateSubscriptionSecret(id, secret, overlapMs) {
+        const now = clock.now();
+        db.prepare('UPDATE subscriptions SET previous_secret = secret, previous_secret_until = ?, secret = ?, updated_at = ? WHERE id = ?')
+            .run(now + Math.max(0, overlapMs), secret, now, id);
+        return getSubscription(id);
+    }
+
     function setSubscriptionEnabled(id, enabled) {
         db.prepare('UPDATE subscriptions SET enabled = ?, updated_at = ? WHERE id = ?').run(enabled ? 1 : 0, clock.now(), id);
         return getSubscription(id);
@@ -605,7 +613,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
 
     return {
         db, insertBatch, redact, getEvent, revokedAt, lastSeq, oldestSeq, firstSeqSince, scan,
-        createSubscription, getSubscription, listSubscriptions, countSubscriptions, countProjectSubscriptions, setSubscriptionEnabled,
+        createSubscription, getSubscription, listSubscriptions, countSubscriptions, countProjectSubscriptions, setSubscriptionEnabled, rotateSubscriptionSecret,
         dueDeliveries, recordAttempt, getDelivery, listDeliveries, requeue, deliveryCounts,
         getCheckpoint, setCheckpoint, prune, ping,
     };
