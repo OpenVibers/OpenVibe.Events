@@ -16,62 +16,9 @@ const dns = require('dns');
 const net = require('net');
 const https = require('https');
 
-const blocked = new net.BlockList();
-for (const [addr, prefix] of [
-    ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12],
-    ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.88.99.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15],
-    ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4],
-]) blocked.addSubnet(addr, prefix, 'ipv4');
-for (const [addr, prefix] of [
-    ['::', 128], ['::1', 128], ['::', 96], ['100::', 64], ['2001::', 23], ['2001:db8::', 32], ['fc00::', 7], ['fe80::', 10],
-    ['fec0::', 10], ['ff00::', 8], ['3fff::', 20], ['5f00::', 16],
-]) blocked.addSubnet(addr, prefix, 'ipv6');
-
-/** The IPv4 address an IPv6 address carries (mapped, compatible-ish NAT64, 6to4, Teredo), or null. */
-function embeddedV4(ip) {
-    const words = expandV6(ip);
-    if (!words) return null;
-    const v4 = (hi, lo) => `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
-    if (words.slice(0, 5).every(w => w === 0) && words[5] === 0xffff) return v4(words[6], words[7]);            // ::ffff:a.b.c.d
-    if (words[0] === 0x64 && words[1] === 0xff9b) return v4(words[6], words[7]);                                // 64:ff9b::/96 (and /48)
-    if (words[0] === 0x2002) return v4(words[1], words[2]);                                                      // 6to4
-    if (words[0] === 0x2001 && words[1] === 0) return v4(words[6] ^ 0xffff, words[7] ^ 0xffff);                 // Teredo client
-    return null;
-}
-
-function expandV6(ip) {
-    let s = String(ip).toLowerCase();
-    const pct = s.indexOf('%');
-    if (pct >= 0) s = s.slice(0, pct);
-    if (net.isIPv6(s) === false) return null;
-    // Trailing dotted quad -> two words.
-    const dq = /(\d+\.\d+\.\d+\.\d+)$/.exec(s);
-    if (dq) {
-        const p = dq[1].split('.').map(Number);
-        s = s.slice(0, -dq[1].length) + `${((p[0] << 8) | p[1]).toString(16)}:${((p[2] << 8) | p[3]).toString(16)}`;
-    }
-    const [head, tail] = s.split('::');
-    const h = head ? head.split(':') : [];
-    const t = tail !== undefined ? (tail ? tail.split(':') : []) : null;
-    const words = t === null ? h : [...h, ...Array(8 - h.length - t.length).fill('0'), ...t];
-    if (words.length !== 8) return null;
-    return words.map(w => parseInt(w || '0', 16));
-}
-
-/** True only for a globally routable unicast address. */
-function isPublicAddress(ip) {
-    const s = String(ip || '');
-    const family = net.isIP(s);
-    if (family === 4) return !blocked.check(s, 'ipv4');
-    if (family === 6) {
-        const bare = s.split('%')[0];
-        if (blocked.check(bare, 'ipv6')) return false;
-        const v4 = embeddedV4(bare);
-        if (v4 !== null) return !blocked.check(v4, 'ipv4');
-        return true;
-    }
-    return false;
-}
+// The public-address rule is openvibe-shared/egress (the one Live and Tools use too); this file keeps the
+// app-endpoint syntax rules and the guarded POST on top of it.
+const { isPublicAddress, embeddedV4, isInternalName } = require('openvibe-shared/egress');
 
 /** Syntax part of the check: { ok, url } or { ok: false, reason }. No DNS. */
 function parseAppEndpoint(endpoint) {
@@ -87,7 +34,7 @@ function parseAppEndpoint(endpoint) {
         if (!isPublicAddress(host)) return { ok: false, reason: `${host} is not a public address` };
         return { ok: true, url, host, literal: true };
     }
-    if (!host.includes('.') || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal')) {
+    if (isInternalName(host)) {
         return { ok: false, reason: `${host} is not a public hostname` };
     }
     return { ok: true, url, host, literal: false };
