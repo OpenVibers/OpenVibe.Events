@@ -22,7 +22,7 @@ async function start({
 } = {}) {
     config = config || load();
     const db = openDb(config.dbPath);
-    const store = createStore(db, { clock, maxHops: config.maxHops });
+    const store = createStore(db, { clock, maxHops: config.maxHops, usage: config.usage });
     const keys = createKeyStore({ urls: [config.networkInternalUrl, config.networkUrl], pem: config.networkPublicKey, fetchImpl, log });
     const auth = createAuth({ config, keys, store });
     const metrics = createMetrics({ store });
@@ -50,6 +50,25 @@ async function start({
     pruneTimer.unref?.();
     if (config.worker.enabled) prune();
 
+    // Project usage rollups (server/usage.js): each closed hour is stored as events.usage.recorded and
+    // fanned out like a published event.
+    const flushUsage = (opts) => {
+        try {
+            const r = store.flushUsage(opts);
+            if (r.stored.length) {
+                realtime.publish(r.stored);
+                worker.kick();
+            }
+            if (r.invalid) log.error(`[usage] ${r.invalid} rollup(s) do not match events.usage.recorded@1 and stay unsent`);
+            return r;
+        } catch (err) {
+            log.error(`[usage] flush failed: ${err.message}`);
+            return { stored: [], invalid: 0 };
+        }
+    };
+    const usageTimer = config.usage && config.usage.enabled ? setInterval(flushUsage, config.usage.flushIntervalMs) : null;
+    usageTimer?.unref?.();
+
     let server = null;
     if (listen) {
         server = await new Promise((resolve, reject) => {
@@ -64,6 +83,7 @@ async function start({
 
     async function close() {
         clearInterval(pruneTimer);
+        if (usageTimer) clearInterval(usageTimer);
         realtime.stop();
         keys.stop();
         await worker.stop();
@@ -74,7 +94,7 @@ async function start({
         db.close();
     }
 
-    return { config, db, store, keys, keyLoaded, auth, worker, realtime, metrics, app, server, close, prune };
+    return { config, db, store, keys, keyLoaded, auth, worker, realtime, metrics, app, server, close, prune, flushUsage };
 }
 
 if (require.main === module) {

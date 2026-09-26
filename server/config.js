@@ -113,6 +113,13 @@ function load(env = process.env) {
             sandboxRetentionDays: int(env.EVENTS_APP_SANDBOX_RETENTION_DAYS, 7),
         },
 
+        // Project usage rollups (server/usage.js, WS-N task 4): each closed hour of a project's
+        // publishing and webhook deliveries is stored as events.usage.recorded. off: nothing counted.
+        usage: {
+            enabled: env.EVENTS_USAGE !== 'off',
+            flushIntervalMs: Math.max(1000, int(env.EVENTS_USAGE_FLUSH_MS, 5 * 60 * 1000)),
+        },
+
         // Realtime (SSE) gateway
         realtime: {
             maxConnections: int(env.REALTIME_MAX_CONNECTIONS, 2000),

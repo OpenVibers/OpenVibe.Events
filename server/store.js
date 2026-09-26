@@ -11,6 +11,7 @@ const Database = require('better-sqlite3');
 const topics = require('./topics');
 const apps = require('./apps');
 const redaction = require('./redaction');
+const { createUsage, deliveryCode } = require('./usage');
 
 const PRIORITY_RANK = { critical: 0, important: 1, low: 2 };
 const RANK_PRIORITY = ['critical', 'important', 'low'];
@@ -193,7 +194,9 @@ function subscriptionView(row, { withSecret = false } = {}) {
     return out;
 }
 
-function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}) {
+function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage: usageConfig = { enabled: true } } = {}) {
+    // Project usage rollups (./usage.js): counted in the transactions below, sent as events.usage.recorded.
+    const usage = createUsage(db, { clock, enabled: usageConfig.enabled !== false });
     const q = {
         getEvent: db.prepare('SELECT * FROM events WHERE id = ?'),
         getReceipt: db.prepare('SELECT processed_at FROM idempotency_receipts WHERE consumer = ? AND event_id = ?'),
@@ -343,6 +346,10 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
                     if (mine) Object.assign(mine, t.columns);
                 }
             }
+        }
+        // An app publish counts toward its project's usage in the same transaction as the rows.
+        if (project && inserted.length) {
+            usage.record({ projectId: project.projectId, env: project.env, capability: 'events.app.publish', unit: 'events', quantity: inserted.length, at: now });
         }
         return { results, inserted };
     });
@@ -520,8 +527,19 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
         return rows.filter(r => !skip.has(r.subscription_id)).slice(0, limit);
     }
 
-    function recordAttempt(eventId, subscriptionId, outcome) {
+    /**
+     * Record one delivery attempt. `app` ({ projectId, env, traceId }) marks a developer-app
+     * subscription: the attempt counts toward the project's events.app.subscribe usage in the same
+     * transaction.
+     */
+    const recordAttempt = db.transaction((eventId, subscriptionId, outcome, app = null) => {
         const now = clock.now();
+        if (app) {
+            usage.record({
+                projectId: app.projectId, env: app.env, capability: 'events.app.subscribe', unit: 'deliveries', quantity: 1, at: now,
+                error: outcome.ok ? null : { code: deliveryCode(outcome), status: outcome.status || undefined, traceId: app.traceId, ref: eventId },
+            });
+        }
         if (outcome.ok) {
             db.prepare(`UPDATE deliveries SET status = 'delivered', attempt = ?, delivered_at = ?, last_status = ?, last_error = NULL,
                 next_attempt_at = NULL, updated_at = ? WHERE event_id = ? AND subscription_id = ?`)
@@ -532,6 +550,11 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
                 .run(outcome.dead ? 'dead' : 'failed', outcome.attempt, outcome.status ?? null, String(outcome.error || '').slice(0, 500),
                     outcome.dead ? null : outcome.nextAttemptAt, now, eventId, subscriptionId);
         }
+    });
+
+    /** Send the closed hours' usage rollups (./usage.js); returns the stored rows. */
+    function flushUsage(opts) {
+        return usage.flush(insertBatch, opts);
     }
 
     function getDelivery(eventId, subscriptionId) {
@@ -615,7 +638,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8 } = {}
         db, insertBatch, redact, getEvent, revokedAt, lastSeq, oldestSeq, firstSeqSince, scan,
         createSubscription, getSubscription, listSubscriptions, countSubscriptions, countProjectSubscriptions, setSubscriptionEnabled, rotateSubscriptionSecret,
         dueDeliveries, recordAttempt, getDelivery, listDeliveries, requeue, deliveryCounts,
-        getCheckpoint, setCheckpoint, prune, ping,
+        getCheckpoint, setCheckpoint, prune, ping, usage, flushUsage,
     };
 }
 

@@ -108,7 +108,9 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
             if (!outcome.dead) outcome.nextAttemptAt = clock.now() + backoffMs[Math.min(attempt - 1, backoffMs.length - 1)];
             if (outcome.dead) log.warn(`[worker] ${row.id} -> ${sub.id} dead after ${attempt} attempts: ${outcome.error}`);
         }
-        store.recordAttempt(delivery.event_id, delivery.subscription_id, outcome);
+        // A developer app's subscription: the attempt counts toward its project's usage (./usage.js).
+        const app = sub.project_id ? { projectId: sub.project_id, env: sub.env || 'production', traceId: row.trace_id } : null;
+        store.recordAttempt(delivery.event_id, delivery.subscription_id, outcome, app);
         if (observe) {
             try {
                 observe.attempt(outcome.ok ? 'delivered' : outcome.dead ? 'dead' : 'retry');

@@ -18,6 +18,10 @@
  * Redaction (server/redaction.js): an event whose payload carries `redacts` turns the named earlier
  * events of the same source into tombstones when it is stored. A malformed directive is 422
  * events.invalid_redaction; naming another source's event is 403 events.redaction_not_allowed.
+ *
+ * Usage (server/usage.js): an app's stored events count toward its project's events.app.publish in
+ * insertBatch's transaction; a request refused with a problem counts as one error, sampled with its
+ * code, status and trace id (and the event id, when one event was refused).
  */
 const express = require('express');
 const { validate, http } = require('openvibe-contracts');
@@ -80,24 +84,35 @@ function publishRouter({ config, store, auth, worker, realtime }) {
     router.post('/api/v1/events', auth.appOrService(CAPS.publish, CAPS.appPublish, { requireService: true }), (req, res) => {
         const ctx = req.ov;
         const body = req.body;
+        const p = req.principal;
+        // Every refusal of an app's publish is one error in its project's usage.
+        const refuse = (status, code, o = {}, ref = null) => {
+            if (p.kind === 'app') {
+                try {
+                    store.usage.record({ projectId: p.projectId, env: p.env, capability: 'events.app.publish', unit: 'events', error: { code, status, traceId: ctx.traceId, ref } });
+                } catch (err) { console.error(`[usage] refusal not counted: ${err.message}`); }
+            }
+            return http.sendProblem(res, status, code, { ...o, ctx });
+        };
         const isBatch = body && typeof body === 'object' && !Array.isArray(body) && Array.isArray(body.events) && body.event_id === undefined;
         const items = isBatch ? body.events : [body];
-        if (isBatch && !items.length) return http.sendProblem(res, 400, 'events.bad_request', { detail: 'events must not be empty', ctx });
+        if (isBatch && !items.length) return refuse(400, 'events.bad_request', { detail: 'events must not be empty' });
         if (items.length > config.maxBatch) {
-            return http.sendProblem(res, 413, 'events.batch_too_large', { detail: `at most ${config.maxBatch} events per request`, ctx });
+            return refuse(413, 'events.batch_too_large', { detail: `at most ${config.maxBatch} events per request` });
         }
 
         const envelopes = [];
         const seen = new Set();
         for (let i = 0; i < items.length; i++) {
             const r = checkOne(items[i], req.principal, ctx);
+            const ref = items[i] && typeof items[i] === 'object' ? items[i].event_id : null;
             if (r.env && seen.has(r.env.event_id)) {
-                return http.sendProblem(res, 422, 'events.invalid_envelope', { detail: `events[${i}]: event_id repeated within the batch`, ctx, extra: { index: i } });
+                return refuse(422, 'events.invalid_envelope', { detail: `events[${i}]: event_id repeated within the batch`, extra: { index: i } }, ref);
             }
             if (!r.env) {
-                return http.sendProblem(res, r.status, r.code, {
-                    detail: isBatch ? `events[${i}]: ${r.detail}` : r.detail, errors: r.errors, ctx, extra: isBatch ? { index: i } : undefined,
-                });
+                return refuse(r.status, r.code, {
+                    detail: isBatch ? `events[${i}]: ${r.detail}` : r.detail, errors: r.errors, extra: isBatch ? { index: i } : undefined,
+                }, ref);
             }
             seen.add(r.env.event_id);
             envelopes.push(r.env);
@@ -105,13 +120,12 @@ function publishRouter({ config, store, auth, worker, realtime }) {
 
         let out;
         try {
-            const p = req.principal;
             const project = p.kind === 'app' ? { projectId: p.projectId, env: p.env, ...config.apps.quotas[p.env] } : null;
             out = store.insertBatch(envelopes, { publisher: p.sub, requestId: ctx.requestId, project });
         } catch (err) {
             if (err instanceof StoreError) {
                 if (err.status === 429 && err.extra && err.extra.retry_after) res.setHeader('Retry-After', String(err.extra.retry_after));
-                return http.sendProblem(res, err.status, err.code, { detail: err.message, ctx, extra: err.extra });
+                return refuse(err.status, err.code, { detail: err.message, extra: err.extra }, err.extra && err.extra.event_id);
             }
             throw err;
         }

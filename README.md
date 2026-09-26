@@ -133,6 +133,8 @@ Quotas recorded in Network (`dev_quotas`) are not read yet: that needs `network.
 
 `EVENTS_APPS=off` turns the developer-app paths off (app tokens are then judged like any other token and refused).
 
+**Usage** ([server/usage.js](server/usage.js), roadmap WS-N task 4). Each project's use is counted per environment and UTC hour in the transaction that does the work: `events.app.publish` in `events` (events stored; a repeated `event_id` is not counted) with every refused publish request as an error (its problem code, status, trace id and, when one event was refused, its `event_id`), and `events.app.subscribe` in `deliveries` (webhook attempts to the project's subscriptions; one without a 2xx is an error, `events.delivery.http_<status>`, `events.delivery.timeout` or `events.delivery.failed`, with the event id and its trace id). A minute after an hour closes, each rollup is stored once as an `events.usage.recorded` event (source `events`, subject the project, visibility `internal`, payload `common.usage-recorded@1` from openvibe-contracts 0.63.0) in the transaction that marks it sent, so Events is its own outbox; first-party subscribers get it like any event, apps never see it. OpenVibe.Network subscribes to it for the project dashboard on openvibe.codes. `EVENTS_USAGE=off` counts nothing; `EVENTS_USAGE_FLUSH_MS` (300000) is how often closed hours are looked for. Sent rollups are kept 7 days in `app_usage`.
+
 ## Client library
 
 `require('openvibe-events')` (package `main` is [lib/client.js](lib/client.js); services can depend on this repo by tarball):
@@ -187,7 +189,7 @@ es.addEventListener('gap', (m) => { /* events were missed: refetch state */ });
 
 ## Owns
 
-- `events`, `subscriptions`, `deliveries`, `consumer_checkpoints`, `idempotency_receipts`, `app_revocations` (SQLite today; the plan's PostgreSQL + Redis fanout is a later step)
+- `events`, `subscriptions`, `deliveries`, `consumer_checkpoints`, `idempotency_receipts`, `app_revocations`, `app_usage` (SQLite today; the plan's PostgreSQL + Redis fanout is a later step)
 - developer-app event scope, sandbox separation and per-project Events quotas (ADR-014)
 - canonical event envelope (event_id, trace_id, type, version, source, actor, subject + revision, payload)
 - priority classes `critical|important|low`, loop guards, backpressure, DLQ and replay
@@ -210,6 +212,7 @@ es.addEventListener('gap', (m) => { /* events were missed: refetch state */ });
 - browser reconnect resumes from a cursor or reports a gap (`test/realtime.test.js`)
 - a guessed private topic yields no data (`test/realtime.test.js`)
 - a developer app cannot publish, read or subscribe outside its project, sandbox never meets production, app webhooks reach public addresses only, quotas hold (`test/apps.test.js`)
+- a project's publishing and deliveries are counted per hour, refusals and failed attempts as errors, and each closed hour is sent once as `events.usage.recorded`, never visible to apps (`test/usage.test.js`)
 
 ## Bootstrap / extraction source
 
