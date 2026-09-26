@@ -64,9 +64,12 @@ function subscriptionsRouter({ config, store, auth, dnsLookup }) {
         return false;
     }
 
+    /** An app's subscriptions are those of its token's project and environment too (never across sandbox/production). */
+    const inScope = (req, sub) => req.principal.kind !== 'app' || (sub.project_id === req.principal.projectId && (sub.env || 'production') === req.principal.env);
+
     function own(req, res) {
         const sub = store.getSubscription(String(req.params.id));
-        if (!sub || sub.consumer !== consumerOf(req)) {
+        if (!sub || sub.consumer !== consumerOf(req) || !inScope(req, sub)) {
             http.sendProblem(res, 404, 'events.not_found', { detail: 'no such subscription', ctx: req.ov });
             return null;
         }
@@ -133,7 +136,7 @@ function subscriptionsRouter({ config, store, auth, dnsLookup }) {
     }
 
     router.get('/api/v1/subscriptions', guard, (req, res) => {
-        res.json({ subscriptions: store.listSubscriptions(consumerOf(req)).map(s => subscriptionView(s)) });
+        res.json({ subscriptions: store.listSubscriptions(consumerOf(req)).filter(s => inScope(req, s)).map(s => subscriptionView(s)) });
     });
 
     router.get('/api/v1/subscriptions/:id', guard, (req, res) => {
