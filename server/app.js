@@ -9,6 +9,7 @@ const { http } = require('openvibe-contracts');
 const { publishRouter } = require('./api/publish');
 const { subscriptionsRouter } = require('./api/subscriptions');
 const { readRouter } = require('./api/read');
+const { mountLimits } = require('./limits');
 const pkg = require('../package.json');
 
 function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, log = console }) {
@@ -22,6 +23,8 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     app.use(http.middleware());
     // GET /release.json (ADR-016) and POST /release-metrics (open tabs' update reports into /metrics).
     release.mount(app, { registry: instrumented.registry });
+    // GET /limits.json: the developer limits enforced here, from config (WS-N task 7; Codes renders them).
+    mountLimits(app, config);
     app.use((req, res, next) => {
         res.setHeader('X-Content-Type-Options', 'nosniff');
         next();
@@ -79,7 +82,7 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
             '     /api/v1/subscriptions       webhook subscriptions (events.subscription.manage; app token, events.app.subscribe)',
             '     /api/v1/deliveries          DLQ inspect and replay (events.delivery.admin)',
             'GET  /realtime/stream?topics=... server-sent events for browsers',
-            'GET  /api/health, /api/ready, /release.json',
+            'GET  /api/health, /api/ready, /release.json, /limits.json',
             '',
             'Source: https://github.com/OpenVibers/OpenVibe.Events',
             '',

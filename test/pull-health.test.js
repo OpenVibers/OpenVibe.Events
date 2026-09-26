@@ -103,6 +103,21 @@ t('health and ready', async () => {
     assert.ok(r.headers.get('x-openvibe-request-id'));
 });
 
+t('limits.json: the developer limits, read from config (WS-N task 7)', async () => {
+    const r = await request(h.base, 'GET', '/limits.json');
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.headers.get('access-control-allow-origin'), '*');
+    const by = Object.fromEntries(r.body.limits.map((l) => [l.id, l]));
+    assert.deepStrictEqual([by.publish_per_minute.production, by.publish_per_minute.sandbox], [120, 30]);
+    assert.deepStrictEqual([by.retention_days.production, by.retention_days.sandbox], [30, 7]);
+    assert.strictEqual(by.subscriptions.capability, 'events.app.subscribe');
+    for (const l of r.body.limits) assert.ok(Number.isInteger(l.production) && Number.isInteger(l.sandbox) && l.exceeded, l.id);
+    const { limitsOf } = require('../server/limits');
+    assert.strictEqual(limitsOf(load({ NODE_ENV: 'test', EVENTS_APP_MAX_SUBSCRIPTIONS: '0', OV_NETWORK_PUBLIC_KEY: publicKey })).limits.find((l) => l.id === 'subscriptions').production, null, '0 (off) is null');
+    const custom = limitsOf(load({ NODE_ENV: 'test', EVENTS_APP_SANDBOX_PUBLISH_PER_MINUTE: '7', OV_NETWORK_PUBLIC_KEY: publicKey }));
+    assert.strictEqual(custom.limits.find((l) => l.id === 'publish_per_minute').sandbox, 7, 'an env override is what the page shows');
+});
+
 t('stop', async () => { await h.stop(); });
 
 t('key loader: JWKS {keys:[jwk]} and legacy {public_key}; ready is 503 until it loads', async () => {
