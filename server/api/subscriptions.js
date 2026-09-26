@@ -47,6 +47,8 @@ function checkRetryPolicy(p) {
 
 function subscriptionsRouter({ config, store, auth, dnsLookup }) {
     const router = express.Router();
+    // Creation and rotation answer with the signing secret (shown once): nothing here may be cached.
+    router.use('/api/v1/subscriptions', (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
     const guard = auth.appOrService(CAPS.subscribe, CAPS.appSubscribe, { requireService: true });
     const consumerOf = (req) => (req.principal.kind === 'app' ? req.principal.sub : req.principal.service);
 
