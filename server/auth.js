@@ -296,6 +296,9 @@ function createAuth({ config, keys, store = null }) {
         if (token) {
             const svc = verifyService(token);
             if (svc.ok) {
+                // Only a first-party service principal is a service viewer: a developer app (or any
+                // non-svc principal) never is, whatever capabilities its token carries (as in requireCap).
+                if (!serviceSlug(svc.claims.sub)) return { error: { status: 403, code: 'capability.denied', detail: 'only service principals open a stream with a service token' } };
                 const c = allows(svc.claims, CAPS.read);
                 if (!c.allowed) return { error: { status: 403, code: c.code, detail: c.reason } };
                 return { kind: 'service', sub: svc.claims.sub };
