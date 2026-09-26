@@ -4,11 +4,17 @@
  *
  *   GET /realtime/stream?topics=live.stream.*,network.notification.*
  *
+ * Who is asking (server/auth.js realtimeViewer): a realtime ticket (?ticket=, two minutes, single use,
+ * minted by Network for the signed-in person: how pages on every OpenVibe site open a stream without a
+ * third-party cookie), a Bearer user or service token, the ov_token cookie, or nobody.
+ *
  * Every message is `id: <seq>` + `data: {"seq":n,"event":<envelope>}`. Visibility decides who sees
  * an event:
  *   public    anyone subscribed to a matching topic (signed-out visitors too, unless disabled)
  *   subject   only the user whose subject id is the event's actor.id or its subject.id (subject
- *             type user); a guessed topic yields nothing for anyone else
+ *             type user); a guessed topic yields nothing for anyone else. A person's topic is an
+ *             event type with this visibility (network.notification.*, ADR-005 amendment 2), never
+ *             a `user:<id>` name (not a valid pattern)
  *   internal  service principals (token with events.event.read) only, never a browser
  * Developer-app events (app.<project_key>.*, events.app.publish) are never streamed here, to anyone.
  *

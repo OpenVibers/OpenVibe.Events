@@ -165,12 +165,20 @@ app.post('/internal/events', express.json({ verify: (req, _res, buf) => { req.ra
 ## Realtime (SSE)
 
 ```js
-const es = new EventSource('https://events.openvibe.network/realtime/stream?topics=live.stream.*,network.notification.*', { withCredentials: true });
+const es = new EventSource('https://events.openvibe.network/realtime/stream?topics=live.stream.*', { withCredentials: true });
+// A signed-in person's own events from any OpenVibe site: a fresh ticket from Network for every (re)connect.
+const { ticket, stream_url, topics } = await (await fetch('https://openvibe.network/api/v1/realtime/ticket', { method: 'POST', headers: { Authorization: `Bearer ${networkJwt}` } })).json();
+const mine = new EventSource(`${stream_url}?topics=${topics.join(',')}&ticket=${ticket}${lastSeq != null ? `&last_event_id=${lastSeq}` : ''}`);
 es.onmessage = (m) => { const { seq, event } = JSON.parse(m.data); };
 es.addEventListener('gap', (m) => { /* events were missed: refetch state */ });
 ```
 
-- Auth: the Network `ov_token` cookie or a Bearer user JWT; a service token with `events.event.read`; or nobody (public events only, `REALTIME_ALLOW_ANONYMOUS`). An expired cookie degrades to anonymous; a bad Bearer is a 401.
+- Auth: a **realtime ticket** (`?ticket=`), the Network `ov_token` cookie or a Bearer user JWT; a service token with `events.event.read`; or nobody (public events only, `REALTIME_ALLOW_ANONYMOUS`). An expired cookie degrades to anonymous; a bad Bearer is a 401.
+- Realtime tickets (ADR-005 amendment 2): a page on any OpenVibe site cannot count on a cookie of events.openvibe.network (third-party there), and an EventSource cannot send a header. So it asks Network for a ticket (`POST https://openvibe.network/api/v1/realtime/ticket`, answering `network.realtime-ticket-result@1`) and opens `/realtime/stream?topics=network.notification.*&ticket=<ticket>` without credentials. The ticket is an RS256 JWT signed with Network's key (`identity.realtime-ticket-claims@1`): `iss <OV_NETWORK_ISSUER>/realtime`, `sub <usr_>`, `aud [openvibe.events]`, `typ` and `purpose` `realtime`, a lifetime of at most 300 s (Network mints 120 s) and `jti rtk_…`.
+  - Events accepts each ticket once, never as Bearer or cookie, and never logs it. The refusals are 401: `ticket.invalid`, `ticket.expired` and `ticket.used`.
+  - A reconnect asks for a new ticket and resumes with `last_event_id`.
+  - Conversely, a user JWT that carries `typ` or `purpose` (a ticket, a FedCM assertion) is not a session here.
+- A person's topic: `network.notification.created` (Network's outbox; visibility `subject`, subject the recipient). `topics=network.notification.*` streams a person's own notifications and nobody else's. There is no `user:<id>` topic: it is not a valid pattern (400 `realtime.bad_topic`), and subject visibility already does its job.
 - Visibility: `public` events go to anyone subscribed to the topic; `subject` events only to the user whose subject id (`usr_…`) is the event's `actor.id` or its user `subject.id`; `internal` events never reach a browser. A guessed topic yields nothing.
 - Resume: the SSE `id` is the seq, so the browser's automatic `Last-Event-ID` (or `?last_event_id=`) replays what was missed. A cursor older than retention first gets `event: gap` (`{ reason, from_seq, to_seq }`), as does a replay that hits `REALTIME_REPLAY_MAX`.
 - Public replay window: browsers (signed out or signed in) are replayed `public` events received in the last `REALTIME_PUBLIC_REPLAY_SECONDS` (300; 0 = none), enough to ride out a reconnect. Older public events are not replayed: the stream opens with `event: gap` (`reason: "public_window"`, `window_seconds`), and the client refetches state from the owning service. `subject` events addressed to the viewer, and service viewers, keep the whole retention. This keeps the stream from paging through a month of public history, chat lines included; nothing in the network needs more (no browser surface replays public events today).

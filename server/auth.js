@@ -4,7 +4,12 @@
  *
  *   - Service principals: RS256 client-credentials tokens from OpenVibe.Network (audience
  *     openvibe.events), verified with openvibe-contracts serviceAuth.verifyServiceToken.
- *   - Browsers: Network user JWTs (RS256, same key), cookie `ov_token` or Bearer.
+ *   - Browsers: Network user JWTs (RS256, same key), cookie `ov_token` or Bearer; or, on
+ *     /realtime/stream only, a realtime ticket (?ticket=): a two-minute, single-use RS256 JWT Network
+ *     signs for the signed-in person (identity.realtime-ticket-claims@1, ADR-005 amendment 2), so a
+ *     page on any OpenVibe site can open an EventSource without a third-party cookie. A ticket is
+ *     never a session (issuer <network>/realtime, typ, audience openvibe.events only) and a session
+ *     token is never a ticket.
  *
  *   - Developer apps (ADR-014): app tokens (sub app:app_<ULID>, project_id, env) holding
  *     events.app.publish / events.app.read / events.app.subscribe, on the routes that accept them
@@ -127,10 +132,53 @@ function verifyUserJwt(token, { publicKey, issuer, audiences, now = Date.now() }
         const aud = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
         if (!aud.some(a => audiences.includes(a))) return null;
         if (claims.actor_type || /^(svc|app|mod):/.test(String(claims.sub))) return null;
+        // A typed token (a realtime ticket, a FedCM assertion) is never a session.
+        if (claims.typ !== undefined || claims.purpose !== undefined) return null;
         return claims;
     } catch {
         return null;
     }
+}
+
+const TICKET_LIFETIME_MAX_S = 300;
+const TICKET_SKEW_S = 30;
+const SUBJECT_RE = /^usr_[0-9A-HJKMNP-TV-Z]{26}$/;
+const TICKET_JTI_RE = /^rtk_[0-9a-f]{24}$/;
+
+/**
+ * A realtime ticket (identity.realtime-ticket-claims@1). Returns { ok: true, claims } or
+ * { ok: false, code, reason }. Checks the signature, iss (<issuer>/realtime), aud (openvibe.events),
+ * typ and purpose (realtime), sub (a usr_ subject), jti, expiry and a lifetime of at most 300 s.
+ * Single use is the caller's (createAuth keeps the jtis it accepted).
+ */
+function verifyRealtimeTicket(token, { publicKey, issuer, now = Date.now() }) {
+    const bad = (reason) => ({ ok: false, code: 'ticket.invalid', reason });
+    if (!publicKey) return { ok: false, code: 'token.unavailable', reason: 'signing key not loaded yet' };
+    if (typeof token !== 'string' || token.length > 4096) return bad('not a ticket');
+    const parts = token.split('.');
+    if (parts.length !== 3) return bad('not a ticket');
+    let header; let claims;
+    try {
+        header = b64json(parts[0]);
+        claims = b64json(parts[1]);
+    } catch {
+        return bad('not a ticket');
+    }
+    if (!header || header.alg !== 'RS256' || !claims || typeof claims !== 'object') return bad('not a ticket');
+    let signed = false;
+    try { signed = crypto.verify('RSA-SHA256', Buffer.from(`${parts[0]}.${parts[1]}`), publicKey, Buffer.from(parts[2], 'base64url')); } catch { signed = false; }
+    if (!signed) return bad('signature does not verify');
+    if (claims.iss !== `${issuer}/realtime`) return bad('not a realtime ticket (issuer)');
+    if (claims.typ !== 'realtime' || claims.purpose !== 'realtime') return bad('not a realtime ticket (purpose)');
+    const aud = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+    if (aud.length !== 1 || aud[0] !== 'openvibe.events') return bad('not for openvibe.events');
+    if (!SUBJECT_RE.test(String(claims.sub)) || !TICKET_JTI_RE.test(String(claims.jti))) return bad('bad claims');
+    const t = Math.floor(now / 1000);
+    if (!Number.isInteger(claims.iat) || !Number.isInteger(claims.exp)) return bad('bad claims');
+    if (claims.exp - claims.iat > TICKET_LIFETIME_MAX_S || claims.exp <= claims.iat) return bad('lifetime over 300 s');
+    if (claims.iat > t + TICKET_SKEW_S) return bad('issued in the future');
+    if (claims.exp <= t) return { ok: false, code: 'ticket.expired', reason: 'the ticket expired; ask Network for a new one' };
+    return { ok: true, claims };
 }
 
 function bearer(req) {
@@ -156,6 +204,16 @@ function serviceSlug(sub) {
 }
 
 function createAuth({ config, keys, store = null }) {
+    // Realtime tickets are single use: the jtis accepted while they are still valid (in memory; a
+    // restart forgets them, and a ticket lives two minutes at most anyway).
+    const usedTickets = new Map();   // jti -> exp (ms)
+    function spendTicket(jti, expSec, now = Date.now()) {
+        if (usedTickets.size > 5000) for (const [k, exp] of usedTickets) if (exp <= now) usedTickets.delete(k);
+        if (usedTickets.has(jti)) return false;
+        usedTickets.set(jti, expSec * 1000);
+        return true;
+    }
+
     // Token lifetimes are judged on wall-clock time, never on the worker's (injectable) clock.
     function verifyService(token, { acceptSandbox = false } = {}) {
         const publicKey = keys.get();
@@ -222,10 +280,18 @@ function createAuth({ config, keys, store = null }) {
     /**
      * Who is on the other end of a realtime connection:
      *   { kind: 'service', sub } | { kind: 'user', subjectId, sub } | { kind: 'anonymous' }
-     * or { error: { status, code, detail } }. A Bearer token must verify; an unverifiable cookie
-     * (expired session) degrades to anonymous so the browser still gets public events.
+     * or { error: { status, code, detail } }. A realtime ticket (?ticket=) must verify and be unused;
+     * then nothing else is looked at. A Bearer token must verify; an unverifiable cookie (expired
+     * session) degrades to anonymous so the browser still gets public events. The ticket is never logged.
      */
     function realtimeViewer(req) {
+        const q = req.query || {};
+        if (q.ticket !== undefined) {
+            const r = verifyRealtimeTicket(Array.isArray(q.ticket) ? null : q.ticket, { publicKey: keys.get(), issuer: config.issuer });
+            if (!r.ok) return { error: { status: r.code === 'token.unavailable' ? 503 : 401, code: r.code, detail: r.reason } };
+            if (!spendTicket(r.claims.jti, r.claims.exp)) return { error: { status: 401, code: 'ticket.used', detail: 'a ticket opens one stream; ask Network for a new one' } };
+            return { kind: 'user', subjectId: r.claims.sub, sub: r.claims.sub, via: 'ticket' };
+        }
         const token = bearer(req);
         if (token) {
             const svc = verifyService(token);
@@ -253,4 +319,4 @@ function createAuth({ config, keys, store = null }) {
     return { verifyService, verifyUser, requireCap, appOrService, realtimeViewer };
 }
 
-module.exports = { CAPS, createKeyStore, createAuth, hasCap, allows, verifyUserJwt, serviceSlug, bearer, cookie };
+module.exports = { CAPS, createKeyStore, createAuth, hasCap, allows, verifyUserJwt, verifyRealtimeTicket, serviceSlug, bearer, cookie };

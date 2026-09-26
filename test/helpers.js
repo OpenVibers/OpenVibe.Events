@@ -45,6 +45,18 @@ function userToken({ subjectId = ids.newId('user'), aud = ['openvibe.live', 'ope
     }, key);
 }
 
+/**
+ * A realtime ticket as Network mints it (identity.realtime-ticket-claims@1): two minutes, single use,
+ * issuer <network>/realtime, typ and purpose realtime, audience openvibe.events only. Override anything.
+ */
+function realtimeTicket({ subjectId = ids.newId('user'), iat, exp, key = privateKey, ...over } = {}) {
+    const now = Math.floor(Date.now() / 1000);
+    return serviceAuth.signServiceToken({
+        iss: `${ISSUER}/realtime`, sub: subjectId, aud: ['openvibe.events'], typ: 'realtime', purpose: 'realtime',
+        iat: iat ?? now, exp: exp ?? (iat ?? now) + 120, jti: `rtk_${crypto.randomBytes(12).toString('hex')}`, ...over,
+    }, key);
+}
+
 function manualClock(t = Date.now()) {
     return { t, now() { return this.t; }, advance(ms) { this.t += ms; return this.t; } };
 }
@@ -199,6 +211,6 @@ function suite(name) {
 }
 
 module.exports = {
-    ISSUER, privateKey, publicKey, silent, serviceToken, appToken, userToken, manualClock, tmpDir, boot, request,
+    ISSUER, privateKey, publicKey, silent, serviceToken, appToken, userToken, realtimeTicket, manualClock, tmpDir, boot, request,
     envelope, subscriber, sse, sleep, suite,
 };
