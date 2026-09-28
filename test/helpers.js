@@ -80,6 +80,9 @@ async function boot({ env = {}, clock = manualClock(), worker = 'manual', fetchI
         EVENTS_DB_PATH: path.join(dir, 'events.db'),
         OV_NETWORK_PUBLIC_KEY: publicKey,
         EVENTS_WORKER: worker === 'manual' ? 'off' : 'on',
+        // test:pg boots with the Valkey container too (limit counters shared across processes), under a prefix of its own.
+        ...(process.env.EVENTS_TEST_STORE === 'pg' && process.env.OV_TEST_VALKEY_URL
+            ? { VALKEY_URL: process.env.OV_TEST_VALKEY_URL, VALKEY_PREFIX: `ov:events-test:${process.pid}:${ids.newId('event').slice(-8)}:` } : {}),
         ...env,
     });
     // One database per boot (PGlite, or EVENTS_TEST_STORE=pg: the containers), dropped when the boot stops.

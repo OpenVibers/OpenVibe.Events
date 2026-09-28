@@ -124,6 +124,7 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
 
     // One pass at a time: the due query and start() must not interleave, or a second pass would read the rows the
     // first is starting and send them twice. A call during a pass gets one more pass right after it.
+    let finished = 0;   // deliveries settled so far (drain)
     let passing = null;
     let queued = null;
     function dispatch() {
@@ -164,6 +165,7 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
         const p = send(d)
             .catch(err => log.error(`[worker] delivery ${d.event_id} -> ${d.subscription_id} crashed: ${err.stack || err}`))
             .finally(() => {
+                finished++;
                 busy.delete(d.subscription_id);
                 if (isApp) appInflight--;
                 inflight.delete(p);
@@ -187,8 +189,10 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
     /** Deliver everything due now (and whatever becomes due as a result), then resolve. Tests. */
     async function drain() {
         for (;;) {
+            // A delivery that finished during the pass's query was still busy for it: its successor needs one more pass.
+            const before = finished;
             const started = await dispatch();
-            if (!started && !inflight.size) return;
+            if (!started && !inflight.size && finished === before) return;
             if (inflight.size) await Promise.race([...inflight]);
         }
     }

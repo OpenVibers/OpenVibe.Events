@@ -26,7 +26,7 @@ t('/api/ready: every check reports status, latency and checked_at; worker is req
     assert.strictEqual(r.body.service, 'events');
     assert.deepStrictEqual(Object.keys(r.body.checks), ['db', 'valkey', 'network_jwks', 'delivery_worker', 'dlq']);
     for (const [name, c] of Object.entries(r.body.checks)) {
-        assert.strictEqual(c.status, name === 'valkey' ? 'skipped' : 'ok', name);   // test boots have no VALKEY_URL
+        assert.strictEqual(c.status, name === 'valkey' && !h.config.valkey.url ? 'skipped' : 'ok', name);   // Valkey under test:pg only
         assert.strictEqual(typeof c.latency_ms, 'number');
         assert.ok(Date.parse(c.checked_at));
     }
