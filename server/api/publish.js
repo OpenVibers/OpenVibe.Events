@@ -37,8 +37,23 @@ function normalize(input, ctx) {
     return env;
 }
 
-function publishRouter({ config, store, auth, worker, realtime }) {
+function publishRouter({ config, store, auth, worker, realtime, limits }) {
     const router = express.Router();
+
+    // Per-actor limits (server/actor-limits.js), in requests; a request carries up to 100 events.
+    // First-party outboxes flush about once a second each and page through a backlog in batches, and
+    // a 429 is retried by them (never lost): 600 a minute leaves a restart's backlog room to drain.
+    // A developer app also meets its project's event quota (EVENTS_APP_[SANDBOX_]PUBLISH_PER_MINUTE);
+    // 60 requests a minute stops a loop of refused or tiny requests before any validation runs.
+    // Network is not counted: its publishes carry app revocations, sign-out cutoffs and account
+    // deletions, which must never wait behind a limit.
+    const servicePublish = limits('events.event.publish', { minute: 600, hour: 20000 });
+    const appPublish = limits('events.app.publish', { minute: 60, hour: 1200 });
+    function publishLimit(req, res, next) {
+        if (req.principal.kind === 'app') return appPublish(req, res, next);
+        if (req.principal.service === 'network') return next();
+        return servicePublish(req, res, next);
+    }
 
     function checkOne(input, principal, ctx) {
         if (!input || typeof input !== 'object' || Array.isArray(input)) {
@@ -81,7 +96,7 @@ function publishRouter({ config, store, auth, worker, realtime }) {
         return { env };
     }
 
-    router.post('/api/v1/events', auth.appOrService(CAPS.publish, CAPS.appPublish, { requireService: true }), (req, res) => {
+    router.post('/api/v1/events', auth.appOrService(CAPS.publish, CAPS.appPublish, { requireService: true }), publishLimit, (req, res) => {
         const ctx = req.ov;
         const body = req.body;
         const p = req.principal;

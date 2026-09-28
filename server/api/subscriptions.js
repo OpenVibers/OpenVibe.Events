@@ -45,12 +45,16 @@ function checkRetryPolicy(p) {
     return { ok: true, value: out };
 }
 
-function subscriptionsRouter({ config, store, auth, dnsLookup }) {
+function subscriptionsRouter({ config, store, auth, dnsLookup, limits }) {
     const router = express.Router();
     // Creation and rotation answer with the signing secret (shown once): nothing here may be cached.
     router.use('/api/v1/subscriptions', (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
     const guard = auth.appOrService(CAPS.subscribe, CAPS.appSubscribe, { requireService: true });
     const consumerOf = (req) => (req.principal.kind === 'app' ? req.principal.sub : req.principal.service);
+    // Per-actor limits (server/actor-limits.js); reads take the defaults. A service ensures its handful of
+    // subscriptions at boot and an app holds at most EVENTS_APP_MAX_SUBSCRIPTIONS, so creating (a DNS
+    // check of the endpoint and a row), enabling and disabling allow 30 a minute; rotating a secret 10.
+    const change = { minute: 30, hour: 300 };
 
     /** The app's events.app.subscribe grant was withdrawn after this token was issued. */
     function subscribeRevoked(req, res) {
@@ -76,7 +80,7 @@ function subscriptionsRouter({ config, store, auth, dnsLookup }) {
         return sub;
     }
 
-    router.post('/api/v1/subscriptions', guard, async (req, res, next) => {
+    router.post('/api/v1/subscriptions', guard, limits('events.subscription.create', change), async (req, res, next) => {
         try {
             await create(req, res);
         } catch (err) {
@@ -135,11 +139,11 @@ function subscriptionsRouter({ config, store, auth, dnsLookup }) {
         return res.status(201).json(subscriptionView(row, { withSecret: true }));
     }
 
-    router.get('/api/v1/subscriptions', guard, (req, res) => {
+    router.get('/api/v1/subscriptions', guard, limits('events.subscription.list'), (req, res) => {
         res.json({ subscriptions: store.listSubscriptions(consumerOf(req)).filter(s => inScope(req, s)).map(s => subscriptionView(s)) });
     });
 
-    router.get('/api/v1/subscriptions/:id', guard, (req, res) => {
+    router.get('/api/v1/subscriptions/:id', guard, limits('events.subscription.read'), (req, res) => {
         const sub = own(req, res);
         if (sub) res.json(subscriptionView(sub));
     });
@@ -147,7 +151,7 @@ function subscriptionsRouter({ config, store, auth, dnsLookup }) {
     // POST /api/v1/subscriptions/:id/rotate-secret { secret?, overlap_s? } -> the new secret (shown once). The old
     // secret keeps signing next to it for overlap_s (default 1 day, at most 7), so the consumer can switch without
     // missing a delivery.
-    router.post('/api/v1/subscriptions/:id/rotate-secret', guard, express.json({ limit: '4kb' }), (req, res) => {
+    router.post('/api/v1/subscriptions/:id/rotate-secret', guard, limits('events.subscription.rotate', { minute: 10, hour: 100 }), express.json({ limit: '4kb' }), (req, res) => {
         const sub = own(req, res);
         if (!sub) return;
         const b = req.body || {};
@@ -163,8 +167,9 @@ function subscriptionsRouter({ config, store, auth, dnsLookup }) {
         res.json({ ...subscriptionView(out), secret, previous_secret_valid_until: new Date(out.previous_secret_until).toISOString() });
     });
 
+    const toggle = limits('events.subscription.toggle', change);
     for (const [action, enabled] of [['disable', false], ['enable', true]]) {
-        router.post(`/api/v1/subscriptions/:id/${action}`, guard, (req, res) => {
+        router.post(`/api/v1/subscriptions/:id/${action}`, guard, toggle, (req, res) => {
             if (enabled && subscribeRevoked(req, res)) return;
             const sub = own(req, res);
             if (sub) res.json(subscriptionView(store.setSubscriptionEnabled(sub.id, enabled)));

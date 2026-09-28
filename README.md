@@ -43,6 +43,22 @@ Sandbox tokens (`env: sandbox`, developer apps only) are accepted only on the de
 
 Errors are RFC 9457 problem+json (`openvibe-contracts` `http.problem`) with a stable `code`.
 
+### Per-actor limits
+
+Every capability route also limits each principal (`svc:live`, `app:app_…`) by requests, after its guard and before any work (`server/actor-limits.js`, openvibe-sdk/limits, roadmap WS-R task 4). Past a limit: `429` problem+json `rate_limited` with `Retry-After`, one `[limits]` log line and `events_rate_limited_total{limit,window}`. Counters are per process; `EVENTS_LIMITS=off` turns them all off (a rollback lever).
+
+| Route | Per principal |
+|---|---|
+| Single reads: `GET /api/v1/events/:id`, `GET /api/v1/checkpoints`, subscription and delivery lists | `EVENTS_LIMITS_MINUTE` / `EVENTS_LIMITS_HOUR` (120 a minute, 3000 an hour) |
+| `GET /api/v1/events` (pull), `PUT /api/v1/checkpoints` | 600 / 20000 (a consumer pages through a backlog) |
+| `POST /api/v1/events`, a service | 600 / 20000 (outboxes batch and retry a 429); **Network is never counted**: it carries revocations, cutoffs and deletions |
+| `POST /api/v1/events`, a developer app | 60 / 1200, besides the project's event quota |
+| Subscription create, enable, disable | 30 / 300 |
+| `POST /api/v1/subscriptions/:id/rotate-secret` | 10 / 100 |
+| `POST /api/v1/deliveries/replay` | 6 / 60 |
+
+Never limited: `/api/health`, `/api/ready`, `/release.json`, `/limits.json`, `/metrics` and the realtime stream (capped by `REALTIME_MAX_CONNECTIONS` and `REALTIME_MAX_TOPICS`). `test/actor-limits.test.js`.
+
 ## Publishing
 
 `POST /api/v1/events` takes one `events.event-envelope@1` envelope, or `{ "events": [ … ] }` (up to 100, stored atomically).

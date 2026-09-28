@@ -50,12 +50,16 @@ const intParam = (v, d, min, max) => {
     return Number.isInteger(n) && n >= min && n <= max ? n : NaN;
 };
 
-function readRouter({ store, auth, worker }) {
+function readRouter({ store, auth, worker, limits }) {
     const router = express.Router();
     const canRead = auth.appOrService(CAPS.read, CAPS.appRead);
     const isAdmin = auth.requireCap(CAPS.admin);
+    // Per-actor limits (server/actor-limits.js); single reads take the defaults. A pull consumer polls
+    // every few seconds and pages through a backlog (Community's relay: up to 20 pages a tick), and
+    // may store its checkpoint after each page: 600 a minute each, so a catch-up is never throttled.
+    const pull = limits('events.event.pull', { minute: 600, hour: 20000 });
 
-    router.get('/api/v1/events', canRead, (req, res) => {
+    router.get('/api/v1/events', canRead, pull, (req, res) => {
         const ctx = req.ov;
         const patterns = String(req.query.topic || '*').split(',').map(s => s.trim()).filter(Boolean);
         if (!patterns.length || patterns.length > 20 || !patterns.every(topics.isValidPattern)) {
@@ -82,7 +86,7 @@ function readRouter({ store, auth, worker }) {
         res.json(out);
     });
 
-    router.get('/api/v1/events/:id', canRead, (req, res) => {
+    router.get('/api/v1/events/:id', canRead, limits('events.event.read'), (req, res) => {
         const row = store.getEvent(String(req.params.id));
         const visible = row && (req.principal.kind === 'app' ? apps.visibleToApp(row, req.principal) : (row.env || 'production') === 'production');
         if (!visible) return http.sendProblem(res, 404, 'events.not_found', { detail: 'no such event (or pruned by retention)', ctx: req.ov });
@@ -91,7 +95,7 @@ function readRouter({ store, auth, worker }) {
 
     const consumerOf = (req) => req.principal.service || req.principal.sub;
 
-    router.get('/api/v1/checkpoints', canRead, (req, res) => {
+    router.get('/api/v1/checkpoints', canRead, limits('events.checkpoint.read'), (req, res) => {
         const topic = String(req.query.topic || '');
         if (!topics.isValidPattern(topic)) return http.sendProblem(res, 400, 'events.bad_topic', { detail: 'topic is required', ctx: req.ov });
         const scopeErr = scopeError(req.principal, [topic]);
@@ -100,7 +104,7 @@ function readRouter({ store, auth, worker }) {
         res.json({ consumer: consumerOf(req), topic, cursor: cp ? cp.cursor : 0, updated_at: cp ? cp.updated_at : null });
     });
 
-    router.put('/api/v1/checkpoints', canRead, (req, res) => {
+    router.put('/api/v1/checkpoints', canRead, limits('events.checkpoint.write', { minute: 600, hour: 20000 }), (req, res) => {
         const b = req.body || {};
         if (!topics.isValidPattern(b.topic) || !Number.isInteger(b.cursor) || b.cursor < 0) {
             return http.sendProblem(res, 400, 'events.bad_request', { detail: 'topic (pattern) and cursor (integer >= 0) are required', ctx: req.ov });
@@ -111,7 +115,7 @@ function readRouter({ store, auth, worker }) {
         res.json({ consumer: consumerOf(req), topic: b.topic, ...cp });
     });
 
-    router.get('/api/v1/deliveries', isAdmin, (req, res) => {
+    router.get('/api/v1/deliveries', isAdmin, limits('events.delivery.list'), (req, res) => {
         const status = req.query.status ? String(req.query.status) : undefined;
         if (status && !['pending', 'delivered', 'failed', 'dead'].includes(status)) {
             return http.sendProblem(res, 400, 'events.bad_request', { detail: 'status is pending|delivered|failed|dead', ctx: req.ov });
@@ -136,7 +140,9 @@ function readRouter({ store, auth, worker }) {
         });
     });
 
-    router.post('/api/v1/deliveries/replay', isAdmin, (req, res) => {
+    // A replay requeues up to a whole subscription's retained history: an operator's action, a few
+    // times at most.
+    router.post('/api/v1/deliveries/replay', isAdmin, limits('events.delivery.replay', { minute: 6, hour: 60 }), (req, res) => {
         const ctx = req.ov;
         const b = req.body || {};
         const sub = typeof b.subscription_id === 'string' ? store.getSubscription(b.subscription_id) : null;

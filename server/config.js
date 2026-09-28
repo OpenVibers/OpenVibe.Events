@@ -113,6 +113,16 @@ function load(env = process.env) {
             sandboxRetentionDays: int(env.EVENTS_APP_SANDBOX_RETENTION_DAYS, 7),
         },
 
+        // Per-actor limits at the capability routes (server/actor-limits.js, roadmap WS-R task 4): the
+        // requests one principal (svc:…, app:app_…) may make to a read route per minute and per hour.
+        // Publishing, subscriptions and replay set their own numbers where they are mounted.
+        // EVENTS_LIMITS=off turns every one of them off (a rollback lever).
+        limits: {
+            enabled: env.EVENTS_LIMITS !== 'off',
+            minute: Math.max(1, int(env.EVENTS_LIMITS_MINUTE, 120)),
+            hour: Math.max(1, int(env.EVENTS_LIMITS_HOUR, 3000)),
+        },
+
         // Project usage rollups (server/usage.js, WS-N task 4): each closed hour of a project's
         // publishing and webhook deliveries is stored as events.usage.recorded. off: nothing counted.
         usage: {

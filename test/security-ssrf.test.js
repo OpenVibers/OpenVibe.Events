@@ -113,7 +113,9 @@ t('boot', async () => {
     await new Promise((r) => receiver.listen(0, '127.0.0.1', r));
     await new Promise((r) => internal.listen(0, '127.0.0.1', r));
     receiverPort = receiver.address().port; internalPort = internal.address().port;
-    h = await boot({ appPost: guarded, dnsLookup, env: { EVENTS_APP_SANDBOX_MAX_SUBSCRIPTIONS: '50' } });
+    // Dozens of subscribe attempts from one app, in one minute of the manual clock: no quota or
+    // per-actor limit may answer before the endpoint check under test.
+    h = await boot({ appPost: guarded, dnsLookup, env: { EVENTS_APP_SANDBOX_MAX_SUBSCRIPTIONS: '50', EVENTS_LIMITS: 'off' } });
 });
 
 t('at creation: every internal spelling is refused (422), a public name accepted', async () => {

@@ -31,7 +31,7 @@ async function start({
     const worker = createWorker({ store, config, clock, fetchImpl: deliveryFetch, appPost: appPost || createGuardedPost({ lookup: dnsLookup }), log, observe: metrics.observe });
     const realtime = createRealtime({ store, auth, config, clock, log });
     metrics.bind({ realtime });
-    const app = createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, log });
+    const app = createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log });
 
     // The key loads in the background (retrying while Network boots); /api/ready says when it has.
     const keyLoaded = keys.start().catch(() => null);
