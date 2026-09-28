@@ -58,7 +58,7 @@ t('pull: cursor, topic filter, internal events included for services', async () 
     assert.deepStrictEqual(r.body.events, []);
     assert.strictEqual(r.body.latest_seq, s3);
 
-    const id3 = h.db.prepare('SELECT id FROM events WHERE seq = ?').get(s3).id;
+    const id3 = (await h.db.prepare('SELECT id FROM events WHERE seq = ?').get(s3)).id;
     r = await request(h.base, 'GET', `/api/v1/events/${id3}`, { token: reader });
     assert.strictEqual(r.body.seq, s3);
     r = await request(h.base, 'GET', '/api/v1/events?topic=live.*', { token: live });
@@ -68,8 +68,8 @@ t('pull: cursor, topic filter, internal events included for services', async () 
 });
 
 t('pull: a cursor older than retention reports the gap', async () => {
-    const before = h.store.lastSeq();
-    h.store.prune({ retentionDays: 30, now: Date.now() + 31 * 86400000 });
+    const before = await h.store.lastSeq();
+    await h.store.prune({ retentionDays: 30, now: Date.now() + 31 * 86400000 });
     const s = (await request(h.base, 'POST', '/api/v1/events', { token: live, body: envelope() })).body.seq;
     const r = await request(h.base, 'GET', '/api/v1/events?after_seq=1', { token: reader });
     assert.deepStrictEqual(r.body.gap, { from_seq: 2, to_seq: before });
@@ -94,7 +94,7 @@ t('health and ready', async () => {
     r = await request(h.base, 'GET', '/api/ready');
     assert.strictEqual(r.status, 200);
     assert.strictEqual(r.body.ready, true);
-    assert.deepStrictEqual(Object.keys(r.body.checks), ['db', 'network_jwks', 'dlq'], 'worker off in this boot: no delivery_worker check');
+    assert.deepStrictEqual(Object.keys(r.body.checks), ['db', 'valkey', 'network_jwks', 'dlq'], 'worker off in this boot: no delivery_worker check');
     assert.strictEqual(r.body.checks.db.status, 'ok');
     assert.strictEqual(r.body.checks.network_jwks.status, 'ok');
     r = await request(h.base, 'GET', '/nope');

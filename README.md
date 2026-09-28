@@ -90,11 +90,11 @@ A producer takes back what it published (a deleted chat message) with a directiv
 ```
 
 - `redacts.event_ids` (up to 1000 `evt_…`) names events directly; `subject_type` + `subject_ids` (up to 1000) names every stored event of the same source about those subjects.
-- In the transaction that stores the directive, each target becomes a **tombstone**: `payload` is replaced by `{ "redacted": true, "redacted_at": "<ISO>", "redacted_by": "<the redacting event_id>" }` and `actor` by the producer itself (`{ "type": "service", "id": "<source>" }`, or the app). `event_id`, `seq`, `event_type`, `subject`, `timestamp` and `visibility` stay, so sequences have no holes. The old payload is overwritten on disk (`secure_delete`), not just hidden.
+- In the transaction that stores the directive, each target becomes a **tombstone**: `payload` is replaced by `{ "redacted": true, "redacted_at": "<ISO>", "redacted_by": "<the redacting event_id>" }` and `actor` by the producer itself (`{ "type": "service", "id": "<source>" }`, or the app). `event_id`, `seq`, `event_type`, `subject`, `timestamp` and `visibility` stay, so sequences have no holes. On PostgreSQL the replaced row version is a dead tuple until autovacuum reclaims it (the `events` table vacuums after 1% of its rows change, so within minutes); until then, and in backups taken before the redaction, the old bytes still exist on the host. No read path serves them.
 - Every read path serves the tombstone from then on: pull, `GET /api/v1/events/:id`, SSE replay (anonymous, signed in or service), queued deliveries and DLQ replays. First-party consumers get the tombstone at the original seq and then the deletion event itself; they should check `payload.redacted`.
 - Authority is the publish rule: only the owning source (for an app, its own project and environment) can redact. Naming another source's event by id refuses the whole publish with `403 events.redaction_not_allowed`; a subject match never reaches another source. A malformed directive is `422 events.invalid_redaction`. Events carrying a directive are never redacted themselves. No capability beyond `events.event.publish` is needed.
 - Redaction applies to what is stored when the directive arrives; it does not block later events about the same subject.
-- Events stored before a producer published deletions: [scripts/redact-backfill.js](scripts/redact-backfill.js) (chat only; dry run by default, `--apply` needs `--backup <new file>`).
+- Events stored before a producer published deletions: the one-time `scripts/redact-backfill.js` (chat only) ran on 2026-09-24 and was retired with the move to PostgreSQL (it is in git history).
 
 ## Subscriptions and delivery
 
@@ -169,7 +169,8 @@ Quotas recorded in Network (`dev_quotas`) are not read yet: that needs `network.
 const events = require('openvibe-events');
 const tokenClient = contracts.serviceAuth.createTokenClient({ tokenUrl: `${NETWORK}/oauth/token`, clientId, clientSecret, audience: 'openvibe.events' });
 
-// Producer: transactional outbox in the service's own better-sqlite3 database
+// Producer: transactional outbox in the service's own better-sqlite3 database (a service on PostgreSQL uses
+// openvibe-sdk/events createPgOutbox / createPgInbox instead: same envelope, receipts and relay, async)
 const outbox = events.createOutbox(db, { publisher: events.createPublisher({ eventsUrl: 'http://127.0.0.1:4300', tokenClient }) });
 outbox.ensureSchema();
 db.transaction(() => {
@@ -215,7 +216,7 @@ es.addEventListener('gap', (m) => { /* events were missed: refetch state */ });
 
 ## Owns
 
-- `events`, `subscriptions`, `deliveries`, `consumer_checkpoints`, `idempotency_receipts`, `app_revocations`, `app_usage` (SQLite today; the plan's PostgreSQL + Redis fanout is a later step)
+- `events`, `subscriptions`, `deliveries`, `consumer_checkpoints`, `idempotency_receipts`, `app_revocations`, `app_usage` (PostgreSQL `ov_events`, ADR-035; the realtime fan-out is in-process, one Events process)
 - developer-app event scope, sandbox separation and per-project Events quotas (ADR-014)
 - canonical event envelope (event_id, trace_id, type, version, source, actor, subject + revision, payload)
 - priority classes `critical|important|low`, loop guards, backpressure, DLQ and replay
@@ -270,13 +271,15 @@ Reporting a vulnerability: [SECURITY.md](SECURITY.md). The rules the code keeps:
 
 Production deploys with `sudo ovhost deploy events` on the host (strategy `git-checkout`: fetch,
 fast-forward `/opt/openvibe.events`, install on a lockfile change, restart, wait for `/api/ready`).
-The unit is `openvibe-events.service` on `127.0.0.1:4300`, the env file `/etc/openvibe/events.env`. The store is
-`/var/lib/openvibe-events/events.db`; nginx serves `events.openvibe.network` from
+The unit is `openvibe-events.service` on `127.0.0.1:4300`, the env file `/etc/openvibe/events.env`. The database is
+`ov_events` on the host's data role (`sudo /opt/openvibe.host/roles/data/add-service.sh events` writes its settings); the
+release migrates it at boot. The one-time move from SQLite is `scripts/migrate-to-postgres.js` (openvibe-sdk
+`runSqliteMigration`, with a `--pglite` rehearsal mode), run while the service is stopped; the old
+`/var/lib/openvibe-events/events.db` stays read-only for 7 days as the rollback. nginx serves `events.openvibe.network` from
 [deploy/nginx/events.openvibe.network.conf](deploy/nginx/events.openvibe.network.conf). ovhost treats open
 realtime connections as a report-only drain, so `--wait-idle` waits for them.
 Rollback: ovhost puts the previous sha back by itself when `/api/ready` does not answer 2xx after the
-restart; afterwards `sudo ovhost rollback events --to <sha>`. Nothing blocks a rollback: the schema
-code only adds tables and columns.
+restart; afterwards `sudo ovhost rollback events --to <sha>`. Migrations only add tables and columns.
 `EVENTS_LIMITS=off` turns the per-actor limits off without a deploy.
 
 ## Launch rule

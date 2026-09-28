@@ -24,9 +24,9 @@ t('/api/ready: every check reports status, latency and checked_at; worker is req
     assert.strictEqual(r.status, 200, r.text);
     assert.strictEqual(r.body.status, 'ready');
     assert.strictEqual(r.body.service, 'events');
-    assert.deepStrictEqual(Object.keys(r.body.checks), ['db', 'network_jwks', 'delivery_worker', 'dlq']);
+    assert.deepStrictEqual(Object.keys(r.body.checks), ['db', 'valkey', 'network_jwks', 'delivery_worker', 'dlq']);
     for (const [name, c] of Object.entries(r.body.checks)) {
-        assert.strictEqual(c.status, 'ok', name);
+        assert.strictEqual(c.status, name === 'valkey' ? 'skipped' : 'ok', name);   // test boots have no VALKEY_URL
         assert.strictEqual(typeof c.latency_ms, 'number');
         assert.ok(Date.parse(c.checked_at));
     }
@@ -55,7 +55,7 @@ t('deliveries feed the latency histogram and attempt counter; a dead one degrade
 });
 
 t('/metrics: loopback only, templates not ids, Events gauges', async () => {
-    const id = h.db.prepare('SELECT id FROM events ORDER BY seq LIMIT 1').get().id;
+    const id = (await h.db.prepare('SELECT id FROM events ORDER BY seq LIMIT 1').get()).id;
     await request(h.base, 'GET', `/api/v1/events/${id}`, { token: reader });
     await request(h.base, 'GET', '/api/v1/events?topic=live.*&after_seq=0', { token: reader });
     await request(h.base, 'GET', '/no/such/12345');

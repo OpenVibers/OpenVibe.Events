@@ -2,8 +2,8 @@
 Description=OpenVibe.Events — durable events, signed delivery, dead letters, replay and the SSE realtime gateway
 # Network (openvibe-network) signs the tokens this service verifies. Events starts without it
 # and keeps retrying the JWKS fetch; /api/ready stays 503 until the key has loaded.
-After=network.target
-Wants=openvibe-network.service
+After=network.target postgresql.service pgbouncer.service valkey-server.service
+Wants=openvibe-network.service postgresql.service pgbouncer.service valkey-server.service
 
 [Service]
 Type=simple
@@ -26,7 +26,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-# The code tree stays read-only; the event store lives in /var/lib/openvibe-events.
+# The code tree stays read-only. The event store is PostgreSQL (ov_events); /var/lib/openvibe-events keeps the
+# pre-PostgreSQL SQLite file (read-only) for the rollback window.
 StateDirectory=openvibe-events
 Environment=EVENTS_DB_PATH=/var/lib/openvibe-events/events.db
 

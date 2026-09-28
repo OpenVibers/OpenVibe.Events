@@ -88,7 +88,7 @@ t('Last-Event-ID resume replays what was missed, in order, then goes live', asyn
 
 t('a cursor older than retention gets `event: gap` first', async () => {
     const old = await publish(live, envelope('live', { visibility: 'public' }));
-    h.store.prune({ retentionDays: 30, now: Date.now() + 31 * 86400000 });
+    await h.store.prune({ retentionDays: 30, now: Date.now() + 31 * 86400000 });
     const kept = await publish(live, envelope('live', { visibility: 'public' }));
     const c = await stream('topics=live.stream.*', { 'Last-Event-ID': String(old - 1) });
     await c.waitFor(x => x.events().length === 1);

@@ -96,24 +96,24 @@ function publishRouter({ config, store, auth, worker, realtime, limits }) {
         return { env };
     }
 
-    router.post('/api/v1/events', auth.appOrService(CAPS.publish, CAPS.appPublish, { requireService: true }), publishLimit, (req, res) => {
+    router.post('/api/v1/events', auth.appOrService(CAPS.publish, CAPS.appPublish, { requireService: true }), publishLimit, async (req, res) => {
         const ctx = req.ov;
         const body = req.body;
         const p = req.principal;
         // Every refusal of an app's publish is one error in its project's usage.
-        const refuse = (status, code, o = {}, ref = null) => {
+        const refuse = async (status, code, o = {}, ref = null) => {
             if (p.kind === 'app') {
                 try {
-                    store.usage.record({ projectId: p.projectId, env: p.env, capability: 'events.app.publish', unit: 'events', error: { code, status, traceId: ctx.traceId, ref } });
+                    await store.usage.record({ projectId: p.projectId, env: p.env, capability: 'events.app.publish', unit: 'events', error: { code, status, traceId: ctx.traceId, ref } });
                 } catch (err) { console.error(`[usage] refusal not counted: ${err.message}`); }
             }
             return http.sendProblem(res, status, code, { ...o, ctx });
         };
         const isBatch = body && typeof body === 'object' && !Array.isArray(body) && Array.isArray(body.events) && body.event_id === undefined;
         const items = isBatch ? body.events : [body];
-        if (isBatch && !items.length) return refuse(400, 'events.bad_request', { detail: 'events must not be empty' });
+        if (isBatch && !items.length) return await refuse(400, 'events.bad_request', { detail: 'events must not be empty' });
         if (items.length > config.maxBatch) {
-            return refuse(413, 'events.batch_too_large', { detail: `at most ${config.maxBatch} events per request` });
+            return await refuse(413, 'events.batch_too_large', { detail: `at most ${config.maxBatch} events per request` });
         }
 
         const envelopes = [];
@@ -122,10 +122,10 @@ function publishRouter({ config, store, auth, worker, realtime, limits }) {
             const r = checkOne(items[i], req.principal, ctx);
             const ref = items[i] && typeof items[i] === 'object' ? items[i].event_id : null;
             if (r.env && seen.has(r.env.event_id)) {
-                return refuse(422, 'events.invalid_envelope', { detail: `events[${i}]: event_id repeated within the batch`, extra: { index: i } }, ref);
+                return await refuse(422, 'events.invalid_envelope', { detail: `events[${i}]: event_id repeated within the batch`, extra: { index: i } }, ref);
             }
             if (!r.env) {
-                return refuse(r.status, r.code, {
+                return await refuse(r.status, r.code, {
                     detail: isBatch ? `events[${i}]: ${r.detail}` : r.detail, errors: r.errors, extra: isBatch ? { index: i } : undefined,
                 }, ref);
             }
@@ -136,11 +136,11 @@ function publishRouter({ config, store, auth, worker, realtime, limits }) {
         let out;
         try {
             const project = p.kind === 'app' ? { projectId: p.projectId, env: p.env, ...config.apps.quotas[p.env] } : null;
-            out = store.insertBatch(envelopes, { publisher: p.sub, requestId: ctx.requestId, project });
+            out = await store.insertBatch(envelopes, { publisher: p.sub, requestId: ctx.requestId, project });
         } catch (err) {
             if (err instanceof StoreError) {
                 if (err.status === 429 && err.extra && err.extra.retry_after) res.setHeader('Retry-After', String(err.extra.retry_after));
-                return refuse(err.status, err.code, { detail: err.message, extra: err.extra }, err.extra && err.extra.event_id);
+                return await refuse(err.status, err.code, { detail: err.message, extra: err.extra }, err.extra && err.extra.event_id);
             }
             throw err;
         }

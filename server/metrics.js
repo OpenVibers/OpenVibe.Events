@@ -22,10 +22,10 @@ function createMetrics({ store }) {
 
     registry.gauge({
         name: 'events_deliveries', help: 'Deliveries by status', labelNames: ['status'],
-        collect: () => Object.entries(store.deliveryCounts()).map(([status, value]) => ({ labels: { status }, value })),
+        collect: async () => Object.entries(await store.deliveryCounts()).map(([status, value]) => ({ labels: { status }, value })),
     });
-    registry.gauge({ name: 'events_dlq_depth', help: 'Dead deliveries (the DLQ) waiting for replay', collect: () => store.deliveryCounts().dead });
-    registry.gauge({ name: 'events_latest_seq', help: 'Last sequence number assigned to an event', collect: () => store.lastSeq() });
+    registry.gauge({ name: 'events_dlq_depth', help: 'Dead deliveries (the DLQ) waiting for replay', collect: async () => (await store.deliveryCounts()).dead });
+    registry.gauge({ name: 'events_latest_seq', help: 'Last sequence number assigned to an event', collect: async () => await store.lastSeq() });
     registry.gauge({ name: 'events_realtime_connections', help: 'Open realtime (SSE) connections', collect: () => (realtime ? realtime.count() : undefined) });
     const latency = registry.histogram({ name: 'events_delivery_latency_seconds', help: 'Time from acceptance to successful delivery, retries included', labelNames: ['priority'], buckets: LATENCY_BUCKETS });
     const attempts = registry.counter({ name: 'events_delivery_attempts_total', help: 'Delivery attempts by outcome', labelNames: ['outcome'] });

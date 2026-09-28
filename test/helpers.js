@@ -82,11 +82,13 @@ async function boot({ env = {}, clock = manualClock(), worker = 'manual', fetchI
         EVENTS_WORKER: worker === 'manual' ? 'off' : 'on',
         ...env,
     });
-    const h = await start({ config, clock, log: silent, fetchImpl, deliveryFetch, appPost, dnsLookup });
+    // One database per boot (PGlite, or EVENTS_TEST_STORE=pg: the containers), dropped when the boot stops.
+    const testdb = await require('./db').testDb();
+    const h = await start({ config, db: testdb.db, clock, log: silent, fetchImpl, deliveryFetch, appPost, dnsLookup });
     const base = `http://127.0.0.1:${h.server.address().port}`;
     return {
         ...h, base, clock, dir,
-        async stop() { await h.close(); fs.rmSync(dir, { recursive: true, force: true }); },
+        async stop() { await h.close(); await testdb.close(); fs.rmSync(dir, { recursive: true, force: true }); },
     };
 }
 

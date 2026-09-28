@@ -107,7 +107,7 @@ const prj = `prj_${ids.ulid()}`;
 const app = ids.newId('app');
 const key = apps.projectKey(prj);
 const tokApp = () => appToken({ appId: app, projectId: prj, env: 'sandbox', cap: ALL });
-const sub = (token, endpoint, topic = `app.${key}.*`) => request(h.base, 'POST', '/api/v1/subscriptions', { token, body: { topic_pattern: topic, endpoint } });
+const sub = async (token, endpoint, topic = `app.${key}.*`) => await request(h.base, 'POST', '/api/v1/subscriptions', { token, body: { topic_pattern: topic, endpoint } });
 
 t('boot', async () => {
     await new Promise((r) => receiver.listen(0, '127.0.0.1', r));
@@ -158,7 +158,7 @@ t('DNS rebinding: public at subscribe, internal at delivery: dead at once, nothi
     const e = await request(h.base, 'POST', '/api/v1/events', { token: tokApp(), body: envelope('x', { source: apps.appSource(app), event_type: `app.${key}.rebind.hit`, actor: { type: 'app', id: app } }) });
     assert.strictEqual(e.status, 201, e.text);
     await h.worker.drain();
-    const d = h.store.getDelivery(e.body.event_id, r.body.id);
+    const d = await h.store.getDelivery(e.body.event_id, r.body.id);
     assert.strictEqual(d.status, 'dead', 'refused for good');
     assert.match(d.last_error, /non-public/);
     assert.ok(!received.some((x) => x.url === '/rebind'), 'nothing reached the rebound address');
@@ -172,7 +172,7 @@ t('redirects are never followed (app endpoints and first-party ones)', async () 
     received.length = 0; internalHits = 0;
     const e = await request(h.base, 'POST', '/api/v1/events', { token: tokApp(), body: envelope('x', { source: apps.appSource(app), event_type: `app.${key}.redir.hit`, actor: { type: 'app', id: app } }) });
     await h.worker.drain();
-    const d = h.store.getDelivery(e.body.event_id, r.body.id);
+    const d = await h.store.getDelivery(e.body.event_id, r.body.id);
     assert.strictEqual(d.last_status, 302, 'a 3xx is a failed attempt');
     assert.notStrictEqual(d.status, 'delivered');
     assert.strictEqual(received.filter((x) => x.url === '/redirect').length, 1, 'one request to the endpoint, none to where it pointed');
@@ -185,7 +185,7 @@ t('redirects are never followed (app endpoints and first-party ones)', async () 
     const le = await request(h.base, 'POST', '/api/v1/events', { token: live, body: envelope('live') });
     await h.worker.drain();
     assert.strictEqual(fp.calls.length, 1);
-    assert.strictEqual(h.store.getDelivery(le.body.event_id, s.body.id).last_status, 302);
+    assert.strictEqual((await h.store.getDelivery(le.body.event_id, s.body.id)).last_status, 302);
     assert.strictEqual(internalHits, 0);
     await fp.close();
 });

@@ -59,7 +59,7 @@ function readRouter({ store, auth, worker, limits }) {
     // may store its checkpoint after each page: 600 a minute each, so a catch-up is never throttled.
     const pull = limits('events.event.pull', { minute: 600, hour: 20000 });
 
-    router.get('/api/v1/events', canRead, pull, (req, res) => {
+    router.get('/api/v1/events', canRead, pull, async (req, res) => {
         const ctx = req.ov;
         const patterns = String(req.query.topic || '*').split(',').map(s => s.trim()).filter(Boolean);
         if (!patterns.length || patterns.length > 20 || !patterns.every(topics.isValidPattern)) {
@@ -72,22 +72,22 @@ function readRouter({ store, auth, worker, limits }) {
         if (Number.isNaN(after) || Number.isNaN(limit)) {
             return http.sendProblem(res, 400, 'events.bad_request', { detail: 'after_seq must be >= 0 and limit 1..1000', ctx });
         }
-        const oldest = store.oldestSeq();
+        const oldest = await store.oldestSeq();
         const out = {};
         let from = after;
         if (after < oldest - 1) {
             out.gap = { from_seq: after + 1, to_seq: oldest - 1 };
             from = oldest - 1;
         }
-        const { rows, cursor } = store.scan(from, { patterns, limit, accept: acceptFor(req.principal, patterns) });
+        const { rows, cursor } = await store.scan(from, { patterns, limit, accept: acceptFor(req.principal, patterns) });
         out.events = rows.map(r => ({ seq: r.seq, event: rowToEnvelope(r) }));
         out.next_after_seq = cursor;
-        out.latest_seq = store.lastSeq();
+        out.latest_seq = await store.lastSeq();
         res.json(out);
     });
 
-    router.get('/api/v1/events/:id', canRead, limits('events.event.read'), (req, res) => {
-        const row = store.getEvent(String(req.params.id));
+    router.get('/api/v1/events/:id', canRead, limits('events.event.read'), async (req, res) => {
+        const row = await store.getEvent(String(req.params.id));
         const visible = row && (req.principal.kind === 'app' ? apps.visibleToApp(row, req.principal) : (row.env || 'production') === 'production');
         if (!visible) return http.sendProblem(res, 404, 'events.not_found', { detail: 'no such event (or pruned by retention)', ctx: req.ov });
         return res.json({ seq: row.seq, event: rowToEnvelope(row) });
@@ -95,27 +95,27 @@ function readRouter({ store, auth, worker, limits }) {
 
     const consumerOf = (req) => req.principal.service || req.principal.sub;
 
-    router.get('/api/v1/checkpoints', canRead, limits('events.checkpoint.read'), (req, res) => {
+    router.get('/api/v1/checkpoints', canRead, limits('events.checkpoint.read'), async (req, res) => {
         const topic = String(req.query.topic || '');
         if (!topics.isValidPattern(topic)) return http.sendProblem(res, 400, 'events.bad_topic', { detail: 'topic is required', ctx: req.ov });
         const scopeErr = scopeError(req.principal, [topic]);
         if (scopeErr) return http.sendProblem(res, 403, 'events.topic_not_allowed', { detail: scopeErr, ctx: req.ov });
-        const cp = store.getCheckpoint(consumerOf(req), topic);
+        const cp = await store.getCheckpoint(consumerOf(req), topic);
         res.json({ consumer: consumerOf(req), topic, cursor: cp ? cp.cursor : 0, updated_at: cp ? cp.updated_at : null });
     });
 
-    router.put('/api/v1/checkpoints', canRead, limits('events.checkpoint.write', { minute: 600, hour: 20000 }), (req, res) => {
+    router.put('/api/v1/checkpoints', canRead, limits('events.checkpoint.write', { minute: 600, hour: 20000 }), async (req, res) => {
         const b = req.body || {};
         if (!topics.isValidPattern(b.topic) || !Number.isInteger(b.cursor) || b.cursor < 0) {
             return http.sendProblem(res, 400, 'events.bad_request', { detail: 'topic (pattern) and cursor (integer >= 0) are required', ctx: req.ov });
         }
         const scopeErr = scopeError(req.principal, [b.topic]);
         if (scopeErr) return http.sendProblem(res, 403, 'events.topic_not_allowed', { detail: scopeErr, ctx: req.ov });
-        const cp = store.setCheckpoint(consumerOf(req), b.topic, b.cursor);
+        const cp = await store.setCheckpoint(consumerOf(req), b.topic, b.cursor);
         res.json({ consumer: consumerOf(req), topic: b.topic, ...cp });
     });
 
-    router.get('/api/v1/deliveries', isAdmin, limits('events.delivery.list'), (req, res) => {
+    router.get('/api/v1/deliveries', isAdmin, limits('events.delivery.list'), async (req, res) => {
         const status = req.query.status ? String(req.query.status) : undefined;
         if (status && !['pending', 'delivered', 'failed', 'dead'].includes(status)) {
             return http.sendProblem(res, 400, 'events.bad_request', { detail: 'status is pending|delivered|failed|dead', ctx: req.ov });
@@ -123,7 +123,7 @@ function readRouter({ store, auth, worker, limits }) {
         const limit = intParam(req.query.limit, 100, 1, 1000);
         const afterSeq = intParam(req.query.after_seq, 0, 0, Number.MAX_SAFE_INTEGER);
         if (Number.isNaN(limit) || Number.isNaN(afterSeq)) return http.sendProblem(res, 400, 'events.bad_request', { detail: 'bad limit or after_seq', ctx: req.ov });
-        const rows = store.listDeliveries({ status, subscriptionId: req.query.subscription_id ? String(req.query.subscription_id) : undefined, limit, afterSeq });
+        const rows = await store.listDeliveries({ status, subscriptionId: req.query.subscription_id ? String(req.query.subscription_id) : undefined, limit, afterSeq });
         return res.json({
             deliveries: rows.map(d => ({
                 event_id: d.event_id,
@@ -136,16 +136,16 @@ function readRouter({ store, auth, worker, limits }) {
                 last_error: d.last_error,
                 delivered_at: d.delivered_at ? new Date(d.delivered_at).toISOString() : null,
             })),
-            counts: store.deliveryCounts(),
+            counts: await store.deliveryCounts(),
         });
     });
 
     // A replay requeues up to a whole subscription's retained history: an operator's action, a few
     // times at most.
-    router.post('/api/v1/deliveries/replay', isAdmin, limits('events.delivery.replay', { minute: 6, hour: 60 }), (req, res) => {
+    router.post('/api/v1/deliveries/replay', isAdmin, limits('events.delivery.replay', { minute: 6, hour: 60 }), async (req, res) => {
         const ctx = req.ov;
         const b = req.body || {};
-        const sub = typeof b.subscription_id === 'string' ? store.getSubscription(b.subscription_id) : null;
+        const sub = typeof b.subscription_id === 'string' ? await store.getSubscription(b.subscription_id) : null;
         if (!sub) return http.sendProblem(res, 404, 'events.not_found', { detail: 'no such subscription', ctx });
         const hasIds = Array.isArray(b.event_ids);
         const hasFrom = Number.isInteger(b.from_seq) && b.from_seq >= 0;
@@ -153,7 +153,7 @@ function readRouter({ store, auth, worker, limits }) {
         if (hasIds && (b.event_ids.length > 1000 || !b.event_ids.every(id => typeof id === 'string'))) {
             return http.sendProblem(res, 400, 'events.bad_request', { detail: 'event_ids: at most 1000 ids', ctx });
         }
-        const queued = store.requeue(sub, hasIds ? { eventIds: b.event_ids } : { fromSeq: b.from_seq });
+        const queued = await store.requeue(sub, hasIds ? { eventIds: b.event_ids } : { fromSeq: b.from_seq });
         worker.kick();
         return res.json({ subscription_id: sub.id, queued });
     });

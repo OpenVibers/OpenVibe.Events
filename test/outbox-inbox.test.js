@@ -13,8 +13,8 @@ let network;
 let tokenClient;
 const admin = serviceToken('ops', ['events.delivery.admin']);
 
-function countIn(id) {
-    return h.db.prepare('SELECT COUNT(*) AS n FROM events WHERE id = ?').get(id).n;
+async function countIn(id) {
+    return (await h.db.prepare('SELECT COUNT(*) AS n FROM events WHERE id = ?').get(id)).n;   // Events' own database (PostgreSQL)
 }
 
 t('boot Events + a stub Network token endpoint', async () => {
@@ -46,7 +46,7 @@ t('publisher fills event_id, timestamp and trace (from traceparent)', async () =
         subject: { type: 'stream', id: '7' }, payload: {},
     }, { traceparent: '00-11111111111111111111111111111111-2222222222222222-01' });
     assert.match(out.event_id, /^evt_/);
-    assert.strictEqual(h.store.getEvent(out.event_id).trace_id, '11111111111111111111111111111111');
+    assert.strictEqual((await h.store.getEvent(out.event_id)).trace_id, '11111111111111111111111111111111');
     assert.strictEqual(network.issued(), 1);
     const batch = await publisher.publish([envelope(), envelope()]);
     assert.strictEqual(batch.results.length, 2);
@@ -71,7 +71,7 @@ t('outbox: enqueue inside a rolled-back transaction publishes nothing; committed
     assert.strictEqual(outbox.pending(), 0);
     let r = await outbox.flush();
     assert.deepStrictEqual(r, { sent: 0, failed: 0, rejected: 0 });
-    assert.strictEqual(countIn(rolledBack.event_id), 0, 'rolled back: never published');
+    assert.strictEqual(await countIn(rolledBack.event_id), 0, 'rolled back: never published');
 
     let committed;
     db.transaction(() => {
@@ -83,13 +83,13 @@ t('outbox: enqueue inside a rolled-back transaction publishes nothing; committed
     assert.strictEqual(r.sent, 1);
     r = await outbox.flush();
     assert.strictEqual(r.sent, 0, 'sent rows are not sent again');
-    assert.strictEqual(countIn(committed.event_id), 1);
+    assert.strictEqual(await countIn(committed.event_id), 1);
 
     // Relay crashed after Events accepted but before the row was marked: at-least-once resend is a duplicate.
     db.prepare('UPDATE event_outbox SET sent_at = NULL WHERE event_id = ?').run(committed.event_id);
     r = await outbox.flush();
     assert.strictEqual(r.sent, 1);
-    assert.strictEqual(countIn(committed.event_id), 1, 'still exactly one event');
+    assert.strictEqual(await countIn(committed.event_id), 1, 'still exactly one event');
     assert.ok(db.prepare('SELECT seq FROM event_outbox WHERE event_id = ?').get(committed.event_id).seq > 0);
     db.close();
 });
@@ -106,7 +106,7 @@ t('outbox: a poisoned row is isolated and rejected; a down Events is retried lat
     })();
     const r = await outbox.flush();
     assert.deepStrictEqual(r, { sent: 1, failed: 0, rejected: 1 });
-    assert.strictEqual(countIn(good.event_id), 1);
+    assert.strictEqual(await countIn(good.event_id), 1);
     assert.ok(db.prepare('SELECT rejected_at FROM event_outbox WHERE event_id = ?').get(bad.event_id).rejected_at);
 
     const down = events.createOutbox(db, { publisher: events.createPublisher({ eventsUrl: 'http://127.0.0.1:9', tokenClient }), now: () => clock });
@@ -120,7 +120,7 @@ t('outbox: a poisoned row is isolated and rejected; a down Events is retried lat
     // Events is back: the regular relay picks it up once due.
     clock += 1000;
     assert.strictEqual((await outbox.flush()).sent, 1);
-    assert.strictEqual(countIn(later.event_id), 1);
+    assert.strictEqual(await countIn(later.event_id), 1);
     db.close();
 });
 
@@ -161,12 +161,12 @@ t('consumer crash mid-processing + redelivery + replay -> exactly one effect (cr
         const env = envelope('live', { event_type: 'live.tip.sent', payload: { amount: 5 } });
         await request(h.base, 'POST', '/api/v1/events', { token: live, body: env });
         await h.worker.drain();
-        const d = h.store.getDelivery(env.event_id, sub.id);
+        const d = await h.store.getDelivery(env.event_id, sub.id);
         assert.strictEqual(d.status, 'failed', `${first}: the crashed attempt is retried`);
         assert.strictEqual(effects(env.event_id), first === 'crash-after-commit' ? 1 : 0);
         h.clock.advance(1000);
         await h.worker.drain();
-        assert.strictEqual(h.store.getDelivery(env.event_id, sub.id).status, 'delivered');
+        assert.strictEqual((await h.store.getDelivery(env.event_id, sub.id)).status, 'delivered');
         assert.strictEqual(effects(env.event_id), 1, `${first}: exactly one effect after redelivery`);
 
         const rp = await request(h.base, 'POST', '/api/v1/deliveries/replay', { token: admin, body: { subscription_id: sub.id, event_ids: [env.event_id] } });

@@ -13,7 +13,7 @@ const { mountLimits } = require('./limits');
 const { createLimits } = require('./actor-limits');
 const pkg = require('../package.json');
 
-function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log = console }) {
+function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log = console, valkey = null }) {
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', 'loopback');
@@ -44,13 +44,15 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     // Readiness (openvibe-shared/ready): 503 only when a required check fails. A DLQ past
     // EVENTS_DLQ_DEGRADED_AT degrades the service (still ready: new events are accepted and delivered).
     const checks = [
-        { name: 'db', required: true, check: () => store.ping() },
+        // A real round trip that names the store (postgresql / pglite).
+        { name: 'db', required: true, check: async () => { const r = await store.db.ready(); return r.ok ? { ok: true, detail: r.detail } : r.error; } },
+        { name: 'valkey', required: false, check: async () => (valkey ? valkey.ready() : { skipped: 'VALKEY_URL not set: per-actor limits count in this process only' }) },
         { name: 'network_jwks', required: true, check: () => keys.loaded() || 'Network signing key not loaded yet' },
     ];
     if (config.worker.enabled) checks.push({ name: 'delivery_worker', required: true, check: () => worker.running() || 'delivery worker is not running' });
     checks.push({
-        name: 'dlq', required: false, check: () => {
-            const depth = store.deliveryCounts().dead;
+        name: 'dlq', required: false, check: async () => {
+            const depth = (await store.deliveryCounts()).dead;
             return depth > config.dlqDegradedAt
                 ? { ok: false, error: `${depth} dead deliveries (threshold ${config.dlqDegradedAt})`, detail: { depth, threshold: config.dlqDegradedAt } }
                 : { ok: true, detail: { depth, threshold: config.dlqDegradedAt } };
@@ -58,11 +60,11 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     });
     const readiness = createReadiness({
         service: 'events', release: release.release, checks,
-        details: (body) => {
+        details: async (body) => {
             const dbOk = body.checks.db.status === 'ok';
             return {
-                latest_seq: dbOk ? store.lastSeq() : null,
-                deliveries: dbOk ? store.deliveryCounts() : null,
+                latest_seq: dbOk ? await store.lastSeq() : null,
+                deliveries: dbOk ? await store.deliveryCounts() : null,
                 worker: { enabled: config.worker.enabled, ...worker.stats() },
                 realtime_connections: realtime.count(),
             };
@@ -72,7 +74,7 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
 
     // One per-actor limiter for the capability routes below (server/actor-limits.js); health, ready,
     // release.json, limits.json, metrics and the realtime stream above are never limited.
-    const limits = createLimits({ config, clock, metrics, log });
+    const limits = createLimits({ config, clock, metrics, log, valkey });
     app.use(publishRouter({ config, store, auth, worker, realtime, limits }));
     app.use(subscriptionsRouter({ config, store, auth, dnsLookup, limits }));
     app.use(readRouter({ store, auth, worker, limits }));

@@ -14,10 +14,10 @@
  * Never limited: /api/health, /api/ready, /release.json, /limits.json, /metrics, and the realtime
  * stream (a connection, capped by REALTIME_MAX_CONNECTIONS and REALTIME_MAX_TOPICS).
  */
-const { createActorLimiter } = require('openvibe-sdk/limits');
+const { createActorLimiter, createValkeyLimitStore } = require('openvibe-sdk/limits');
 
 /** limits(name, own) middleware for one app; `clock` is the service's (manual in tests). */
-function createLimits({ config, clock = { now: () => Date.now() }, metrics = null, log = console }) {
+function createLimits({ config, clock = { now: () => Date.now() }, metrics = null, log = console, valkey = null }) {
     // Every named limit with its numbers, as the routes declare them (published in /limits.json as rate_limits).
     const registered = new Map();
     const record = (name, own = {}) => registered.set(name, { minute: own.minute != null ? own.minute : config.limits.minute, hour: own.hour != null ? own.hour : config.limits.hour });
@@ -33,6 +33,8 @@ function createLimits({ config, clock = { now: () => Date.now() }, metrics = nul
     const limiter = createActorLimiter({
         limits: { minute: config.limits.minute, hour: config.limits.hour },
         now: () => clock.now(),
+        // Shared across processes on Valkey (ADR-035) when VALKEY_URL is set; in-process otherwise.
+        ...(valkey ? { store: createValkeyLimitStore(valkey) } : {}),
         onLimited(e) {
             // The actor is a principal id (svc:…, app:app_…), never a token.
             log.warn(`[limits] ${e.name}: ${e.actor} refused, over ${e.limit} per ${e.window}`);

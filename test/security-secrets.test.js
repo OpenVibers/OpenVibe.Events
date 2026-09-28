@@ -129,10 +129,10 @@ t('deliveries, the log and the tables carry no secret', async () => {
     const inLog = crawler.leaks({ text: w.logged.join('\n'), headers: {} }, all).map((l) => l.label);
     assert.deepStrictEqual(inLog, [], 'nothing secret was logged');
     const db = w.h.db;
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all().map((r) => r.name).filter((n) => n !== 'subscriptions');
+    const tables = (await db.prepare("SELECT table_name AS name FROM information_schema.tables WHERE table_schema = current_schema()").all()).map((r) => r.name).filter((n) => n !== 'subscriptions');
     assert.ok(tables.includes('events') && tables.includes('deliveries'));
     const hits = [];
-    for (const tb of tables) for (const l of crawler.leaks({ text: JSON.stringify(db.prepare(`SELECT * FROM "${tb}"`).all()), headers: {} }, all)) hits.push(`${tb}: ${l.label}`);
+    for (const tb of tables) for (const l of crawler.leaks({ text: JSON.stringify(await db.prepare(`SELECT * FROM "${tb}"`).all()), headers: {} }, all)) hits.push(`${tb}: ${l.label}`);
     assert.deepStrictEqual(hits, [], 'no secret outside the subscriptions table (events, deliveries, usage outbox)');
 });
 

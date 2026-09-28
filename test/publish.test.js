@@ -35,7 +35,7 @@ t('valid envelope -> 201 with a seq; defaults filled', async () => {
     assert.strictEqual(r.body.event_id, env.event_id);
     assert.ok(Number.isInteger(r.body.seq) && r.body.seq > 0);
     assert.strictEqual(r.body.duplicate, false);
-    const row = h.store.getEvent(env.event_id);
+    const row = await h.store.getEvent(env.event_id);
     assert.strictEqual(row.priority, 'important');
     assert.strictEqual(row.visibility, 'internal');
     assert.strictEqual(row.trace_id, '0af7651916cd43dd8448eb211c80319c', 'trace taken from traceparent');
@@ -100,7 +100,7 @@ t('idempotent repeat: same event_id -> 200, same seq, stored once', async () => 
     assert.strictEqual(b.status, 200);
     assert.strictEqual(b.body.duplicate, true);
     assert.strictEqual(b.body.seq, a.body.seq);
-    assert.strictEqual(h.db.prepare('SELECT COUNT(*) AS n FROM events WHERE id = ?').get(env.event_id).n, 1);
+    assert.strictEqual((await h.db.prepare('SELECT COUNT(*) AS n FROM events WHERE id = ?').get(env.event_id)).n, 1);
     const c = await request(h.base, 'POST', '/api/v1/events', { token: live, body: { ...env, event_type: 'live.stream.ended' } });
     assert.strictEqual(c.status, 409);
     assert.strictEqual(c.body.code, 'events.id_conflict');
@@ -113,11 +113,11 @@ t('batch: atomic, <= 100, results per event', async () => {
     assert.strictEqual(r.body.results.length, 3);
     assert.ok(r.body.results[0].seq < r.body.results[1].seq && r.body.results[1].seq < r.body.results[2].seq);
 
-    const before = h.store.lastSeq();
+    const before = await h.store.lastSeq();
     r = await request(h.base, 'POST', '/api/v1/events', { token: live, body: { events: [envelope(), envelope('media')] } });
     assert.strictEqual(r.status, 403);
     assert.strictEqual(r.body.index, 1);
-    assert.strictEqual(h.store.lastSeq(), before, 'nothing of a rejected batch is stored');
+    assert.strictEqual(await h.store.lastSeq(), before, 'nothing of a rejected batch is stored');
 
     r = await request(h.base, 'POST', '/api/v1/events', { token: live, body: { events: Array.from({ length: 101 }, () => envelope()) } });
     assert.strictEqual(r.status, 413);
@@ -164,8 +164,8 @@ t('loop guard: one service re-triggering itself on the same subject', async () =
 t('publish receipts outlive retention: a pruned id is still a duplicate', async () => {
     const env = envelope();
     await request(h.base, 'POST', '/api/v1/events', { token: live, body: env });
-    h.store.prune({ retentionDays: 30, receiptRetentionDays: 90, now: Date.now() + 31 * 86400000 });
-    assert.strictEqual(h.store.getEvent(env.event_id), null);
+    await h.store.prune({ retentionDays: 30, receiptRetentionDays: 90, now: Date.now() + 31 * 86400000 });
+    assert.strictEqual(await h.store.getEvent(env.event_id), null);
     const r = await request(h.base, 'POST', '/api/v1/events', { token: live, body: env });
     assert.strictEqual(r.status, 200);
     assert.strictEqual(r.body.duplicate, true);

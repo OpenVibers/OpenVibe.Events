@@ -106,7 +106,7 @@ function createRealtime({ store, auth, config, clock = { now: () => Date.now() }
         return [...new Set(list)];
     }
 
-    function handler(req, res) {
+    async function handler(req, res) {
         const ctx = req.ov;
         const wanted = parseTopics(req.query.topics);
         if (!wanted.length) return http.sendProblem(res, 400, 'realtime.bad_request', { detail: 'topics=<pattern>[,<pattern>] is required', ctx });
@@ -138,46 +138,55 @@ function createRealtime({ store, auth, config, clock = { now: () => Date.now() }
         req.socket.setTimeout(0);
         req.socket.setNoDelay(true);
 
-        const conn = { res, viewer, patterns: wanted, lastSeq: lastId ?? store.lastSeq(), closed: false };
-        write(conn, `retry: 3000\n: connected ${viewer.kind}\n\n`);
-
-        // Catch up synchronously (better-sqlite3 is synchronous, so no event can be published in
-        // between), then join the live fan-out.
-        if (lastId != null) {
-            const latest = store.lastSeq();
-            const oldest = store.oldestSeq();
-            if (lastId > latest) {
-                sendGap(conn, { reason: 'cursor_ahead', from_seq: latest + 1, to_seq: lastId, latest_seq: latest });
-                conn.lastSeq = latest;
-            } else {
-                let cursor = lastId;
-                if (lastId < oldest - 1) {
-                    sendGap(conn, { reason: 'retention', from_seq: lastId + 1, to_seq: oldest - 1, latest_seq: latest });
-                    cursor = oldest - 1;
-                }
-                // Browsers: public events older than the window are not replayed (a gap says so).
-                const publicFrom = viewer.kind === 'service' ? 0
-                    : opts.publicReplaySeconds > 0 ? store.firstSeqSince(clock.now() - opts.publicReplaySeconds * 1000) : latest + 1;
-                if (cursor < publicFrom - 1) {
-                    sendGap(conn, { reason: 'public_window', from_seq: cursor + 1, to_seq: publicFrom - 1, latest_seq: latest, window_seconds: opts.publicReplaySeconds });
-                    // Signed out, only public events are visible: nothing before the window to scan.
-                    if (viewer.kind === 'anonymous') cursor = publicFrom - 1;
-                }
-                const accept = (row) => visibleTo(viewer, row) && !(row.visibility === 'public' && row.seq < publicFrom);
-                const { rows, cursor: scanned } = store.scan(cursor, {
-                    patterns: wanted, limit: opts.replayMax, scanMax: opts.replayMax * 50, accept,
-                });
-                for (const row of rows) sendEvent(conn, row);
-                if (scanned < latest) {
-                    // Replay stopped at its limit: everything after `scanned` is reported as a gap.
-                    sendGap(conn, { reason: 'replay_limit', from_seq: scanned + 1, to_seq: latest, latest_seq: latest });
-                }
-                conn.lastSeq = latest;
-            }
-        }
-
+        // The connection takes its slot and joins the fan-out before the first await, so the cap holds and nothing
+        // published during the catch-up is lost: those rows wait in `pending` and follow the replay, skipping what it sent.
+        const conn = { res, viewer, patterns: wanted, lastSeq: lastId, pending: [], closed: false };
         conns.add(conn);
         res.on('close', () => close(conn));
+        write(conn, `retry: 3000\n: connected ${viewer.kind}\n\n`);
+        try {
+            if (lastId == null) conn.lastSeq = await store.lastSeq();
+            if (lastId != null) {
+                const latest = await store.lastSeq();
+                const oldest = await store.oldestSeq();
+                if (lastId > latest) {
+                    sendGap(conn, { reason: 'cursor_ahead', from_seq: latest + 1, to_seq: lastId, latest_seq: latest });
+                    conn.lastSeq = latest;
+                } else {
+                    let cursor = lastId;
+                    if (lastId < oldest - 1) {
+                        sendGap(conn, { reason: 'retention', from_seq: lastId + 1, to_seq: oldest - 1, latest_seq: latest });
+                        cursor = oldest - 1;
+                    }
+                    // Browsers: public events older than the window are not replayed (a gap says so).
+                    const publicFrom = viewer.kind === 'service' ? 0
+                        : opts.publicReplaySeconds > 0 ? await store.firstSeqSince(clock.now() - opts.publicReplaySeconds * 1000) : latest + 1;
+                    if (cursor < publicFrom - 1) {
+                        sendGap(conn, { reason: 'public_window', from_seq: cursor + 1, to_seq: publicFrom - 1, latest_seq: latest, window_seconds: opts.publicReplaySeconds });
+                        // Signed out, only public events are visible: nothing before the window to scan.
+                        if (viewer.kind === 'anonymous') cursor = publicFrom - 1;
+                    }
+                    const accept = (row) => visibleTo(viewer, row) && !(row.visibility === 'public' && row.seq < publicFrom);
+                    const { rows, cursor: scanned } = await store.scan(cursor, {
+                        patterns: wanted, limit: opts.replayMax, scanMax: opts.replayMax * 50, accept,
+                    });
+                    for (const row of rows) sendEvent(conn, row);
+                    if (scanned < latest) {
+                        // Replay stopped at its limit: everything after `scanned` is reported as a gap.
+                        sendGap(conn, { reason: 'replay_limit', from_seq: scanned + 1, to_seq: latest, latest_seq: latest });
+                    }
+                    conn.lastSeq = latest;
+                }
+            }
+        } catch (err) {
+            // The headers are sent: a failed catch-up can only end the stream (the client reconnects with its Last-Event-ID).
+            log.error(`[realtime] catch-up failed: ${err.message}`);
+            close(conn);
+            return undefined;
+        }
+        const pending = conn.pending;
+        conn.pending = null;
+        for (const row of pending) if (row.seq > conn.lastSeq) sendEvent(conn, row);
         return undefined;
     }
 
@@ -186,10 +195,11 @@ function createRealtime({ store, auth, config, clock = { now: () => Date.now() }
         if (!conns.size) return;
         for (const row of rows) {
             for (const conn of conns) {
-                if (conn.closed || row.seq <= conn.lastSeq) continue;
+                if (conn.closed || (!conn.pending && row.seq <= conn.lastSeq)) continue;
                 if (!conn.patterns.some(p => topics.matches(p, row.event_type))) continue;
                 if (!visibleTo(conn.viewer, row)) continue;
-                sendEvent(conn, row);
+                if (conn.pending) conn.pending.push(row);
+                else sendEvent(conn, row);
             }
         }
     }

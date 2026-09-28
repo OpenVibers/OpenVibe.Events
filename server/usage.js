@@ -36,24 +36,7 @@ const TRACE_RE = /^[0-9a-f]{32}$/;
 const REF_RE = /^evt_[0-9A-HJKMNP-TV-Z]{26}$/;
 const PROJECT_RE = /^prj_[0-9A-HJKMNP-TV-Z]{26}$/;
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS app_usage (
-    project_id   TEXT NOT NULL,
-    env          TEXT NOT NULL,
-    capability   TEXT NOT NULL,
-    unit         TEXT NOT NULL,
-    window_start INTEGER NOT NULL,
-    quantity     INTEGER NOT NULL DEFAULT 0,
-    errors       INTEGER NOT NULL DEFAULT 0,
-    error_codes  TEXT NOT NULL DEFAULT '{}',
-    samples      TEXT NOT NULL DEFAULT '[]',
-    revision     INTEGER NOT NULL DEFAULT 1,
-    event_id     TEXT,
-    emitted_at   INTEGER,
-    PRIMARY KEY (project_id, env, capability, unit, window_start)
-);
-CREATE INDEX IF NOT EXISTS idx_app_usage_open ON app_usage(emitted_at, window_start);
-`;
+// The app_usage table is in migrations/0001_initial.sql.
 
 const hourOf = (ms) => Math.floor(ms / HOUR_MS) * HOUR_MS;
 const parse = (s, d) => { try { return JSON.parse(s); } catch { return d; } };
@@ -71,13 +54,12 @@ function deliveryCode(outcome) {
  * @param {boolean} [o.enabled=true]  false (EVENTS_USAGE=off): nothing is counted
  */
 function createUsage(db, { clock = { now: () => Date.now() }, enabled = true } = {}) {
-    db.exec(SCHEMA);
     const q = {
         add: db.prepare(`INSERT INTO app_usage (project_id, env, capability, unit, window_start, quantity, errors)
             VALUES (@project_id, @env, @capability, @unit, @window_start, @quantity, @errors)
             ON CONFLICT(project_id, env, capability, unit, window_start) DO UPDATE SET
-                quantity = quantity + excluded.quantity, errors = errors + excluded.errors,
-                revision = revision + (CASE WHEN emitted_at IS NULL THEN 0 ELSE 1 END), emitted_at = NULL`),
+                quantity = app_usage.quantity + excluded.quantity, errors = app_usage.errors + excluded.errors,
+                revision = app_usage.revision + (CASE WHEN app_usage.emitted_at IS NULL THEN 0 ELSE 1 END), emitted_at = NULL`),
         get: db.prepare('SELECT error_codes, samples FROM app_usage WHERE project_id = ? AND env = ? AND capability = ? AND unit = ? AND window_start = ?'),
         setErrors: db.prepare(`UPDATE app_usage SET error_codes = ?, samples = ?
             WHERE project_id = ? AND env = ? AND capability = ? AND unit = ? AND window_start = ?`),
@@ -91,13 +73,13 @@ function createUsage(db, { clock = { now: () => Date.now() }, enabled = true } =
      * Count usage (and at most one failure) for a project, inside the caller's transaction when there
      * is one. `error` = { code, status?, traceId?, ref? } counts one error with a sample.
      */
-    const record = db.transaction(({ projectId, env, capability, unit, quantity = 0, error = null, at = clock.now() }) => {
+    const record = async ({ projectId, env, capability, unit, quantity = 0, error = null, at = clock.now() }) => await db.tx(async () => {
         if (!enabled || !PROJECT_RE.test(String(projectId || '')) || (env !== 'sandbox' && env !== 'production')) return;
         const key = { project_id: projectId, env, capability, unit, window_start: hourOf(at) };
-        q.add.run({ ...key, quantity: Math.max(0, Math.trunc(Number(quantity) || 0)), errors: error ? 1 : 0 });
+        await q.add.run({ ...key, quantity: Math.max(0, Math.trunc(Number(quantity) || 0)), errors: error ? 1 : 0 });
         if (!error) return;
         const code = CODE_RE.test(String(error.code || '')) ? String(error.code) : 'events.error';
-        const row = q.get.get(projectId, env, capability, unit, key.window_start);
+        const row = await q.get.get(projectId, env, capability, unit, key.window_start);
         const codes = parse(row.error_codes, {});
         if (codes[code] || Object.keys(codes).length < MAX_CODES) codes[code] = (codes[code] || 0) + 1;
         const sample = { at: new Date(at).toISOString(), code };
@@ -105,7 +87,7 @@ function createUsage(db, { clock = { now: () => Date.now() }, enabled = true } =
         if (TRACE_RE.test(String(error.traceId || ''))) sample.trace_id = error.traceId;
         if (REF_RE.test(String(error.ref || ''))) sample.ref = error.ref;
         const samples = [sample, ...parse(row.samples, [])].slice(0, MAX_SAMPLES);
-        q.setErrors.run(JSON.stringify(codes), JSON.stringify(samples), projectId, env, capability, unit, key.window_start);
+        await q.setErrors.run(JSON.stringify(codes), JSON.stringify(samples), projectId, env, capability, unit, key.window_start);
     });
 
     function payloadOf(row) {
@@ -126,10 +108,10 @@ function createUsage(db, { clock = { now: () => Date.now() }, enabled = true } =
      * Store every closed hour's rollups as events.usage.recorded (at most `limit`). `insertBatch` is
      * the store's; the returned rows are what it stored, for the realtime fan-out and the worker kick.
      */
-    function flush(insertBatch, { now = clock.now(), limit = 500 } = {}) {
+    async function flush(insertBatch, { now = clock.now(), limit = 500 } = {}) {
         const stored = [];
         let invalid = 0;
-        const rows = q.due.all(hourOf(now - GRACE_MS) - HOUR_MS, limit);
+        const rows = await q.due.all(hourOf(now - GRACE_MS) - HOUR_MS, limit);
         for (const row of rows) {
             const payload = payloadOf(row);
             const envelope = {
@@ -145,19 +127,19 @@ function createUsage(db, { clock = { now: () => Date.now() }, enabled = true } =
                 invalid++;
                 continue;
             }
-            db.transaction(() => {
-                const out = insertBatch([envelope], { publisher: 'svc:events', requestId: null });
-                q.sent.run(now, envelope.event_id, row.project_id, row.env, row.capability, row.unit, row.window_start);
+            await db.tx(async () => {
+                const out = await insertBatch([envelope], { publisher: 'svc:events', requestId: null });
+                await q.sent.run(now, envelope.event_id, row.project_id, row.env, row.capability, row.unit, row.window_start);
                 stored.push(...out.inserted);
-            })();
+            });
         }
-        q.prune.run(now - KEEP_SENT_MS);
+        await q.prune.run(now - KEEP_SENT_MS);
         return { stored, invalid };
     }
 
     return {
         record, flush, payloadOf, deliveryCode,
-        pending: () => q.pending.get().n,
+        pending: async () => (await q.pending.get()).n,
     };
 }
 

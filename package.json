@@ -7,9 +7,16 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "NODE_ENV=development node server/index.js",
-    "test": "node test/run.js"
+    "test": "node test/run.js",
+    "test:pg": "EVENTS_TEST_STORE=pg node test/run.js"
   },
-  "keywords": ["openvibe", "events", "outbox", "webhooks", "sse"],
+  "keywords": [
+    "openvibe",
+    "events",
+    "outbox",
+    "webhooks",
+    "sse"
+  ],
   "author": "OpenVibers",
   "license": "AGPL-3.0-only",
   "repository": "github:OpenVibers/OpenVibe.Events",
@@ -17,11 +24,15 @@
     "better-sqlite3": "^11.10.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "openvibe-contracts": "https://codeload.github.com/OpenVibers/OpenVibe.Contracts/tar.gz/refs/tags/v0.63.0",
-    "openvibe-sdk": "https://codeload.github.com/OpenVibers/OpenVibe.SDK/tar.gz/refs/tags/v0.12.0",
-    "openvibe-shared": "https://codeload.github.com/OpenVibers/OpenVibe.Shared/tar.gz/refs/tags/v1.25.0"
+    "openvibe-contracts": "https://codeload.github.com/OpenVibers/OpenVibe.Contracts/tar.gz/refs/tags/v0.76.0",
+    "openvibe-sdk": "https://codeload.github.com/OpenVibers/OpenVibe.SDK/tar.gz/refs/tags/v0.20.4",
+    "openvibe-shared": "https://codeload.github.com/OpenVibers/OpenVibe.Shared/tar.gz/refs/tags/v1.28.0",
+    "pg": "^8.23.0"
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8"
   }
 }

@@ -71,8 +71,8 @@ function appEvent(appId, projectId, name = 'order.created', over = {}) {
         actor: { type: 'app', id: appId }, subject: { type: 'order', id: '42' }, visibility: 'internal', ...over,
     });
 }
-const publish = (token, body) => request(h.base, 'POST', '/api/v1/events', { token, body });
-const pull = (token, topic, after = 0) => request(h.base, 'GET', `/api/v1/events?topic=${encodeURIComponent(topic)}&after_seq=${after}`, { token });
+const publish = async (token, body) => await request(h.base, 'POST', '/api/v1/events', { token, body });
+const pull = async (token, topic, after = 0) => await request(h.base, 'GET', `/api/v1/events?topic=${encodeURIComponent(topic)}&after_seq=${after}`, { token });
 
 t('boot', async () => {
     await new Promise(r => receiver.listen(0, '127.0.0.1', r));
@@ -95,7 +95,7 @@ t('project_key and app source are defined exactly (and fit the envelope contract
 t('publish: an app publishes app.<project_key>.* only, as its own source and actor', async () => {
     let r = await publish(tokA(), appEvent(appA, prjA));
     assert.strictEqual(r.status, 201, r.text);
-    const row = h.store.getEvent(r.body.event_id);
+    const row = await h.store.getEvent(r.body.event_id);
     assert.strictEqual(row.project_id, prjA);
     assert.strictEqual(row.env, 'sandbox');
     assert.strictEqual(row.publisher, `app:${appA}`);
@@ -187,7 +187,7 @@ t('read: own project in the same environment, plus public first-party events', a
 
 let subA;
 t('subscribe: scoped patterns, public https endpoints only', async () => {
-    const sub = (token, body) => request(h.base, 'POST', '/api/v1/subscriptions', { token, body });
+    const sub = async (token, body) => await request(h.base, 'POST', '/api/v1/subscriptions', { token, body });
     for (const endpoint of ['http://hooks.example.com/x', 'https://127.0.0.1/x', 'https://[::1]/x', 'https://10.1.2.3/x', 'https://169.254.169.254/latest',
         'https://evil.example.com/x', 'https://localhost/x', 'https://u:p@hooks.example.com/x', 'https://nowhere.example.com/x', 'https://intranet/x']) {
         const r = await sub(tokA(), { topic_pattern: `app.${keyA}.*`, endpoint });
@@ -282,10 +282,10 @@ t('delivery-time SSRF guard: re-resolved on every attempt, redirects never follo
     const ev = await publish(tokB(), appEvent(appB, prjB, 'rebind.test'));
     const ev2 = await publish(tokB(), appEvent(appB, prjB, 'redirect.test'));
     await h.worker.drain();
-    const d = h.store.getDelivery(ev.body.event_id, r.body.id);
+    const d = await h.store.getDelivery(ev.body.event_id, r.body.id);
     assert.strictEqual(d.status, 'dead', 'a private address at delivery time is refused for good');
     assert.match(d.last_error, /non-public/);
-    const d2 = h.store.getDelivery(ev2.body.event_id, redir.body.id);
+    const d2 = await h.store.getDelivery(ev2.body.event_id, redir.body.id);
     assert.strictEqual(d2.status, 'failed'); assert.strictEqual(d2.last_status, 302);
     assert.deepStrictEqual(seen.map(s => s.url).filter(u => u !== '/b-project'), ['/redirect'], 'one request, the redirect was not followed, nothing reached the rebound host');
 });
@@ -293,7 +293,7 @@ t('delivery-time SSRF guard: re-resolved on every attempt, redirects never follo
 t('quotas: per-project publish rate and retained bytes', async () => {
     const h2 = await boot({ appPost: testPost, dnsLookup: fakeLookup, env: { EVENTS_APP_PUBLISH_PER_MINUTE: '3', EVENTS_APP_SANDBOX_RETAINED_BYTES: '3000' } });
     try {
-        const pub = (token, body) => request(h2.base, 'POST', '/api/v1/events', { token, body });
+        const pub = async (token, body) => await request(h2.base, 'POST', '/api/v1/events', { token, body });
         for (let i = 0; i < 3; i++) assert.strictEqual((await pub(tokA2(), appEvent(appA2, prjA))).status, 201);
         let r = await pub(tokA2(), appEvent(appA2, prjA));
         assert.strictEqual(r.status, 429); assert.strictEqual(r.body.code, 'events.quota_exceeded');
@@ -339,7 +339,7 @@ t('revocation from Network stops an app\'s subscriptions and old tokens', async 
         subject: { type: 'app', id: appA }, payload: { project_id: prjA, environment: 'sandbox', reason: 'test' },
     }));
     assert.strictEqual(r.status, 201, r.text);
-    assert.ok(h.store.listSubscriptions(`app:${appA}`).every(s => !s.enabled));
+    assert.ok((await h.store.listSubscriptions(`app:${appA}`)).every(s => !s.enabled));
     r = await pull(tokA(), `app.${keyA}.*`);
     assert.strictEqual(r.status, 401); assert.strictEqual(r.body.code, 'token.revoked');
     r = await publish(tokA(), appEvent(appA, prjA));
@@ -358,7 +358,7 @@ t('realtime never streams app events, to anyone', async () => {
     await anon.waitFor(c => c.events().some(e => e.event.event_id === marker.body.event_id));
     assert.ok(!svc.events().some(e => e.event.event_type.startsWith('app.')));
     assert.ok(!anon.events().some(e => e.event.event_type.startsWith('app.')));
-    svc.close(); anon.close();
+    await svc.close(); anon.close();
 });
 
 t('stop', async () => {

@@ -11,7 +11,7 @@ const media = serviceToken('media', ['events.subscription.manage']);
 const admin = serviceToken('ops', ['events.delivery.admin']);
 
 async function subscribe(token, body) {
-    return request(h.base, 'POST', '/api/v1/subscriptions', { token, body });
+    return await request(h.base, 'POST', '/api/v1/subscriptions', { token, body });
 }
 async function publish(env) {
     const r = await request(h.base, 'POST', '/api/v1/events', { token: live, body: env });
@@ -100,7 +100,7 @@ t('success: signed POST (v2 only), verified by verifyDeliveryV2; trace propagate
     const sub = (await subscribe(media, { topic_pattern: 'live.stream.*', endpoint: stub.url })).body;
     const env = envelope('live', { trace_id: '4bf92f3577b34da6a3ce929d0e0e4736' });
     const { seq } = await publish(env);
-    assert.strictEqual(h.store.getDelivery(env.event_id, sub.id).status, 'pending', 'persisted before delivery');
+    assert.strictEqual((await h.store.getDelivery(env.event_id, sub.id)).status, 'pending', 'persisted before delivery');
     await h.worker.drain();
     assert.strictEqual(stub.calls.length, 1);
     const call = stub.calls[0];
@@ -118,7 +118,7 @@ t('success: signed POST (v2 only), verified by verifyDeliveryV2; trace propagate
     assert.match(call.headers.traceparent, /^00-4bf92f3577b34da6a3ce929d0e0e4736-[0-9a-f]{16}-01$/);
     assert.deepStrictEqual(call.body.event.payload, env.payload);
     assert.strictEqual(call.body.seq, seq);
-    const d = h.store.getDelivery(env.event_id, sub.id);
+    const d = await h.store.getDelivery(env.event_id, sub.id);
     assert.strictEqual(d.status, 'delivered');
     assert.strictEqual(d.attempt, 1);
     await request(h.base, 'POST', `/api/v1/subscriptions/${sub.id}/disable`, { token: media });
@@ -139,7 +139,7 @@ t('retries with backoff (injectable clock), then DLQ after 8 attempts, then repl
         assert.strictEqual(call.headers['x-openvibe-timestamp'], String(Math.floor(h.clock.now() / 1000)), 'every retry is signed with a fresh timestamp');
         assert.ok(verifyDeliveryV2(call.rawBody, call.headers, sub.secret, { now: h.clock.now() }));
         if (attempt > 1) assert.notStrictEqual(call.headers['x-openvibe-signature-v2'], stub.calls[attempt - 2].headers['x-openvibe-signature-v2']);
-        const d = h.store.getDelivery(env.event_id, sub.id);
+        const d = await h.store.getDelivery(env.event_id, sub.id);
         assert.strictEqual(d.attempt, attempt);
         if (attempt < 8) {
             assert.strictEqual(d.status, 'failed');
@@ -170,7 +170,7 @@ t('retries with backoff (injectable clock), then DLQ after 8 attempts, then repl
     assert.strictEqual(rp.body.queued, 1);
     await h.worker.drain();
     assert.strictEqual(stub.calls.length, 9);
-    assert.strictEqual(h.store.getDelivery(env.event_id, sub.id).status, 'delivered');
+    assert.strictEqual((await h.store.getDelivery(env.event_id, sub.id)).status, 'delivered');
     await request(h.base, 'POST', `/api/v1/subscriptions/${sub.id}/disable`, { token: media });
     await stub.close();
 });
@@ -203,13 +203,13 @@ t('priority classes: critical before important before low', async () => {
     await publish(envelope('live', { event_type: 'live.prio.x', priority: 'low' }));
     await publish(envelope('live', { event_type: 'live.prio.x', priority: 'important' }));
     await publish(envelope('live', { event_type: 'live.prio.x', priority: 'critical' }));
-    const due = h.store.dueDeliveries(h.clock.now(), 100);
+    const due = await h.store.dueDeliveries(h.clock.now(), 100);
     assert.strictEqual(due.length, 3, 'one per subscription');
     assert.ok(due.every(d => d.priority === 0), 'each subscription\'s head is its critical event');
     await h.worker.drain();
     for (const o of orders) assert.deepStrictEqual(o, ['critical', 'important', 'low']);
     for (const s of stubs) await s.close();
-    for (const sub of h.store.listSubscriptions()) h.store.setSubscriptionEnabled(sub.id, false);
+    for (const sub of await h.store.listSubscriptions()) await h.store.setSubscriptionEnabled(sub.id, false);
 });
 
 t('backpressure: one in flight per subscription, <= maxInflight (20) overall', async () => {
@@ -234,7 +234,7 @@ t('backpressure: one in flight per subscription, <= maxInflight (20) overall', a
     await bp.worker.drain();
     assert.strictEqual(peak, 20, `peak in flight ${peak}`);
     assert.strictEqual(perSubPeak, 1);
-    assert.strictEqual(bp.store.deliveryCounts().delivered, 75);
+    assert.strictEqual((await bp.store.deliveryCounts()).delivered, 75);
     await bp.stop();
 });
 

@@ -72,7 +72,7 @@ function createKeyStore({ urls = [], pem = null, fetchImpl = globalThis.fetch, l
         return null;
     }
 
-    function start() {
+    async function start() {
         if (pem) return Promise.resolve(key);
         const attempt = async () => {
             const k = await fetchOnce();
@@ -84,7 +84,7 @@ function createKeyStore({ urls = [], pem = null, fetchImpl = globalThis.fetch, l
         };
         refreshTimer = setInterval(() => { fetchOnce().catch(() => {}); }, 6 * 60 * 60 * 1000);
         refreshTimer.unref?.();
-        return attempt();
+        return await attempt();
     }
 
     function stop() {
@@ -259,7 +259,7 @@ function createAuth({ config, keys, store = null }) {
      */
     function appOrService(serviceCap, appCap, { requireService = false } = {}) {
         const serviceGuard = requireCap(serviceCap, { requireService });
-        return function appOrServiceGuard(req, res, next) {
+        return async function appOrServiceGuard(req, res, next) {
             const ctx = req.ov;
             const token = bearer(req);
             if (!token || !config.apps.enabled) return serviceGuard(req, res, next);
@@ -268,7 +268,7 @@ function createAuth({ config, keys, store = null }) {
             const principal = apps.appPrincipal(r.claims);
             if (principal.error) return http.sendProblem(res, 401, 'token.invalid_claims', { detail: principal.error, ctx });
             // Network revoked this app after the token was issued (network.app.revoked reached us).
-            const revoked = store && store.revokedAt(principal.sub, 'app');
+            const revoked = store && await store.revokedAt(principal.sub, 'app');
             if (revoked && r.claims.iat * 1000 <= revoked) return http.sendProblem(res, 401, 'token.revoked', { detail: 'this app was revoked', ctx });
             const c = allows(r.claims, appCap);
             if (!c.allowed) return http.sendProblem(res, 403, c.code, { detail: c.reason, ctx });

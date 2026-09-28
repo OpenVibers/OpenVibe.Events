@@ -61,8 +61,8 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
     }
 
     async function send(delivery) {
-        const sub = store.getSubscription(delivery.subscription_id);
-        const row = store.getEvent(delivery.event_id);
+        const sub = await store.getSubscription(delivery.subscription_id);
+        const row = await store.getEvent(delivery.event_id);
         const attempt = delivery.attempt + 1;
         if (!sub || !row) return; // pruned or removed while queued; cascade deletes the delivery
         const { maxAttempts, backoffMs } = policy(sub);
@@ -112,7 +112,7 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
         }
         // A developer app's subscription: the attempt counts toward its project's usage (./usage.js).
         const app = sub.project_id ? { projectId: sub.project_id, env: sub.env || 'production', traceId: row.trace_id } : null;
-        store.recordAttempt(delivery.event_id, delivery.subscription_id, outcome, app);
+        await store.recordAttempt(delivery.event_id, delivery.subscription_id, outcome, app);
         if (observe) {
             try {
                 observe.attempt(outcome.ok ? 'delivered' : outcome.dead ? 'dead' : 'retry');
@@ -122,8 +122,21 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
         }
     }
 
-    /** Start every due delivery there is room for. Returns how many were started. */
+    // One pass at a time: the due query and start() must not interleave, or a second pass would read the rows the
+    // first is starting and send them twice. A call during a pass gets one more pass right after it.
+    let passing = null;
+    let queued = null;
     function dispatch() {
+        if (!passing) {
+            passing = dispatchPass().finally(() => { passing = null; });
+            return passing;
+        }
+        if (!queued) queued = passing.catch(() => {}).then(() => { queued = null; return dispatch(); });
+        return queued;
+    }
+
+    /** Start every due delivery there is room for. Returns how many were started. */
+    async function dispatchPass() {
         lastTickAt = Date.now();
         const room = opts.maxInflight - inflight.size;
         if (room <= 0) return 0;
@@ -138,10 +151,10 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
                 started++;
             }
         };
-        startAll(store.dueDeliveries(clock.now(), room, [...busy], { firstPartyOnly: appInflight >= opts.maxAppInflight }));
+        startAll(await store.dueDeliveries(clock.now(), room, [...busy], { firstPartyOnly: appInflight >= opts.maxAppInflight }));
         // App deliveries (which can outrank first-party ones by priority) filled the app share: the
         // rest of the room goes to first-party subscriptions.
-        if (skippedApp && started < room) startAll(store.dueDeliveries(clock.now(), room - started, [...busy], { firstPartyOnly: true }));
+        if (skippedApp && started < room) startAll(await store.dueDeliveries(clock.now(), room - started, [...busy], { firstPartyOnly: true }));
         return started;
     }
 
@@ -163,9 +176,9 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
         if (!running) return;
         if (timer && ms > 0) return; // a tick is already coming
         clearTimeout(timer);
-        timer = setTimeout(() => {
+        timer = setTimeout(async () => {
             timer = null;
-            try { dispatch(); } catch (err) { log.error(`[worker] tick failed: ${err.stack || err}`); }
+            try { await dispatch(); } catch (err) { log.error(`[worker] tick failed: ${err.stack || err}`); }
             schedule(opts.intervalMs);
         }, ms);
         timer.unref?.();
@@ -174,7 +187,7 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
     /** Deliver everything due now (and whatever becomes due as a result), then resolve. Tests. */
     async function drain() {
         for (;;) {
-            const started = dispatch();
+            const started = await dispatch();
             if (!started && !inflight.size) return;
             if (inflight.size) await Promise.race([...inflight]);
         }

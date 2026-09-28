@@ -27,8 +27,8 @@ const appEvent = () => envelope('x', {
     source: apps.appSource(appId), event_type: `app.${apps.projectKey(projectId)}.order.created`,
     actor: { type: 'app', id: appId }, subject: { type: 'order', id: '42' }, visibility: 'internal',
 });
-const get = (token, p) => request(h.base, 'GET', p, { token });
-const publish = (token, body) => request(h.base, 'POST', '/api/v1/events', { token, body });
+const get = async (token, p) => await request(h.base, 'GET', p, { token });
+const publish = async (token, body) => await request(h.base, 'POST', '/api/v1/events', { token, body });
 
 t('boot (EVENTS_LIMITS_MINUTE=3; the app event quota off, so only the per-actor limit answers)', async () => {
     h = await boot({ clock, env: { EVENTS_LIMITS_MINUTE: '3', EVENTS_LIMITS_HOUR: '100', EVENTS_APP_PUBLISH_PER_MINUTE: '0' } });
@@ -65,10 +65,10 @@ t('publish: an app gets 60 requests a minute; the 61st is refused before anythin
         const r = await publish(app, appEvent());
         assert.strictEqual(r.status, 201, r.text);
     }
-    const before = h.store.lastSeq();
+    const before = await h.store.lastSeq();
     const r = await publish(app, appEvent());
     assert.deepStrictEqual([r.status, r.body.code, r.headers.get('retry-after')], [429, 'rate_limited', '60']);
-    assert.strictEqual(h.store.lastSeq(), before, 'nothing stored');
+    assert.strictEqual(await h.store.lastSeq(), before, 'nothing stored');
     assert.strictEqual((await publish(live, envelope('live'))).status, 201, 'a service still publishes');
 });
 

@@ -152,7 +152,7 @@ t('disconnect and resume from the cursor with a fresh ticket: the missed events,
 
 t('a cursor older than retention is reported as a gap before the events kept', async () => {
     const old = await publish(network, notified(alice, 5));
-    h.store.prune({ retentionDays: 30, now: Date.now() + 31 * 86400000 });
+    await h.store.prune({ retentionDays: 30, now: Date.now() + 31 * 86400000 });
     const kept = await publish(network, notified(alice, 6));
     const c = await stream(`topics=${TOPIC}&ticket=${realtimeTicket({ subjectId: alice })}&last_event_id=${old - 1}`);
     await c.waitFor(x => x.events().length === 1);

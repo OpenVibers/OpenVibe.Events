@@ -28,7 +28,7 @@ function exportToken(env, { project = P, cap = ['events.app.read'] } = {}) {
 
 let h;
 const seqs = { production: [], sandbox: [] };
-const pull = (token, after = 0, limit = 100, topic = `app.${key}.*`) => request(h.base, 'GET', `/api/v1/events?topic=${encodeURIComponent(topic)}&after_seq=${after}&limit=${limit}`, { token });
+const pull = async (token, after = 0, limit = 100, topic = `app.${key}.*`) => await request(h.base, 'GET', `/api/v1/events?topic=${encodeURIComponent(topic)}&after_seq=${after}&limit=${limit}`, { token });
 
 t('boot and publish as the project\'s app, in both environments (and another project)', async () => {
     h = await boot();

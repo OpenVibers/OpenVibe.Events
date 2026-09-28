@@ -122,7 +122,7 @@ t('worker: app deliveries never take every in-flight slot', async () => {
         }
         const r = await request(h.base, 'POST', '/api/v1/events', { token: serviceToken('live', ['events.event.publish']), body: envelope('live') });
         assert.strictEqual(r.status, 201);
-        h.worker.dispatch();
+        await h.worker.dispatch();
         for (let i = 0; i < 40 && !firstParty.calls.length; i++) await sleep(25);
         assert.strictEqual(firstParty.calls.length, 1, 'the first-party delivery got a slot');
         assert.ok(pending.length >= 1, 'app deliveries still run');

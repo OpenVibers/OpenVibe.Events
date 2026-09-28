@@ -32,7 +32,7 @@ const ALL = ['events.app.publish', 'events.app.read', 'events.app.subscribe'];
 async function buildWorld({ env = {} } = {}) {
     const dir = tmpDir();
     const logged = [];
-    const keep = (...a) => logged.push(a.map((x) => (x && x.stack) || String(x)).join(' '));
+    const keep = (...a) => { logged.push(a.map((x) => (x && x.stack) || String(x)).join(' ')); if (process.env.DEBUG) console.error(...a); };
     const log = { log: keep, info: keep, warn: keep, error: keep };
 
     // App endpoints: a fake DNS, and a local receiver standing in for every public address.
@@ -63,7 +63,8 @@ async function buildWorld({ env = {} } = {}) {
 
     const clock = manualClock();
     const config = load({ NODE_ENV: 'test', PORT: '0', EVENTS_DB_PATH: path.join(dir, 'events.db'), OV_NETWORK_PUBLIC_KEY: publicKey, EVENTS_WORKER: 'off', ...env });
-    const h = await start({ config, clock, log, appPost, dnsLookup });
+    const testdb = await require('./db').testDb();   // a database of its own (PGlite, or the containers under test:pg)
+    const h = await start({ config, db: testdb.db, clock, log, appPost, dnsLookup });
     const base = `http://127.0.0.1:${h.server.address().port}`;
     const routes = crawler.listRoutes(h.server);
 
@@ -84,7 +85,7 @@ async function buildWorld({ env = {} } = {}) {
         userX: userToken({ subjectId: x }),
         userY: userToken({ subjectId: y }),
     };
-    const call = (token, method, p, body, headers = {}) => request(base, method, p, { token, body, headers });
+    const call = async (token, method, p, body, headers = {}) => await request(base, method, p, { token, body, headers });
     const must = (r, status, what) => { if (r.status !== status) throw new Error(`${what}: ${r.status} ${r.text.slice(0, 300)}`); return r; };
     const shownOnce = [];
     const once = (what, r) => { shownOnce.push({ what, status: r.status, cache: r.headers.get('cache-control') || '' }); return r; };
@@ -133,7 +134,7 @@ async function buildWorld({ env = {} } = {}) {
     return {
         h, base, dir, config, clock, routes, logged, secrets, subs, ev, markers, tok, shownOnce, call, fp, appSeen, dnsTable, dnsLookup,
         ids: { PA, PB, A, A2, B, x, y, keyA, keyB }, privateKey, realtimeTicket,
-        stop: async () => { await fp.close(); await new Promise((r) => receiver.close(r)); await h.close(); fs.rmSync(dir, { recursive: true, force: true }); },
+        stop: async () => { await fp.close(); await new Promise((r) => receiver.close(r)); await h.close(); await testdb.close(); fs.rmSync(dir, { recursive: true, force: true }); },
     };
 }
 

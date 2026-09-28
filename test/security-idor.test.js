@@ -19,7 +19,7 @@ const apps = require('../server/apps');
 
 const t = suite('security-idor');
 let w;
-const snap = () => JSON.stringify(['subscriptions', 'events', 'deliveries', 'consumer_checkpoints'].map((tb) => w.h.db.prepare(`SELECT * FROM "${tb}" ORDER BY rowid`).all()));
+const snap = async () => JSON.stringify((await Promise.all(['subscriptions', 'events', 'deliveries', 'consumer_checkpoints'].map(async (tb) => await w.h.db.prepare(`SELECT * FROM "${tb}" ORDER BY 1, 2`).all()))));
 
 t('world', async () => { w = await buildWorld(); });
 
@@ -36,7 +36,7 @@ t('another consumer\'s subscription: 404 on every route, nothing changes', async
         'A2 as sandbox': appToken({ appId: ids.A2, projectId: ids.PA, env: 'sandbox', cap: ALL }),
     };
     const bad = [];
-    const before = snap();
+    const before = await snap();
     const tryAll = async (who, token, id) => {
         for (const [m, p, body] of [['GET', `/api/v1/subscriptions/${id}`], ['POST', `/api/v1/subscriptions/${id}/rotate-secret`, { secret: 'x'.repeat(40) }],
             ['POST', `/api/v1/subscriptions/${id}/disable`], ['POST', `/api/v1/subscriptions/${id}/enable`]]) {
@@ -50,7 +50,7 @@ t('another consumer\'s subscription: 404 on every route, nothing changes', async
     await tryAll('A naming project B', crafted['A naming project B'], subs.appA.id);
     await tryAll('A2 as sandbox', crafted['A2 as sandbox'], subs.appA2.id);
     assert.deepStrictEqual(bad, [], bad.join('\n'));
-    assert.strictEqual(snap(), before, 'the refusals changed nothing');
+    assert.strictEqual(await snap(), before, 'the refusals changed nothing');
     // Lists: the crafted tokens list nothing of A's.
     for (const [who, token] of Object.entries(crafted)) {
         const r = await request(w.base, 'GET', '/api/v1/subscriptions', { token });
@@ -68,7 +68,7 @@ t('another consumer\'s subscription: 404 on every route, nothing changes', async
 t('publishing into another namespace, source or project is refused and stores nothing', async () => {
     const { tok, ids } = w;
     const ev = (appId, projectId, over = {}) => envelope('x', { source: apps.appSource(appId), event_type: `app.${apps.projectKey(projectId)}.order.created`, actor: { type: 'app', id: appId }, subject: { type: 'order', id: '1' }, ...over });
-    const before = snap();
+    const before = await snap();
     const tries = [
         ['app A into B\'s namespace', tok.appA, ev(ids.A, ids.PB)],
         ['app A as B\'s source', tok.appA, ev(ids.A, ids.PA, { source: apps.appSource(ids.B) })],
@@ -91,7 +91,7 @@ t('publishing into another namespace, source or project is refused and stores no
         if (r2.status < 400 && !(r2.body && Array.isArray(r2.body.results) && r2.body.results.every((x) => x.status >= 400 || x.error))) bad.push(`${what} (batch) → ${r2.status} ${r2.text.slice(0, 120)}`);
     }
     assert.deepStrictEqual(bad, [], bad.join('\n'));
-    assert.strictEqual(snap(), before, 'nothing was stored or queued');
+    assert.strictEqual(await snap(), before, 'nothing was stored or queued');
     // Positive controls: each publishes into its own.
     assert.strictEqual((await request(w.base, 'POST', '/api/v1/events', { token: tok.appB, body: ev(ids.B, ids.PB) })).status, 201);
     assert.strictEqual((await request(w.base, 'POST', '/api/v1/events', { token: tok.live, body: envelope('live') })).status, 201);
@@ -99,7 +99,7 @@ t('publishing into another namespace, source or project is refused and stores no
 
 t('deliveries, replay and checkpoints across consumers', async () => {
     const { tok, subs, ids, ev } = w;
-    const before = snap();
+    const before = await snap();
     const bad = [];
     for (const who of ['appA', 'appB', 'appA2', 'live', 'media', 'reader']) {
         for (const [m, p, body] of [['GET', `/api/v1/deliveries?subscription_id=${subs.appB.id}`], ['GET', '/api/v1/deliveries?status=dead'],
@@ -120,7 +120,7 @@ t('deliveries, replay and checkpoints across consumers', async () => {
         if (r.status !== 403) bad.push(`checkpoint ${topic} → ${r.status}`);
     }
     assert.deepStrictEqual(bad, [], bad.join('\n'));
-    assert.strictEqual(snap(), before, 'the refusals changed nothing');
+    assert.strictEqual(await snap(), before, 'the refusals changed nothing');
     const r = await request(w.base, 'POST', '/api/v1/deliveries/replay', { token: tok.ops, body: { subscription_id: subs.appB.id, from_seq: 0 } });
     assert.strictEqual(r.status, 200, 'the operator replays (positive control)');
 });

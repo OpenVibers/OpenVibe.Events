@@ -34,13 +34,13 @@ function matches(pattern, eventType) {
 }
 
 /**
- * A SQLite GLOB that selects a superset of what the pattern matches (GLOB `*` also spans dots),
- * so the SQL narrows the scan and matches() makes the exact decision. Valid patterns only contain
- * [a-z0-9_.*], none of which GLOB treats specially except `*`, so the pattern is its own GLOB.
+ * A ILIKE pattern (PostgreSQL, ESCAPE '\\') that selects a superset of what the pattern matches (`%` also spans dots),
+ * so the SQL narrows the scan and matches() makes the exact decision. Valid patterns only contain [a-z0-9_.*]: `_` is
+ * escaped (it is a ILIKE wildcard) and `*` becomes `%`. ILIKE compares exactly, as GLOB did.
  */
-function toGlob(pattern) {
+function toLike(pattern) {
     if (!isValidPattern(pattern)) throw new TypeError(`invalid topic pattern "${pattern}"`);
-    return pattern;
+    return pattern.replace(/_/g, '\\_').replace(/\*/g, '%');
 }
 
-module.exports = { isValidPattern, compile, matches, toGlob };
+module.exports = { isValidPattern, compile, matches, toLike };

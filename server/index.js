@@ -17,11 +17,12 @@ const { createMetrics } = require('./metrics');
 const { createGuardedPost } = require('./egress');
 
 async function start({
-    config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, deliveryFetch = fetchImpl,
+    config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, deliveryFetch = fetchImpl,
     appPost = undefined, dnsLookup = undefined, log = console, listen = true,
 } = {}) {
     config = config || load();
-    const db = openDb(config.dbPath);
+    // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
+    const db = givenDb || await openDb(config, { log });
     const store = createStore(db, { clock, maxHops: config.maxHops, usage: config.usage });
     const keys = createKeyStore({ urls: [config.networkInternalUrl, config.networkUrl], pem: config.networkPublicKey, fetchImpl, log });
     const auth = createAuth({ config, keys, store });
@@ -31,16 +32,17 @@ async function start({
     const worker = createWorker({ store, config, clock, fetchImpl: deliveryFetch, appPost: appPost || createGuardedPost({ lookup: dnsLookup }), log, observe: metrics.observe });
     const realtime = createRealtime({ store, auth, config, clock, log });
     metrics.bind({ realtime });
-    const app = createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log });
+    const valkey = config.valkey.url ? require('openvibe-sdk/valkey').createValkey({ url: config.valkey.url, prefix: config.valkey.prefix, log }) : null;
+    const app = createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log, valkey });
 
     // The key loads in the background (retrying while Network boots); /api/ready says when it has.
     const keyLoaded = keys.start().catch(() => null);
     if (config.worker.enabled) worker.start();
     realtime.start();
 
-    const prune = () => {
+    const prune = async () => {
         try {
-            const r = store.prune({ retentionDays: config.retentionDays, receiptRetentionDays: config.receiptRetentionDays, sandboxRetentionDays: config.apps.sandboxRetentionDays });
+            const r = await store.prune({ retentionDays: config.retentionDays, receiptRetentionDays: config.receiptRetentionDays, sandboxRetentionDays: config.apps.sandboxRetentionDays });
             if (r.events || r.receipts) log.log(`[retention] pruned ${r.events} events, ${r.receipts} receipts`);
         } catch (err) {
             log.error(`[retention] prune failed: ${err.message}`);
@@ -48,13 +50,13 @@ async function start({
     };
     const pruneTimer = setInterval(prune, config.pruneIntervalMs);
     pruneTimer.unref?.();
-    if (config.worker.enabled) prune();
+    if (config.worker.enabled) await prune();
 
     // Project usage rollups (server/usage.js): each closed hour is stored as events.usage.recorded and
     // fanned out like a published event.
-    const flushUsage = (opts) => {
+    const flushUsage = async (opts) => {
         try {
-            const r = store.flushUsage(opts);
+            const r = await store.flushUsage(opts);
             if (r.stored.length) {
                 realtime.publish(r.stored);
                 worker.kick();
@@ -91,7 +93,8 @@ async function start({
             server.closeAllConnections?.();
             await new Promise(resolve => server.close(() => resolve()));
         }
-        db.close();
+        if (valkey) await valkey.close();
+        if (!givenDb) await db.close();
     }
 
     return { config, db, store, keys, keyLoaded, auth, worker, realtime, metrics, app, server, close, prune, flushUsage };

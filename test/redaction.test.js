@@ -109,13 +109,13 @@ t('chat.message.deleted turns the stored event into a tombstone at the same seq'
     const r = await publish(chat, env);
     delSeq = r.seq;
     assert.strictEqual(delSeq, msgSeq + 1);
-    const row = h.store.getEvent(msgEventId);
+    const row = await h.store.getEvent(msgEventId);
     assert.strictEqual(row.seq, msgSeq, 'seq unchanged');
     assert.strictEqual(row.redacted_by, delEventId);
     assert.ok(row.redacted_at > 0);
     assert.ok(!row.payload.includes('555-0199') && !row.actor.includes(alice));
-    assert.strictEqual(h.store.getEvent(delEventId).redacts, 1);
-    assert.ok(!h.store.getEvent(delEventId).redacted_at, 'the deletion event itself is kept as is');
+    assert.strictEqual((await h.store.getEvent(delEventId)).redacts, 1);
+    assert.ok(!(await h.store.getEvent(delEventId)).redacted_at, 'the deletion event itself is kept as is');
 });
 
 t('anonymous SSE replay: the tombstone, never the text', async () => {
@@ -194,8 +194,8 @@ t('re-publishing a deletion is a duplicate; a second deletion leaves tombstones 
     assert.strictEqual(again.body.duplicate, true);
     const second = deleted([101]);
     await publish(chat, second);
-    assert.strictEqual(h.store.getEvent(msgEventId).redacted_by, delEventId, 'first redaction stands');
-    assert.ok(!h.store.getEvent(delEventId).redacted_at, 'a deletion event is never redacted by a later one');
+    assert.strictEqual((await h.store.getEvent(msgEventId)).redacted_by, delEventId, 'first redaction stands');
+    assert.ok(!(await h.store.getEvent(delEventId)).redacted_at, 'a deletion event is never redacted by a later one');
 });
 
 t('only the owning service can redact', async () => {
@@ -206,7 +206,7 @@ t('only the owning service can redact', async () => {
     let r = await request(h.base, 'POST', '/api/v1/events', { token: live, body: { events: [envelope('live'), liveEvent] } });
     assert.strictEqual(r.status, 403, r.text);
     assert.strictEqual(r.body.code, 'events.redaction_not_allowed');
-    assert.strictEqual(h.store.getEvent(liveEvent.event_id), null);
+    assert.strictEqual(await h.store.getEvent(liveEvent.event_id), null);
     // Live by subject: its own namespace only, so Chat's event is untouched.
     await publish(live, envelope('live', { payload: { redacts: { subject_type: 'chat_message', subject_ids: ['201'] } } }));
     // Nor can Live publish Chat's deletion (source must be the caller).
@@ -232,20 +232,20 @@ t('only the owning service can redact', async () => {
     r = await request(h.base, 'POST', '/api/v1/events', { token: chat, body: deleted([201], { payload: { redacts: { subject_type: 'chat_message' } } }) });
     assert.strictEqual(r.status, 422);
     assert.strictEqual(r.body.code, 'events.invalid_redaction');
-    const row = h.store.getEvent(env.event_id);
+    const row = await h.store.getEvent(env.event_id);
     assert.ok(!row.redacted_at, 'still intact after every refused or foreign attempt');
     assert.ok(row.payload.includes('555-0199'));
     // The owner can.
     await publish(chat, deleted([201]));
-    assert.ok(h.store.getEvent(env.event_id).redacted_at);
-    assert.strictEqual(h.store.getEvent(env.event_id).seq, seq);
+    assert.ok((await h.store.getEvent(env.event_id)).redacted_at);
+    assert.strictEqual((await h.store.getEvent(env.event_id)).seq, seq);
 });
 
-t('the text is gone from the database file, not just hidden', async () => {
-    h.db.pragma('wal_checkpoint(TRUNCATE)');
-    const bytes = fs.readFileSync(path.join(h.dir, 'events.db'));
-    assert.ok(!bytes.includes(Buffer.from('555-0199')), 'secure_delete zeroed the old payloads');
-    assert.ok(!bytes.includes(Buffer.from('anon4242')));
+t('the text is gone from the stored rows, not just hidden', async () => {
+    // PostgreSQL (ADR-035): the redacted row no longer holds the text; the old tuple versions are reclaimed by autovacuum.
+    const rows = await h.db.prepare('SELECT payload::text AS p FROM events').all();
+    assert.ok(!rows.some((r) => String(r.p).includes('555-0199')), 'no stored payload keeps the redacted text');
+    assert.ok(!rows.some((r) => String(r.p).includes('anon4242')));
 });
 
 t('operator redaction (backfill): same owner rule, idempotent', async () => {
@@ -253,12 +253,12 @@ t('operator redaction (backfill): same owner rule, idempotent', async () => {
     await publish(chat, env);
     const other = envelope('live', { subject: { type: 'chat_message', id: '301' } });
     await publish(live, other);
-    const done = h.store.redact('chat', { subject_type: 'chat_message', subject_ids: ['301'] }, { by: 'backfill' });
+    const done = await h.store.redact('chat', { subject_type: 'chat_message', subject_ids: ['301'] }, { by: 'backfill' });
     assert.deepStrictEqual(done.map(d => d.id), [env.event_id]);
-    assert.strictEqual(h.store.getEvent(env.event_id).redacted_by, 'backfill');
-    assert.ok(!h.store.getEvent(other.event_id).redacted_at, "another source's event with the same subject is untouched");
-    assert.deepStrictEqual(h.store.redact('chat', { subject_type: 'chat_message', subject_ids: ['301'] }, { by: 'backfill' }), [], 'second run: nothing');
-    assert.throws(() => h.store.redact('chat', { event_ids: [other.event_id] }), /may redact only its own/);
+    assert.strictEqual((await h.store.getEvent(env.event_id)).redacted_by, 'backfill');
+    assert.ok(!(await h.store.getEvent(other.event_id)).redacted_at, "another source's event with the same subject is untouched");
+    assert.deepStrictEqual(await h.store.redact('chat', { subject_type: 'chat_message', subject_ids: ['301'] }, { by: 'backfill' }), [], 'second run: nothing');
+    await assert.rejects(async () => await h.store.redact('chat', { event_ids: [other.event_id] }), /may redact only its own/);
 });
 
 t('public replay window: browsers get a gap for public events older than 5 minutes', async () => {

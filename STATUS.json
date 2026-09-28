@@ -4,11 +4,19 @@
   "code": true,
   "wave": "W3",
   "plan": "OpenVibe End-to-End Realignment & Implementation Plan, revision 3 (20 Sep 2026)",
-  "runtime": "node 22, express, better-sqlite3",
+  "runtime": "node 22, express, PostgreSQL 18 (openvibe-sdk/db, async) + Valkey 9",
   "port": 4300,
   "domain": "events.openvibe.network",
-  "contracts": "openvibe-contracts v0.63.0",
-  "capabilities": ["events.event.publish", "events.subscription.manage", "events.event.read", "events.delivery.admin", "events.app.publish", "events.app.read", "events.app.subscribe"],
+  "contracts": "openvibe-contracts v0.76.0",
+  "capabilities": [
+    "events.event.publish",
+    "events.subscription.manage",
+    "events.event.read",
+    "events.delivery.admin",
+    "events.app.publish",
+    "events.app.read",
+    "events.app.subscribe"
+  ],
   "capabilitiesRegistered": true,
   "deployed": true,
   "deployment": "Deployed with `sudo ovhost deploy events`: /opt/openvibe.events, unit openvibe-events, 127.0.0.1:4300; public at https://events.openvibe.network (realtime SSE, health, token-guarded /api/v1/events, /api/v1/subscriptions, /api/v1/checkpoints; /api/v1/deliveries host-local); real traffic since 2026-09-23 (Live, Media, Chat, Games, Network and OpenRe publish; on 2026-09-23 8 subscriptions, held by Search, Tips, VIP, News and Reviews); restore drill passed 2026-09-23",
@@ -22,6 +30,6 @@
     "developer-app publish, read and subscribe with sandbox separation, SSRF-guarded webhooks and project quotas",
     "hourly project usage rollups (events.usage.recorded)",
     "redaction tombstones",
-    "per-actor limits (openvibe-sdk/limits)"
+    "per-actor limits (openvibe-sdk/limits; shared on Valkey)"
   ]
 }

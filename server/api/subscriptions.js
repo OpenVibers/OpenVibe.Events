@@ -57,10 +57,10 @@ function subscriptionsRouter({ config, store, auth, dnsLookup, limits }) {
     const change = { minute: 30, hour: 300 };
 
     /** The app's events.app.subscribe grant was withdrawn after this token was issued. */
-    function subscribeRevoked(req, res) {
+    async function subscribeRevoked(req, res) {
         const p = req.principal;
         if (p.kind !== 'app') return false;
-        const at = store.revokedAt(p.sub, CAPS.appSubscribe);
+        const at = await store.revokedAt(p.sub, CAPS.appSubscribe);
         if (at && p.iat * 1000 <= at) {
             http.sendProblem(res, 403, 'capability.denied', { detail: `${CAPS.appSubscribe} was revoked after this token was issued`, ctx: req.ov });
             return true;
@@ -71,8 +71,8 @@ function subscriptionsRouter({ config, store, auth, dnsLookup, limits }) {
     /** An app's subscriptions are those of its token's project and environment too (never across sandbox/production). */
     const inScope = (req, sub) => req.principal.kind !== 'app' || (sub.project_id === req.principal.projectId && (sub.env || 'production') === req.principal.env);
 
-    function own(req, res) {
-        const sub = store.getSubscription(String(req.params.id));
+    async function own(req, res) {
+        const sub = await store.getSubscription(String(req.params.id));
         if (!sub || sub.consumer !== consumerOf(req) || !inScope(req, sub)) {
             http.sendProblem(res, 404, 'events.not_found', { detail: 'no such subscription', ctx: req.ov });
             return null;
@@ -96,7 +96,7 @@ function subscriptionsRouter({ config, store, auth, dnsLookup, limits }) {
             return http.sendProblem(res, 422, 'events.bad_topic', { detail: 'topic_pattern must be dot-separated segments of [a-z0-9_] or *', ctx });
         }
         const app = req.principal.kind === 'app' ? req.principal : null;
-        if (subscribeRevoked(req, res)) return undefined;
+        if (await subscribeRevoked(req, res)) return undefined;
         if (app) {
             const err = apps.patternScopeError(pattern, app);
             if (err) return http.sendProblem(res, 403, 'events.topic_not_allowed', { detail: err, ctx });
@@ -111,22 +111,22 @@ function subscriptionsRouter({ config, store, auth, dnsLookup, limits }) {
 
         const consumer = consumerOf(req);
         const endpoint = ep.url.toString();
-        const dup = store.listSubscriptions(consumer).find(s => s.topic_pattern === pattern && s.endpoint === endpoint);
+        const dup = (await store.listSubscriptions(consumer)).find(s => s.topic_pattern === pattern && s.endpoint === endpoint);
         if (dup) {
             return http.sendProblem(res, 409, 'events.subscription_exists', { detail: 'this consumer already subscribes that endpoint to that topic', ctx, extra: { subscription_id: dup.id } });
         }
-        if (store.countSubscriptions(consumer) >= config.maxSubscriptionsPerConsumer) {
+        if (await store.countSubscriptions(consumer) >= config.maxSubscriptionsPerConsumer) {
             return http.sendProblem(res, 409, 'events.subscription_limit', { detail: `at most ${config.maxSubscriptionsPerConsumer} subscriptions per consumer`, ctx });
         }
         if (app) {
             const max = config.apps.quotas[app.env].maxSubscriptions;
-            if (max && store.countProjectSubscriptions(app.projectId, app.env) >= max) {
+            if (max && await store.countProjectSubscriptions(app.projectId, app.env) >= max) {
                 return http.sendProblem(res, 429, 'events.quota_exceeded', {
                     detail: `at most ${max} subscriptions per project in ${app.env}`, ctx, extra: { quota: 'subscriptions', limit: max },
                 });
             }
         }
-        const row = store.createSubscription({
+        const row = await store.createSubscription({
             id: `sub_${ids.ulid()}`,
             consumer,
             topicPattern: pattern,
@@ -139,20 +139,20 @@ function subscriptionsRouter({ config, store, auth, dnsLookup, limits }) {
         return res.status(201).json(subscriptionView(row, { withSecret: true }));
     }
 
-    router.get('/api/v1/subscriptions', guard, limits('events.subscription.list'), (req, res) => {
-        res.json({ subscriptions: store.listSubscriptions(consumerOf(req)).filter(s => inScope(req, s)).map(s => subscriptionView(s)) });
+    router.get('/api/v1/subscriptions', guard, limits('events.subscription.list'), async (req, res) => {
+        res.json({ subscriptions: (await store.listSubscriptions(consumerOf(req))).filter(s => inScope(req, s)).map(s => subscriptionView(s)) });
     });
 
-    router.get('/api/v1/subscriptions/:id', guard, limits('events.subscription.read'), (req, res) => {
-        const sub = own(req, res);
+    router.get('/api/v1/subscriptions/:id', guard, limits('events.subscription.read'), async (req, res) => {
+        const sub = await own(req, res);
         if (sub) res.json(subscriptionView(sub));
     });
 
     // POST /api/v1/subscriptions/:id/rotate-secret { secret?, overlap_s? } -> the new secret (shown once). The old
     // secret keeps signing next to it for overlap_s (default 1 day, at most 7), so the consumer can switch without
     // missing a delivery.
-    router.post('/api/v1/subscriptions/:id/rotate-secret', guard, limits('events.subscription.rotate', { minute: 10, hour: 100 }), express.json({ limit: '4kb' }), (req, res) => {
-        const sub = own(req, res);
+    router.post('/api/v1/subscriptions/:id/rotate-secret', guard, limits('events.subscription.rotate', { minute: 10, hour: 100 }), express.json({ limit: '4kb' }), async (req, res) => {
+        const sub = await own(req, res);
         if (!sub) return;
         const b = req.body || {};
         if (b.secret !== undefined && (typeof b.secret !== 'string' || b.secret.length < 32 || b.secret.length > 256)) {
@@ -163,16 +163,16 @@ function subscriptionsRouter({ config, store, auth, dnsLookup, limits }) {
             return http.sendProblem(res, 422, 'events.bad_request', { detail: 'overlap_s is 0..604800', ctx: req.ov });
         }
         const secret = b.secret || `whsec_${crypto.randomBytes(32).toString('hex')}`;
-        const out = store.rotateSubscriptionSecret(sub.id, secret, overlapS * 1000);
+        const out = await store.rotateSubscriptionSecret(sub.id, secret, overlapS * 1000);
         res.json({ ...subscriptionView(out), secret, previous_secret_valid_until: new Date(out.previous_secret_until).toISOString() });
     });
 
     const toggle = limits('events.subscription.toggle', change);
     for (const [action, enabled] of [['disable', false], ['enable', true]]) {
-        router.post(`/api/v1/subscriptions/:id/${action}`, guard, toggle, (req, res) => {
-            if (enabled && subscribeRevoked(req, res)) return;
-            const sub = own(req, res);
-            if (sub) res.json(subscriptionView(store.setSubscriptionEnabled(sub.id, enabled)));
+        router.post(`/api/v1/subscriptions/:id/${action}`, guard, toggle, async (req, res) => {
+            if (enabled && await subscribeRevoked(req, res)) return;
+            const sub = await own(req, res);
+            if (sub) res.json(subscriptionView(await store.setSubscriptionEnabled(sub.id, enabled)));
         });
     }
 
