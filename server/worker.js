@@ -20,9 +20,12 @@
  * most maxAppInflight to developer-app endpoints (so apps can never hold every slot).
  */
 const crypto = require('crypto');
-const { sign, signV2 } = require('../lib/client');
+const { signV2 } = require('../lib/client');
 
 /**
+ * Deliveries carry only the v2 signature: the v1 header (an HMAC of the body, no timestamp, so replayable) is no
+ * longer sent (shim C-60 retired 2026-09-28; every consumer verifies v2).
+ *
  * The v2 header for a delivery. During a secret rotation's overlap it carries a second v2= signature made
  * with the previous secret, so a consumer still configured with either secret accepts it (openvibe-sdk's
  * verifyDeliveryV2 checks every v2= value).
@@ -76,7 +79,6 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
                 'X-OpenVibe-Subscription-Id': sub.id,
                 'X-OpenVibe-Delivery-Attempt': String(attempt),
                 'X-OpenVibe-Hops': String(row.hops),
-                'X-OpenVibe-Signature': sign(body, sub.secret),
                 'X-OpenVibe-Timestamp': String(timestamp),
                 'X-OpenVibe-Signature-V2': signatureV2(sub, body, timestamp, clock.now()),
                 traceparent: `00-${row.trace_id}-${crypto.randomBytes(8).toString('hex')}-01`,

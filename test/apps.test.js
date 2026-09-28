@@ -4,7 +4,7 @@
 const assert = require('assert');
 const nodeHttp = require('http');
 const { ids } = require('openvibe-contracts');
-const { verifyDelivery, verifyDeliveryV2 } = require('../lib/client');
+const { verifyDeliveryV2 } = require('../lib/client');
 const apps = require('../server/apps');
 const { createGuardedPost, isPublicAddress } = require('../server/egress');
 const { load } = require('../server/config');
@@ -248,8 +248,8 @@ t('delivery: signed, scoped, sandbox never meets production', async () => {
     assert.deepStrictEqual(byPath('/b-project'), [], 'never another project');
     assert.strictEqual(firstParty.calls.length, 0, 'first-party subscriptions never get sandbox events');
     const a = seen.find(g => g.url === '/a');
-    assert.ok(verifyDelivery(a.rawBody, a.headers['x-openvibe-signature'], subA.secret), 'HMAC-signed with the subscription secret');
-    assert.ok(verifyDeliveryV2(a.rawBody, a.headers, subA.secret, { now: h.clock.now() }), 'and v2-signed (timestamped) like first-party deliveries');
+    assert.ok(verifyDeliveryV2(a.rawBody, a.headers, subA.secret, { now: h.clock.now() }), 'v2-signed (timestamped) with the subscription secret, like first-party deliveries');
+    assert.strictEqual(a.headers['x-openvibe-signature'], undefined, 'no v1 signature (C-60 retired)');
     assert.strictEqual(JSON.parse(a.rawBody).event.source, apps.appSource(appA));
     assert.ok(pinned.length && pinned.every(ip => ip === '127.0.0.1'), 'the socket connected to the address the guard checked');
 

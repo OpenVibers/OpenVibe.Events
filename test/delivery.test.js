@@ -95,7 +95,7 @@ t('SSRF: only http(s) endpoints on 127.0.0.1 or *.openvibe.* are accepted', asyn
     assert.strictEqual(r.body.endpoint, 'http://127.0.0.1:9/x');
 });
 
-t('success: signed POST, verified by verifyDelivery; trace propagated', async () => {
+t('success: signed POST (v2 only), verified by verifyDeliveryV2; trace propagated', async () => {
     const stub = await subscriber();
     const sub = (await subscribe(media, { topic_pattern: 'live.stream.*', endpoint: stub.url })).body;
     const env = envelope('live', { trace_id: '4bf92f3577b34da6a3ce929d0e0e4736' });
@@ -104,9 +104,10 @@ t('success: signed POST, verified by verifyDelivery; trace propagated', async ()
     await h.worker.drain();
     assert.strictEqual(stub.calls.length, 1);
     const call = stub.calls[0];
-    assert.ok(verifyDelivery(call.rawBody, call.headers['x-openvibe-signature'], sub.secret));
-    assert.ok(!verifyDelivery(call.rawBody, call.headers['x-openvibe-signature'], 'whsec_wrong_secret_wrong_secret_wrong'));
-    assert.ok(!verifyDelivery(Buffer.concat([call.rawBody, Buffer.from(' ')]), call.headers['x-openvibe-signature'], sub.secret));
+    assert.strictEqual(call.headers['x-openvibe-signature'], undefined, 'no v1 signature any more (C-60 retired)');
+    assert.ok(verifyDeliveryV2(call.rawBody, call.headers, sub.secret, { now: h.clock.now() }));
+    assert.ok(!verifyDeliveryV2(call.rawBody, call.headers, 'whsec_wrong_secret_wrong_secret_wrong', { now: h.clock.now() }));
+    assert.ok(!verifyDeliveryV2(Buffer.concat([call.rawBody, Buffer.from(' ')]), call.headers, sub.secret, { now: h.clock.now() }));
     const ts = Number(call.headers['x-openvibe-timestamp']);
     assert.strictEqual(ts, Math.floor(h.clock.now() / 1000), 'X-OpenVibe-Timestamp is the attempt time in unix seconds');
     assert.match(call.headers['x-openvibe-signature-v2'], new RegExp(`^t=${ts},v2=[0-9a-f]{64}$`));

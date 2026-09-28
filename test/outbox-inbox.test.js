@@ -132,7 +132,7 @@ t('consumer crash mid-processing + redelivery + replay -> exactly one effect (cr
     let secret = null;
     let mode = 'crash-after-commit';
     const stub = await subscriber((call) => {
-        if (!events.verifyDelivery(call.rawBody, call.headers['x-openvibe-signature'], secret)) return 401;
+        if (!events.verifyDeliveryV2(call.rawBody, call.headers, secret, { now: h.clock.now() })) return 401;
         const ev = call.body.event;
         if (mode === 'crash-before-commit') {
             mode = 'ok';
