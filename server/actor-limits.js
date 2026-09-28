@@ -18,11 +18,19 @@ const { createActorLimiter } = require('openvibe-sdk/limits');
 
 /** limits(name, own) middleware for one app; `clock` is the service's (manual in tests). */
 function createLimits({ config, clock = { now: () => Date.now() }, metrics = null, log = console }) {
-    if (!config.limits.enabled) return () => (_req, _res, next) => next();     // EVENTS_LIMITS=off
+    // Every named limit with its numbers, as the routes declare them (published in /limits.json as rate_limits).
+    const registered = new Map();
+    const record = (name, own = {}) => registered.set(name, { minute: own.minute != null ? own.minute : config.limits.minute, hour: own.hour != null ? own.hour : config.limits.hour });
+    const listed = () => [...registered].map(([id, n]) => ({ id, ...n })).sort((x, y) => x.id.localeCompare(y.id));
+    if (!config.limits.enabled) {                                                // EVENTS_LIMITS=off
+        const off = (name, own) => { record(name, own); return (_req, _res, next) => next(); };
+        off.registered = () => [];
+        return off;
+    }
     const refused = metrics && metrics.registry
         ? metrics.registry.counter({ name: 'events_rate_limited_total', help: 'Requests refused 429 by a per-actor limit, by limit name and window', labelNames: ['limit', 'window'] })
         : null;
-    return createActorLimiter({
+    const limiter = createActorLimiter({
         limits: { minute: config.limits.minute, hour: config.limits.hour },
         now: () => clock.now(),
         onLimited(e) {
@@ -31,6 +39,11 @@ function createLimits({ config, clock = { now: () => Date.now() }, metrics = nul
             if (refused) refused.inc({ limit: e.name, window: e.window });
         },
     });
+    const limits = (name, own) => { record(name, own); return limiter(name, own); };
+    limits.stats = () => limiter.stats();
+    limits.reset = () => limiter.reset();
+    limits.registered = listed;
+    return limits;
 }
 
 module.exports = { createLimits };

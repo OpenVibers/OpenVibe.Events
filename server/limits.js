@@ -36,10 +36,12 @@ function limitsOf(config) {
     };
 }
 
-function mountLimits(app, config) {
+function mountLimits(app, config, { rateLimits = () => [] } = {}) {
     const body = limitsOf(config);
     app.get('/limits.json', (_req, res) => {
-        res.set('Cache-Control', 'public, max-age=300').set('Access-Control-Allow-Origin', '*').json(body);
+        // Per-actor rate limits (server/actor-limits.js), as the routes declared them: per caller, per minute and hour.
+        const rate_limits = rateLimits().map((l) => ({ ...l, per: 'caller (principal)', exceeded: '429 rate_limited' }));
+        res.set('Cache-Control', 'public, max-age=300').set('Access-Control-Allow-Origin', '*').json({ ...body, rate_limits });
     });
 }
 

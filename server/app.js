@@ -25,7 +25,7 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     // GET /release.json (ADR-016) and POST /release-metrics (open tabs' update reports into /metrics).
     release.mount(app, { registry: instrumented.registry });
     // GET /limits.json: the developer limits enforced here, from config (WS-N task 7; Codes renders them).
-    mountLimits(app, config);
+    mountLimits(app, config, { rateLimits: () => (limits && limits.registered ? limits.registered() : []) });
     app.use((req, res, next) => {
         res.setHeader('X-Content-Type-Options', 'nosniff');
         next();

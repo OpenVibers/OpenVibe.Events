@@ -112,6 +112,9 @@ t('limits.json: the developer limits, read from config (WS-N task 7)', async () 
     assert.deepStrictEqual([by.retention_days.production, by.retention_days.sandbox], [30, 7]);
     assert.strictEqual(by.subscriptions.capability, 'events.app.subscribe');
     for (const l of r.body.limits) assert.ok(Number.isInteger(l.production) && Number.isInteger(l.sandbox) && l.exceeded, l.id);
+    // The per-actor rate limits the routes declared (WS-R task 4), each with its numbers.
+    assert.ok(Array.isArray(r.body.rate_limits) && r.body.rate_limits.length > 3, JSON.stringify(r.body.rate_limits));
+    for (const l of r.body.rate_limits) assert.ok(/^events\./.test(l.id) && l.minute > 0 && l.hour >= l.minute && l.exceeded === '429 rate_limited', JSON.stringify(l));
     const { limitsOf } = require('../server/limits');
     assert.strictEqual(limitsOf(load({ NODE_ENV: 'test', EVENTS_APP_MAX_SUBSCRIPTIONS: '0', OV_NETWORK_PUBLIC_KEY: publicKey })).limits.find((l) => l.id === 'subscriptions').production, null, '0 (off) is null');
     const custom = limitsOf(load({ NODE_ENV: 'test', EVENTS_APP_SANDBOX_PUBLISH_PER_MINUTE: '7', OV_NETWORK_PUBLIC_KEY: publicKey }));
