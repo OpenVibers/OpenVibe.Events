@@ -2,7 +2,7 @@
 
 > Durable events, subscriptions, delivery, retry, dead letters and replay for the network.
 
-**Status:** alpha (roadmap Wave 3), deployed on `openvibe-ovh` (unit `openvibe-events`, 127.0.0.1:4300, public at `https://events.openvibe.network`). Live (`live.stream.*`), Media, Chat, Games, Network and OpenRe publish to it in production, and every consumer webhook requires signature v2. Few consumers act on the events yet: Media still reports finalisation to Live over `/internal/media-webhook`, and no browser surface uses the realtime stream.  
+**Status:** alpha (roadmap Wave 3), deployed on `openvibe-ovh` (unit `openvibe-events`, 127.0.0.1:4300, public at `https://events.openvibe.network`). Live (`live.stream.*`), Media, Chat, Games, Network and OpenRe publish to it in production, and every consumer webhook requires signature v2. Media's completion events reach Live through Events (`/internal/media-events`; Live keeps the older `/internal/media-webhook` during the transition), and the shared notification bell can follow `network.notification.created` over the realtime stream with a Network ticket.  
 **Domain:** `events.openvibe.network` (the realtime gateway is served here too: ADR-005 put Realtime inside Events, and `realtime.openvibe.network` has no runtime of its own)  
 **Plan:** OpenVibe End-to-End Realignment & Implementation Plan, revision 3 (20 Sep 2026), §6 and §6.3.  
 **License:** AGPL-3.0 (same as every OpenVibe service).
@@ -37,7 +37,7 @@ Services call with an OpenVibe.Network client-credentials token (`POST /oauth/to
 | `events.event.read` | `GET /api/v1/events`, `GET /api/v1/events/:id`, `/api/v1/checkpoints`, realtime as a service |
 | `events.delivery.admin` | `GET /api/v1/deliveries`, `POST /api/v1/deliveries/replay` |
 
-These four are `internal` in `openvibe-contracts` (never granted to developer apps). Developer apps use the three `public` capabilities in [Developer apps](#developer-apps) instead, on the same routes. `server/auth.js` grants with the contracts rule (exact id or a `family.*` grant) and hands the decision to `capabilities.check()` for every id the installed contracts know (v0.28.0 knows all seven).
+These four are `internal` in `openvibe-contracts` (never granted to developer apps). Developer apps use the three `public` capabilities in [Developer apps](#developer-apps) instead, on the same routes. `server/auth.js` grants with the contracts rule (exact id or a `family.*` grant) and hands the decision to `capabilities.check()` for every id the installed contracts know (the pinned v0.63.0 knows all seven).
 
 Sandbox tokens (`env: sandbox`, developer apps only) are accepted only on the developer-app routes; every other route answers `401 token.sandbox_refused`. App tokens are never judged on a first-party capability: an app token on an operator route is a `403`.
 
@@ -58,6 +58,16 @@ Every capability route also limits each principal (`svc:live`, `app:app_…`) by
 | `POST /api/v1/deliveries/replay` | 6 / 60 |
 
 Never limited: `/api/health`, `/api/ready`, `/release.json`, `/limits.json`, `/metrics` and the realtime stream (capped by `REALTIME_MAX_CONNECTIONS` and `REALTIME_MAX_TOPICS`). `test/actor-limits.test.js`.
+
+## Capabilities
+
+Implemented here (the service manifest's `capabilities`): the four internal ones in the table above
+(`events.event.publish`, `events.event.read`, `events.subscription.manage`, `events.delivery.admin`)
+and the three public developer-app ones (`events.app.publish`, `events.app.read`,
+`events.app.subscribe`, [Developer apps](#developer-apps)). Events calls no other service with a
+grant: it only loads the Network signing key (JWKS) and makes the signed deliveries its subscriptions
+ask for. It produces one event of its own, `events.usage.recorded` (a project's hourly publishing and
+delivery rollup, for Network; never visible to apps).
 
 ## Publishing
 
@@ -233,6 +243,41 @@ es.addEventListener('gap', (m) => { /* events were missed: refetch state */ });
 ## Bootstrap / extraction source
 
 Replaces the best-effort internal POSTs/webhooks between Live, Media, Network and Community. First migrations: notifications, then Media ready/failed, then stream lifecycle.
+
+## Security
+
+Reporting a vulnerability: [SECURITY.md](SECURITY.md). The rules the code keeps:
+
+- **Auth.** Every API route needs a Network client-credentials token for audience `openvibe.events`,
+  verified offline against the Network JWKS, holding that route's capability. App tokens are never
+  judged on a first-party capability; sandbox tokens are accepted only on developer-app routes.
+  Realtime accepts a single-use Network ticket, the `ov_token` cookie, a Bearer user JWT or a service
+  token with `events.event.read`; a ticket is never a session and is never logged.
+- **Private data.** `internal` events never reach a browser; `subject` events reach only that person;
+  a guessed topic yields nothing; redacted events replay as tombstones. Developer apps see only their
+  own project and environment.
+- **Egress.** First-party subscription endpoints must be `http(s)` on `127.0.0.1` or an OpenVibe host
+  (`EVENTS_ENDPOINT_HOSTS`); app webhooks must be `https` and resolve only to public addresses,
+  checked at creation and inside every delivery's DNS lookup ([server/egress.js](server/egress.js));
+  redirects are never followed.
+- **Integrity.** Deliveries are signed per subscription (v1 and v2; consumers require v2); a
+  subscription secret is shown once.
+- **Exposure.** `/api/v1/deliveries` stays host-local and `/metrics` answers direct loopback callers
+  only; nginx logs `/realtime/stream` without its query string
+  (`deploy/nginx/log_format_events_noquery.conf`), so tickets never reach the access log.
+
+## Deploy
+
+Production deploys with `sudo ovhost deploy events` on the host (strategy `git-checkout`: fetch,
+fast-forward `/opt/openvibe.events`, install on a lockfile change, restart, wait for `/api/ready`).
+The unit is `openvibe-events.service` on `127.0.0.1:4300`, the env file `/etc/openvibe/events.env`. The store is
+`/var/lib/openvibe-events/events.db`; nginx serves `events.openvibe.network` from
+[deploy/nginx/events.openvibe.network.conf](deploy/nginx/events.openvibe.network.conf). ovhost treats open
+realtime connections as a report-only drain, so `--wait-idle` waits for them.
+Rollback: ovhost puts the previous sha back by itself when `/api/ready` does not answer 2xx after the
+restart; afterwards `sudo ovhost rollback events --to <sha>`. Nothing blocks a rollback: the schema
+code only adds tables and columns.
+`EVENTS_LIMITS=off` turns the per-actor limits off without a deploy.
 
 ## Launch rule
 
