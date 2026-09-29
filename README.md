@@ -169,27 +169,28 @@ Quotas recorded in Network (`dev_quotas`) are not read yet: that needs `network.
 const events = require('openvibe-events');
 const tokenClient = contracts.serviceAuth.createTokenClient({ tokenUrl: `${NETWORK}/oauth/token`, clientId, clientSecret, audience: 'openvibe.events' });
 
-// Producer: transactional outbox in the service's own better-sqlite3 database (a service on PostgreSQL uses
-// openvibe-sdk/events createPgOutbox / createPgInbox instead: same envelope, receipts and relay, async)
-const outbox = events.createOutbox(db, { publisher: events.createPublisher({ eventsUrl: 'http://127.0.0.1:4300', tokenClient }) });
-outbox.ensureSchema();
-db.transaction(() => {
-    db.prepare('UPDATE vods SET status = ? WHERE id = ?').run('ready', id);
-    outbox.enqueue({ event_type: 'media.vod.ready', source: 'media', actor, subject: { type: 'vod', id, revision }, payload });
-})();                     // the event exists if and only if the change committed
+// Producer: transactional outbox in the service's own PostgreSQL (openvibe-sdk/db; the table from events.outboxSchema()
+// goes in one of the service's migrations)
+const outbox = events.createPgOutbox(db, { events: events.createPublisher({ eventsUrl: 'http://127.0.0.1:4300', tokenClient }) });
+await db.tx(async (t) => {
+    await t.query('UPDATE vods SET status = $1 WHERE id = $2', ['ready', id]);
+    await outbox.enqueue(t, { event_type: 'media.vod.ready', source: 'media', actor, subject: { type: 'vod', id, revision }, payload });
+});                       // the event exists if and only if the change committed
 outbox.start();           // relay: publishes pending rows, marks them sent, backs off on failure
 
 // Consumer: signed webhook (v2: signature plus a 300 s replay window) + exactly-once effects in the consumer's own database
-const inbox = events.createInbox(db);
-inbox.ensureSchema();
-app.post('/internal/events', express.json({ verify: (req, _res, buf) => { req.rawBody = buf; } }), (req, res) => {
+const inbox = events.createPgInbox(db);                         // the table from events.inboxSchema()
+app.post('/internal/events', express.json({ verify: (req, _res, buf) => { req.rawBody = buf; } }), async (req, res) => {
     if (!events.verifyDeliveryV2(req.rawBody, req.headers, SECRET)) return res.sendStatus(401);
-    inbox.once('live', req.body.event.event_id, () => { /* synchronous db writes */ });
+    await inbox.once('live', req.body.event.event_id, async (t) => { /* writes on t */ });
     res.sendStatus(204);
 });
 ```
 
-`enqueue()` refuses to run outside a transaction. `once()` records the receipt and runs the handler in one SQLite transaction, so a crash before commit leaves nothing behind and the redelivery runs it again, and a crash after commit makes the redelivery a no-op.
+`enqueue(t, …)` takes the transaction handle, so it cannot run outside one. `once()` records the receipt and runs the handler
+in one transaction, so a crash before commit leaves nothing behind and the redelivery runs it again, and a crash after
+commit makes the redelivery a no-op. The outbox and inbox are openvibe-sdk's PostgreSQL kits (ADR-042): this package
+re-exports them and keeps no SQLite copies.
 
 ## Realtime (SSE)
 

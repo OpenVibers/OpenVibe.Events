@@ -125,12 +125,12 @@ async function subscriber(respond = () => 204) {
     const server = nodeHttp.createServer((req, res) => {
         const chunks = [];
         req.on('data', c => chunks.push(c));
-        req.on('end', () => {
+        req.on('end', async () => {
             const rawBody = Buffer.concat(chunks);
             const call = { headers: req.headers, rawBody, body: JSON.parse(rawBody.toString('utf8') || 'null') };
             calls.push(call);
             let status;
-            try { status = respond(call, calls.length); } catch (err) { status = 500; call.error = err; }
+            try { status = await respond(call, calls.length); } catch (err) { status = 500; call.error = err; }   // respond may be async (a consumer's inbox)
             if (status === 'destroy') { req.socket.destroy(); return; }
             res.statusCode = status;
             res.end();

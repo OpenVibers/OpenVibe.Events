@@ -21,7 +21,6 @@
   "license": "AGPL-3.0-only",
   "repository": "github:OpenVibers/OpenVibe.Events",
   "dependencies": {
-    "better-sqlite3": "^11.10.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "iovalkey": "^0.4.0",

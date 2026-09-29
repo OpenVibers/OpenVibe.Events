@@ -1,11 +1,10 @@
 'use strict';
 const assert = require('assert');
-const path = require('path');
 const nodeHttp = require('http');
-const Database = require('better-sqlite3');
+const { createDb, sql } = require('openvibe-sdk/db');
 const { serviceAuth } = require('openvibe-contracts');
 const events = require('..');
-const { boot, request, serviceToken, envelope, subscriber, suite, tmpDir } = require('./helpers');
+const { boot, request, serviceToken, envelope, subscriber, suite } = require('./helpers');
 
 const t = suite('outbox-inbox');
 let h;
@@ -54,130 +53,132 @@ t('publisher fills event_id, timestamp and trace (from traceparent)', async () =
     await assert.rejects(publisher.publish(envelope('media')), (err) => err.status === 403 && err.code === 'events.source_mismatch' && err.permanent);
 });
 
+// The producer's own database: embedded PostgreSQL, like a service's (openvibe-sdk/db).
+async function producerDb(extra = '') {
+    const db = createDb({ pglite: true });
+    await db.query(`${extra}${events.outboxSchema()}${events.inboxSchema()}`);
+    return db;
+}
+
 t('outbox: enqueue inside a rolled-back transaction publishes nothing; committed publishes exactly once', async () => {
-    const db = new Database(path.join(tmpDir(), 'producer.db'));
-    db.exec('CREATE TABLE vods (id INTEGER PRIMARY KEY, status TEXT)');
-    const outbox = events.createOutbox(db, { publisher: events.createPublisher({ eventsUrl: h.base, tokenClient }) });
-    outbox.ensureSchema();
+    const db = await producerDb('CREATE TABLE vods (id bigint PRIMARY KEY, status text);');
+    const outbox = events.createPgOutbox(db, { events: events.createPublisher({ eventsUrl: h.base, tokenClient }) });
+    try {
+        await assert.rejects(outbox.enqueue(null, envelope()), /transaction handle/);
 
-    assert.throws(() => outbox.enqueue(envelope()), /inside the transaction/);
+        let rolledBack;
+        await assert.rejects(db.tx(async (t) => {
+            await t.exec(sql`INSERT INTO vods (id, status) VALUES (1, 'ready')`);
+            rolledBack = await outbox.enqueue(t, envelope('live', { event_type: 'live.vod.ready' }));
+            throw new Error('domain write failed');
+        }), /domain write failed/);
+        assert.strictEqual(await outbox.pending(), 0);
+        let r = await outbox.flush();
+        assert.deepStrictEqual(r, { sent: 0, failed: 0, rejected: 0 });
+        assert.strictEqual(await countIn(rolledBack.event_id), 0, 'rolled back: never published');
 
-    let rolledBack;
-    assert.throws(() => db.transaction(() => {
-        db.prepare('INSERT INTO vods (id, status) VALUES (1, ?)').run('ready');
-        rolledBack = outbox.enqueue(envelope('live', { event_type: 'live.vod.ready' }));
-        throw new Error('domain write failed');
-    })(), /domain write failed/);
-    assert.strictEqual(outbox.pending(), 0);
-    let r = await outbox.flush();
-    assert.deepStrictEqual(r, { sent: 0, failed: 0, rejected: 0 });
-    assert.strictEqual(await countIn(rolledBack.event_id), 0, 'rolled back: never published');
+        const committed = await db.tx(async (t) => {
+            await t.exec(sql`INSERT INTO vods (id, status) VALUES (2, 'ready')`);
+            return outbox.enqueue(t, envelope('live', { event_type: 'live.vod.ready' }));
+        });
+        assert.strictEqual(await outbox.pending(), 1);
+        r = await outbox.flush();
+        assert.strictEqual(r.sent, 1);
+        r = await outbox.flush();
+        assert.strictEqual(r.sent, 0, 'sent rows are not sent again');
+        assert.strictEqual(await countIn(committed.event_id), 1);
 
-    let committed;
-    db.transaction(() => {
-        db.prepare('INSERT INTO vods (id, status) VALUES (2, ?)').run('ready');
-        committed = outbox.enqueue(envelope('live', { event_type: 'live.vod.ready' }));
-    })();
-    assert.strictEqual(outbox.pending(), 1);
-    r = await outbox.flush();
-    assert.strictEqual(r.sent, 1);
-    r = await outbox.flush();
-    assert.strictEqual(r.sent, 0, 'sent rows are not sent again');
-    assert.strictEqual(await countIn(committed.event_id), 1);
-
-    // Relay crashed after Events accepted but before the row was marked: at-least-once resend is a duplicate.
-    db.prepare('UPDATE event_outbox SET sent_at = NULL WHERE event_id = ?').run(committed.event_id);
-    r = await outbox.flush();
-    assert.strictEqual(r.sent, 1);
-    assert.strictEqual(await countIn(committed.event_id), 1, 'still exactly one event');
-    assert.ok(db.prepare('SELECT seq FROM event_outbox WHERE event_id = ?').get(committed.event_id).seq > 0);
-    db.close();
+        // Relay crashed after Events accepted but before the row was marked: at-least-once resend is a duplicate.
+        await db.query('UPDATE event_outbox SET sent_at = NULL, next_attempt_at = 0 WHERE event_id = $1', [committed.event_id]);
+        r = await outbox.flush();
+        assert.strictEqual(r.sent, 1);
+        assert.strictEqual(await countIn(committed.event_id), 1, 'still exactly one event');
+        assert.ok(Number((await db.one('SELECT seq FROM event_outbox WHERE event_id = $1', [committed.event_id])).seq) > 0);
+    } finally { await db.close(); }
 });
 
 t('outbox: a poisoned row is isolated and rejected; a down Events is retried later', async () => {
-    const db = new Database(path.join(tmpDir(), 'producer2.db'));
+    const db = await producerDb();
     let clock = Date.now();
-    const outbox = events.createOutbox(db, { publisher: events.createPublisher({ eventsUrl: h.base, tokenClient }), now: () => clock });
-    outbox.ensureSchema();
-    let good; let bad;
-    db.transaction(() => {
-        good = outbox.enqueue(envelope());
-        bad = outbox.enqueue(envelope('media'));      // live may not publish as media
-    })();
-    const r = await outbox.flush();
-    assert.deepStrictEqual(r, { sent: 1, failed: 0, rejected: 1 });
-    assert.strictEqual(await countIn(good.event_id), 1);
-    assert.ok(db.prepare('SELECT rejected_at FROM event_outbox WHERE event_id = ?').get(bad.event_id).rejected_at);
+    const outbox = events.createPgOutbox(db, { events: events.createPublisher({ eventsUrl: h.base, tokenClient }), now: () => clock });
+    try {
+        const [good, bad] = await db.tx(async (t) => [
+            await outbox.enqueue(t, envelope()),
+            await outbox.enqueue(t, envelope('media')),       // live may not publish as media
+        ]);
+        const r = await outbox.flush();
+        assert.deepStrictEqual(r, { sent: 1, failed: 0, rejected: 1 });
+        assert.strictEqual(await countIn(good.event_id), 1);
+        assert.ok((await db.one('SELECT rejected_at FROM event_outbox WHERE event_id = $1', [bad.event_id])).rejected_at);
 
-    const down = events.createOutbox(db, { publisher: events.createPublisher({ eventsUrl: 'http://127.0.0.1:9', tokenClient }), now: () => clock });
-    let later;
-    db.transaction(() => { later = down.enqueue(envelope()); })();
-    const d = await down.flush();
-    assert.deepStrictEqual(d, { sent: 0, failed: 1, rejected: 0 });
-    assert.strictEqual(down.pending(), 1);
-    const row = db.prepare('SELECT * FROM event_outbox WHERE event_id = ?').get(later.event_id);
-    assert.strictEqual(row.next_attempt_at, clock + 1000, 'backoff after the first failure');
-    // Events is back: the regular relay picks it up once due.
-    clock += 1000;
-    assert.strictEqual((await outbox.flush()).sent, 1);
-    assert.strictEqual(await countIn(later.event_id), 1);
-    db.close();
+        const down = events.createPgOutbox(db, { events: events.createPublisher({ eventsUrl: 'http://127.0.0.1:9', tokenClient }), now: () => clock });
+        const later = await db.tx((t) => down.enqueue(t, envelope()));
+        const d = await down.flush();
+        assert.deepStrictEqual(d, { sent: 0, failed: 1, rejected: 0 });
+        assert.strictEqual(await down.pending(), 1);
+        const row = await db.one('SELECT * FROM event_outbox WHERE event_id = $1', [later.event_id]);
+        assert.strictEqual(Number(row.next_attempt_at), clock + 1000, 'backoff after the first failure');
+        // Events is back: the regular relay picks it up once due.
+        clock += 1000;
+        assert.strictEqual((await outbox.flush()).sent, 1);
+        assert.strictEqual(await countIn(later.event_id), 1);
+    } finally { await db.close(); }
 });
 
-t('consumer crash mid-processing + redelivery + replay -> exactly one effect (createInbox)', async () => {
-    const consumerDb = new Database(path.join(tmpDir(), 'consumer.db'));
-    consumerDb.exec('CREATE TABLE credits (id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT, amount INTEGER)');
-    const inbox = events.createInbox(consumerDb);
-    inbox.ensureSchema();
+t('consumer crash mid-processing + redelivery + replay -> exactly one effect (createPgInbox)', async () => {
+    const consumerDb = await producerDb('CREATE TABLE credits (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, event_id text, amount integer);');
+    const inbox = events.createPgInbox(consumerDb);
     let secret = null;
     let mode = 'crash-after-commit';
-    const stub = await subscriber((call) => {
+    const stub = await subscriber(async (call) => {
         if (!events.verifyDeliveryV2(call.rawBody, call.headers, secret, { now: h.clock.now() })) return 401;
         const ev = call.body.event;
         if (mode === 'crash-before-commit') {
             mode = 'ok';
             try {
-                inbox.once('media', ev.event_id, () => {
-                    consumerDb.prepare('INSERT INTO credits (event_id, amount) VALUES (?, ?)').run(ev.event_id, ev.payload.amount);
+                await inbox.once('media', ev.event_id, async (t) => {
+                    await t.query('INSERT INTO credits (event_id, amount) VALUES ($1, $2)', [ev.event_id, ev.payload.amount]);
                     throw new Error('process died mid-transaction');
                 });
             } catch { /* the transaction rolled back */ }
             return 'destroy';
         }
-        inbox.once('media', ev.event_id, () => {
-            consumerDb.prepare('INSERT INTO credits (event_id, amount) VALUES (?, ?)').run(ev.event_id, ev.payload.amount);
+        await inbox.once('media', ev.event_id, async (t) => {
+            await t.query('INSERT INTO credits (event_id, amount) VALUES ($1, $2)', [ev.event_id, ev.payload.amount]);
         });
         if (mode === 'crash-after-commit') { mode = 'ok'; return 'destroy'; }  // effect committed, no response sent
         return 204;
     });
-    const media = serviceToken('media', ['events.subscription.manage']);
-    const sub = (await request(h.base, 'POST', '/api/v1/subscriptions', { token: media, body: { topic_pattern: 'live.tip.*', endpoint: stub.url } })).body;
-    secret = sub.secret;
-    const live = serviceToken('live', ['events.event.publish']);
-    const effects = (id) => consumerDb.prepare('SELECT COUNT(*) AS n FROM credits WHERE event_id = ?').get(id).n;
+    try {
+        const media = serviceToken('media', ['events.subscription.manage']);
+        const sub = (await request(h.base, 'POST', '/api/v1/subscriptions', { token: media, body: { topic_pattern: 'live.tip.*', endpoint: stub.url } })).body;
+        secret = sub.secret;
+        const live = serviceToken('live', ['events.event.publish']);
+        const effects = async (id) => Number((await consumerDb.one('SELECT COUNT(*) AS n FROM credits WHERE event_id = $1', [id])).n);
 
-    for (const first of ['crash-after-commit', 'crash-before-commit']) {
-        mode = first;
-        const env = envelope('live', { event_type: 'live.tip.sent', payload: { amount: 5 } });
-        await request(h.base, 'POST', '/api/v1/events', { token: live, body: env });
-        await h.worker.drain();
-        const d = await h.store.getDelivery(env.event_id, sub.id);
-        assert.strictEqual(d.status, 'failed', `${first}: the crashed attempt is retried`);
-        assert.strictEqual(effects(env.event_id), first === 'crash-after-commit' ? 1 : 0);
-        h.clock.advance(1000);
-        await h.worker.drain();
-        assert.strictEqual((await h.store.getDelivery(env.event_id, sub.id)).status, 'delivered');
-        assert.strictEqual(effects(env.event_id), 1, `${first}: exactly one effect after redelivery`);
+        for (const first of ['crash-after-commit', 'crash-before-commit']) {
+            mode = first;
+            const env = envelope('live', { event_type: 'live.tip.sent', payload: { amount: 5 } });
+            await request(h.base, 'POST', '/api/v1/events', { token: live, body: env });
+            await h.worker.drain();
+            const d = await h.store.getDelivery(env.event_id, sub.id);
+            assert.strictEqual(d.status, 'failed', `${first}: the crashed attempt is retried`);
+            assert.strictEqual(await effects(env.event_id), first === 'crash-after-commit' ? 1 : 0);
+            h.clock.advance(1000);
+            await h.worker.drain();
+            assert.strictEqual((await h.store.getDelivery(env.event_id, sub.id)).status, 'delivered');
+            assert.strictEqual(await effects(env.event_id), 1, `${first}: exactly one effect after redelivery`);
 
-        const rp = await request(h.base, 'POST', '/api/v1/deliveries/replay', { token: admin, body: { subscription_id: sub.id, event_ids: [env.event_id] } });
-        assert.strictEqual(rp.body.queued, 1);
-        await h.worker.drain();
-        assert.strictEqual(effects(env.event_id), 1, `${first}: replay does not repeat the effect`);
+            const rp = await request(h.base, 'POST', '/api/v1/deliveries/replay', { token: admin, body: { subscription_id: sub.id, event_ids: [env.event_id] } });
+            assert.strictEqual(rp.body.queued, 1);
+            await h.worker.drain();
+            assert.strictEqual(await effects(env.event_id), 1, `${first}: replay does not repeat the effect`);
+        }
+        assert.strictEqual(await inbox.seen('media', 'evt_x'), false);
+    } finally {
+        await stub.close();
+        await consumerDb.close();
     }
-    assert.throws(() => inbox.once('media', 'evt_x', () => Promise.resolve()), /synchronous/);
-    assert.strictEqual(inbox.seen('media', 'evt_x'), false, 'an async fn is rolled back, not recorded');
-    await stub.close();
-    consumerDb.close();
 });
 
 t('stop', async () => { await h.stop(); network.close(); });
