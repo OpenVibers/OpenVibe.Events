@@ -20,6 +20,7 @@
  * most maxAppInflight to developer-app endpoints (so apps can never hold every slot).
  */
 const crypto = require('crypto');
+const os = require('os');
 const { signV2 } = require('../lib/client');
 
 /**
@@ -44,7 +45,11 @@ const { createGuardedPost } = require('./egress');
 // observe (optional): { delivered(seconds, row), attempt(outcome) } — metrics hooks, never required.
 function createWorker({ store, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, appPost = createGuardedPost(), log = console, observe = null }) {
     const opts = config.worker;
-    const busy = new Set();          // subscription ids with a delivery in flight
+    // This worker's lease identity (ADR-042 decision 3): claims are leased in the database, so any number of workers, in
+    // one process or many, share the queue without sending a delivery twice. A lease outlives one attempt.
+    const owner = `${os.hostname()}:${process.pid}:${crypto.randomBytes(4).toString('hex')}`;
+    const leaseMs = () => (Number(opts.leaseMs) > 0 ? Number(opts.leaseMs) : Number(opts.timeoutMs || 10000) + 30000);
+    const busy = new Set();          // subscription ids with a delivery in flight here (stats; the lease is what excludes)
     const inflight = new Set();      // promises
     let appInflight = 0;             // of which to developer-app endpoints (at most opts.maxAppInflight)
     let timer = null;
@@ -112,7 +117,8 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
         }
         // A developer app's subscription: the attempt counts toward its project's usage (./usage.js).
         const app = sub.project_id ? { projectId: sub.project_id, env: sub.env || 'production', traceId: row.trace_id } : null;
-        await store.recordAttempt(delivery.event_id, delivery.subscription_id, outcome, app);
+        const kept = await store.recordAttempt(delivery.event_id, delivery.subscription_id, outcome, app, owner);
+        if (kept === false) { log.warn(`[worker] ${row.id} -> ${sub.id}: the lease expired before the attempt was recorded; the newer claim's result stands`); return; }
         if (observe) {
             try {
                 observe.attempt(outcome.ok ? 'delivered' : outcome.dead ? 'dead' : 'retry');
@@ -141,22 +147,11 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
         lastTickAt = Date.now();
         const room = opts.maxInflight - inflight.size;
         if (room <= 0) return 0;
-        let started = 0;
-        let skippedApp = false;
-        const startAll = (due) => {
-            for (const d of due) {
-                if (started >= room) return;
-                const isApp = Boolean(d.app_project_id);
-                if (isApp && appInflight >= opts.maxAppInflight) { skippedApp = true; continue; }
-                start(d, isApp);
-                started++;
-            }
-        };
-        startAll(await store.dueDeliveries(clock.now(), room, [...busy], { firstPartyOnly: appInflight >= opts.maxAppInflight }));
-        // App deliveries (which can outrank first-party ones by priority) filled the app share: the
-        // rest of the room goes to first-party subscriptions.
-        if (skippedApp && started < room) startAll(await store.dueDeliveries(clock.now(), room - started, [...busy], { firstPartyOnly: true }));
-        return started;
+        const now = clock.now();
+        // Everything claimed here is leased to this worker; developer-app subscriptions get at most their share of slots.
+        const claimed = await store.claimDeliveries(now, room, { owner, leaseUntil: now + leaseMs(), maxApp: Math.max(0, opts.maxAppInflight - appInflight) });
+        for (const d of claimed) start(d, Boolean(d.app_project_id));
+        return claimed.length;
     }
 
     function start(d, isApp) {

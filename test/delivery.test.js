@@ -203,9 +203,11 @@ t('priority classes: critical before important before low', async () => {
     await publish(envelope('live', { event_type: 'live.prio.x', priority: 'low' }));
     await publish(envelope('live', { event_type: 'live.prio.x', priority: 'important' }));
     await publish(envelope('live', { event_type: 'live.prio.x', priority: 'critical' }));
-    const due = await h.store.dueDeliveries(h.clock.now(), 100);
+    // A probe claim (leased for 1 ms) sees each subscription's head; its leases then lapse and the worker claims again.
+    const due = await h.store.claimDeliveries(h.clock.now(), 100, { owner: 'probe', leaseUntil: h.clock.now() + 1 });
     assert.strictEqual(due.length, 3, 'one per subscription');
     assert.ok(due.every(d => d.priority === 0), 'each subscription\'s head is its critical event');
+    h.clock.advance(2);
     await h.worker.drain();
     for (const o of orders) assert.deepStrictEqual(o, ['critical', 'important', 'low']);
     for (const s of stubs) await s.close();

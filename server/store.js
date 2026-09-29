@@ -406,29 +406,65 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
     // ── Deliveries ───────────────────────────────────────────
 
     /**
-     * Next due delivery per subscription (at most one each, so per-subscription concurrency stays 1),
-     * ordered by priority class, then seq. `busy` are subscription ids with a delivery in flight.
+     * Claim up to `limit` due deliveries for `owner` until `leaseUntil` (ms): the next due delivery (by priority class,
+     * then seq) of each subscription that has none in flight. The claim locks the subscription rows
+     * (FOR UPDATE SKIP LOCKED), so two workers — in one process or many — never claim the same subscription at once, and
+     * the lease it writes keeps every other worker off that subscription until recordAttempt clears it or it expires
+     * (an expired lease is claimable again: delivery is at least once). `maxApp` caps developer-app subscriptions.
      */
-    async function dueDeliveries(now, limit, busy = [], { firstPartyOnly = false } = {}) {
-        // app_project_id: set for developer-app subscriptions (the worker caps their share of slots).
-        const rows = await db.prepare(`
-            SELECT * FROM (
-                SELECT d.*, s.project_id AS app_project_id, ROW_NUMBER() OVER (PARTITION BY d.subscription_id ORDER BY d.priority, d.seq) AS rn
-                FROM deliveries d JOIN subscriptions s ON s.id = d.subscription_id
-                WHERE d.status IN ('pending', 'failed') AND d.next_attempt_at <= ? AND s.enabled = 1
-                ${firstPartyOnly ? 'AND s.project_id IS NULL' : ''}
-            ) WHERE rn = 1 ORDER BY priority, seq LIMIT ?`).all(now, limit + busy.length);
-        const skip = new Set(busy);
-        return rows.filter(r => !skip.has(r.subscription_id)).slice(0, limit);
-    }
+    const claimDeliveries = async (now, limit, { owner, leaseUntil, maxApp = limit } = {}) => {
+        if (!owner || !(leaseUntil > now) || limit <= 0) return [];
+        return await db.tx(async () => {
+            const due = `d.status IN ('pending', 'failed') AND d.next_attempt_at <= ?`;
+            // First-party and developer-app subscriptions are fetched apart, each up to its own share, then merged by
+            // priority: app subscriptions that outrank first-party ones can never crowd them out of a claim.
+            const candidates = (apps, n) => (n <= 0 ? [] : db.prepare(`
+                SELECT s.id, s.project_id,
+                    (SELECT d.priority FROM deliveries d WHERE d.subscription_id = s.id AND ${due} ORDER BY d.priority, d.seq LIMIT 1) AS p,
+                    (SELECT d.seq FROM deliveries d WHERE d.subscription_id = s.id AND ${due} ORDER BY d.priority, d.seq LIMIT 1) AS q
+                FROM subscriptions s
+                WHERE s.enabled = 1 AND s.project_id IS ${apps ? 'NOT ' : ''}NULL
+                  AND EXISTS (SELECT 1 FROM deliveries d WHERE d.subscription_id = s.id AND ${due})
+                  AND NOT EXISTS (SELECT 1 FROM deliveries x WHERE x.subscription_id = s.id AND x.lease_until > ?)
+                ORDER BY p, q LIMIT ?
+                FOR UPDATE OF s SKIP LOCKED`).all(now, now, now, now, n));
+            const subs = [...await candidates(false, limit), ...await candidates(true, Math.min(limit, Math.max(0, maxApp)))]
+                .sort((x, y) => Number(x.p) - Number(y.p) || Number(x.q) - Number(y.q));
+            const picked = [];
+            let apps = 0;
+            const next = db.prepare(`SELECT d.*, s.project_id AS app_project_id FROM deliveries d JOIN subscriptions s ON s.id = d.subscription_id
+                WHERE d.subscription_id = ? AND d.status IN ('pending', 'failed') AND d.next_attempt_at <= ? ORDER BY d.priority, d.seq LIMIT 1`);
+            // The lease is taken only if nothing of this subscription is leased as of NOW: this statement starts after the
+            // subscription row was locked, so it sees a lease another worker committed after the candidate query's
+            // snapshot (READ COMMITTED does not re-check that query's NOT EXISTS when the locked row itself did not change).
+            const lease = db.prepare(`UPDATE deliveries d SET lease_owner = ?, lease_until = ? WHERE d.event_id = ? AND d.subscription_id = ?
+                AND d.status IN ('pending', 'failed') AND NOT EXISTS (SELECT 1 FROM deliveries x WHERE x.subscription_id = d.subscription_id AND x.lease_until > ?)`);
+            for (const sub of subs) {
+                if (picked.length >= limit) break;
+                if (sub.project_id && apps >= maxApp) continue;
+                const d = await next.get(sub.id, now);
+                if (!d) continue;
+                if ((await lease.run(owner, leaseUntil, d.event_id, d.subscription_id, now)).changes !== 1) continue;   // another worker got there first
+                picked.push({ ...d, lease_owner: owner, lease_until: leaseUntil });
+                if (sub.project_id) apps++;
+            }
+            return picked;
+        });
+    };
 
     /**
      * Record one delivery attempt. `app` ({ projectId, env, traceId }) marks a developer-app
      * subscription: the attempt counts toward the project's events.app.subscribe usage in the same
      * transaction.
      */
-    const recordAttempt = async (eventId, subscriptionId, outcome, app = null) => await db.tx(async () => {
+    const recordAttempt = async (eventId, subscriptionId, outcome, app = null, owner = null) => await db.tx(async () => {
         const now = clock.now();
+        // The attempt is this worker's only while it still holds the lease: after an expiry another worker may have
+        // claimed the delivery again, and its result is the one to keep (this one returns false and records nothing).
+        if (owner) {
+            const held = await db.prepare('SELECT 1 FROM deliveries WHERE event_id = ? AND subscription_id = ? AND lease_owner = ? FOR UPDATE').get(eventId, subscriptionId, owner);
+            if (!held) return false;
+        }
         if (app) {
             await usage.record({
                 projectId: app.projectId, env: app.env, capability: 'events.app.subscribe', unit: 'deliveries', quantity: 1, at: now,
@@ -437,14 +473,15 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
         }
         if (outcome.ok) {
             await db.prepare(`UPDATE deliveries SET status = 'delivered', attempt = ?, delivered_at = ?, last_status = ?, last_error = NULL,
-                next_attempt_at = NULL, updated_at = ? WHERE event_id = ? AND subscription_id = ?`)
+                next_attempt_at = NULL, lease_owner = NULL, lease_until = NULL, updated_at = ? WHERE event_id = ? AND subscription_id = ?`)
                 .run(outcome.attempt, now, outcome.status ?? null, now, eventId, subscriptionId);
         } else {
-            await db.prepare(`UPDATE deliveries SET status = ?, attempt = ?, last_status = ?, last_error = ?, next_attempt_at = ?, updated_at = ?
-                WHERE event_id = ? AND subscription_id = ?`)
+            await db.prepare(`UPDATE deliveries SET status = ?, attempt = ?, last_status = ?, last_error = ?, next_attempt_at = ?,
+                lease_owner = NULL, lease_until = NULL, updated_at = ? WHERE event_id = ? AND subscription_id = ?`)
                 .run(outcome.dead ? 'dead' : 'failed', outcome.attempt, outcome.status ?? null, String(outcome.error || '').slice(0, 500),
                     outcome.dead ? null : outcome.nextAttemptAt, now, eventId, subscriptionId);
         }
+        return true;
     });
 
     /** Send the closed hours' usage rollups (./usage.js); returns the stored rows. */
@@ -532,7 +569,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
     return {
         db, insertBatch, redact, getEvent, revokedAt, lastSeq, oldestSeq, firstSeqSince, scan,
         createSubscription, getSubscription, listSubscriptions, countSubscriptions, countProjectSubscriptions, setSubscriptionEnabled, rotateSubscriptionSecret,
-        dueDeliveries, recordAttempt, getDelivery, listDeliveries, requeue, deliveryCounts,
+        claimDeliveries, recordAttempt, getDelivery, listDeliveries, requeue, deliveryCounts,
         getCheckpoint, setCheckpoint, prune, ping, usage, flushUsage,
     };
 }
