@@ -48,7 +48,7 @@ function deliveryCode(outcome) {
 }
 
 /**
- * @param {import('better-sqlite3').Database} db  the Events database
+ * @param {object} db  the Events database (an openvibe-sdk/db handle)
  * @param {object} [o]
  * @param {{ now(): number }} [o.clock]
  * @param {boolean} [o.enabled=true]  false (EVENTS_USAGE=off): nothing is counted

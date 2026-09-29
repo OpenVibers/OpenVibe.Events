@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * Runs every test in test/ — the files named *.test.js — each in its own process, and fails
- * if any of them fails. They use temp SQLite databases, generated RSA keys and stub subscribers
- * on random ports; none of them needs the network or a running OpenVibe.Network.
+ * if any of them fails. They use a PostgreSQL database of their own (PGlite, or the containers under
+ * test:pg), generated RSA keys and stub subscribers on random ports; none of them needs the network
+ * or a running OpenVibe.Network.
  *
  *   npm test                   # everything
  *   npm test -- publish sse    # only files whose name contains one of the words

@@ -68,8 +68,6 @@ function load(env = process.env) {
         db: { url: env.DATABASE_URL || '', directUrl: env.DATABASE_DIRECT_URL || '' },
         // Valkey (ADR-035): per-actor limit counters shared across processes; without it they count in this process.
         valkey: { url: env.VALKEY_URL || '', prefix: env.VALKEY_PREFIX || 'ov:events:' },
-        // The SQLite file of releases before the switch: read once by scripts/migrate-to-postgres.js.
-        dbPath: env.EVENTS_DB_PATH || './data/events.db',
         retentionDays: int(env.EVENTS_RETENTION_DAYS, 30),
         receiptRetentionDays: int(env.EVENTS_RECEIPT_RETENTION_DAYS, 90),
         pruneIntervalMs: int(env.EVENTS_PRUNE_INTERVAL_MS, 60 * 60 * 1000),

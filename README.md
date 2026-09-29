@@ -20,7 +20,7 @@ npm run dev            # http://127.0.0.1:4300
 npm test               # every test/*.test.js, temp databases, no network needed
 ```
 
-Node 22 in production (`fnm exec --using=22.22.1 npm test`). Production: `/opt/openvibe.events`, env `/etc/openvibe/events.env`, unit [deploy/systemd/openvibe-events.service](deploy/systemd/openvibe-events.service), store `/var/lib/openvibe-events/events.db`, nginx [deploy/nginx/events.openvibe.network.conf](deploy/nginx/events.openvibe.network.conf) (public vhost exposes `/realtime/stream`, health, and the token-guarded `/api/v1/events`, `/api/v1/subscriptions` and `/api/v1/checkpoints` for developer apps; `/api/v1/deliveries` stays host-local; services on the host call `127.0.0.1:4300`).
+Node 22 in production (`fnm exec --using=22.22.1 npm test`). Production: `/opt/openvibe.events`, env `/etc/openvibe/events.env`, unit [deploy/systemd/openvibe-events.service](deploy/systemd/openvibe-events.service), store PostgreSQL (`ov_events` on the host's data role), nginx [deploy/nginx/events.openvibe.network.conf](deploy/nginx/events.openvibe.network.conf) (public vhost exposes `/realtime/stream`, health, and the token-guarded `/api/v1/events`, `/api/v1/subscriptions` and `/api/v1/checkpoints` for developer apps; `/api/v1/deliveries` stays host-local; services on the host call `127.0.0.1:4300`).
 
 `GET /api/health` is liveness. `GET /api/ready` (openvibe-shared/ready) is 200 only when every required check passes — `db` (a real query), `network_jwks` (the Network signing key has loaded; it retries every 30 s while Network boots) and `delivery_worker` (when `EVENTS_WORKER` is on) — and 503 otherwise, with `failed: [...]`. The optional `dlq` check fails once more than `EVENTS_DLQ_DEGRADED_AT` (default 100) deliveries are dead: the service stays ready (200) and reports `status: "degraded"`, `degraded: ["dlq"]`. Each check carries `status`, `required`, `latency_ms`, `checked_at` and, for `dlq`, `detail: { depth, threshold }`; `latest_seq`, `deliveries`, `worker` and `realtime_connections` are still in the body. **Shape change (Track O):** `checks` used to be booleans (`{ db, worker, key }`); they are now objects keyed `db`, `network_jwks`, `delivery_worker`, `dlq`.
 
@@ -273,9 +273,7 @@ Production deploys with `sudo ovhost deploy events` on the host (strategy `git-c
 fast-forward `/opt/openvibe.events`, install on a lockfile change, restart, wait for `/api/ready`).
 The unit is `openvibe-events.service` on `127.0.0.1:4300`, the env file `/etc/openvibe/events.env`. The database is
 `ov_events` on the host's data role (`sudo /opt/openvibe.host/roles/data/add-service.sh events` writes its settings); the
-release migrates it at boot. The one-time move from SQLite is `scripts/migrate-to-postgres.js` (openvibe-sdk
-`runSqliteMigration`, with a `--pglite` rehearsal mode), run while the service is stopped; the old
-`/var/lib/openvibe-events/events.db` stays read-only for 7 days as the rollback. nginx serves `events.openvibe.network` from
+release migrates it at boot. nginx serves `events.openvibe.network` from
 [deploy/nginx/events.openvibe.network.conf](deploy/nginx/events.openvibe.network.conf). ovhost treats open
 realtime connections as a report-only drain, so `--wait-idle` waits for them.
 Rollback: ovhost puts the previous sha back by itself when `/api/ready` does not answer 2xx after the

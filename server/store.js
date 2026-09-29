@@ -1,9 +1,9 @@
 'use strict';
 /**
- * The durable store (SQLite, better-sqlite3). An event is committed, together with one delivery row
- * per matching subscription, before anything is sent anywhere: "event persists before consumer
- * delivery". Global order is `seq`, handed out from a counter that never goes backwards, even after
- * retention has pruned the newest rows.
+ * The durable store (PostgreSQL through openvibe-sdk/db). An event is committed, together with one
+ * delivery row per matching subscription, before anything is sent anywhere: "event persists before
+ * consumer delivery". Global order is `seq`, handed out from a counter that never goes backwards,
+ * even after retention has pruned the newest rows.
  */
 const fs = require('fs');
 const path = require('path');

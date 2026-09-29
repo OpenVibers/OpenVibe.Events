@@ -73,11 +73,9 @@ function tmpDir() {
 
 /** Boot the service. env overrides go through config.load(); `worker: 'manual'` keeps the loop off. */
 async function boot({ env = {}, clock = manualClock(), worker = 'manual', fetchImpl, deliveryFetch, appPost, dnsLookup } = {}) {
-    const dir = tmpDir();
     const config = load({
         NODE_ENV: 'test',
         PORT: '0',
-        EVENTS_DB_PATH: path.join(dir, 'events.db'),
         OV_NETWORK_PUBLIC_KEY: publicKey,
         EVENTS_WORKER: worker === 'manual' ? 'off' : 'on',
         // test:pg boots with the Valkey container too (limit counters shared across processes), under a prefix of its own.
@@ -90,8 +88,8 @@ async function boot({ env = {}, clock = manualClock(), worker = 'manual', fetchI
     const h = await start({ config, db: testdb.db, clock, log: silent, fetchImpl, deliveryFetch, appPost, dnsLookup });
     const base = `http://127.0.0.1:${h.server.address().port}`;
     return {
-        ...h, base, clock, dir,
-        async stop() { await h.close(); await testdb.close(); fs.rmSync(dir, { recursive: true, force: true }); },
+        ...h, base, clock,
+        async stop() { await h.close(); await testdb.close(); },
     };
 }
 

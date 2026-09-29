@@ -26,10 +26,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-# The code tree stays read-only. The event store is PostgreSQL (ov_events); /var/lib/openvibe-events keeps the
-# pre-PostgreSQL SQLite file (read-only) for the rollback window.
-StateDirectory=openvibe-events
-Environment=EVENTS_DB_PATH=/var/lib/openvibe-events/events.db
+# The code tree stays read-only. The event store is PostgreSQL (ov_events on the host's data role); the service
+# writes nothing to disk.
 
 [Install]
 WantedBy=multi-user.target

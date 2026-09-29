@@ -15,22 +15,19 @@
  *              each project and environment, each with a distinct marker in its payload
  * `secrets` collects every secret value with a label. Not a test itself (no .test.js).
  */
-const fs = require('fs');
-const path = require('path');
 const nodeHttp = require('http');
 const { ids } = require('openvibe-contracts');
 const { load } = require('../server/config');
 const { start } = require('../server/index');
 const apps = require('../server/apps');
 const { createGuardedPost, isPublicAddress } = require('../server/egress');
-const { privateKey, publicKey, serviceToken, appToken, userToken, realtimeTicket, manualClock, tmpDir, request, envelope, subscriber } = require('./helpers');
+const { privateKey, publicKey, serviceToken, appToken, userToken, realtimeTicket, manualClock, request, envelope, subscriber } = require('./helpers');
 const crawler = require('./security-crawl');
 
 const S = (name) => `sentinel-not-a-secret-${name}`;
 const ALL = ['events.app.publish', 'events.app.read', 'events.app.subscribe'];
 
 async function buildWorld({ env = {} } = {}) {
-    const dir = tmpDir();
     const logged = [];
     const keep = (...a) => { logged.push(a.map((x) => (x && x.stack) || String(x)).join(' ')); if (process.env.DEBUG) console.error(...a); };
     const log = { log: keep, info: keep, warn: keep, error: keep };
@@ -62,7 +59,7 @@ async function buildWorld({ env = {} } = {}) {
     });
 
     const clock = manualClock();
-    const config = load({ NODE_ENV: 'test', PORT: '0', EVENTS_DB_PATH: path.join(dir, 'events.db'), OV_NETWORK_PUBLIC_KEY: publicKey, EVENTS_WORKER: 'off', ...env });
+    const config = load({ NODE_ENV: 'test', PORT: '0', OV_NETWORK_PUBLIC_KEY: publicKey, EVENTS_WORKER: 'off', ...env });
     const testdb = await require('./db').testDb();   // a database of its own (PGlite, or the containers under test:pg)
     const h = await start({ config, db: testdb.db, clock, log, appPost, dnsLookup });
     const base = `http://127.0.0.1:${h.server.address().port}`;
@@ -132,9 +129,9 @@ async function buildWorld({ env = {} } = {}) {
         appA: 'marker-app-a-sandbox', appA2: 'marker-app-a-production', appB: 'marker-app-b-sandbox',
     };
     return {
-        h, base, dir, config, clock, routes, logged, secrets, subs, ev, markers, tok, shownOnce, call, fp, appSeen, dnsTable, dnsLookup,
+        h, base, config, clock, routes, logged, secrets, subs, ev, markers, tok, shownOnce, call, fp, appSeen, dnsTable, dnsLookup,
         ids: { PA, PB, A, A2, B, x, y, keyA, keyB }, privateKey, realtimeTicket,
-        stop: async () => { await fp.close(); await new Promise((r) => receiver.close(r)); await h.close(); await testdb.close(); fs.rmSync(dir, { recursive: true, force: true }); },
+        stop: async () => { await fp.close(); await new Promise((r) => receiver.close(r)); await h.close(); await testdb.close(); },
     };
 }
 

@@ -36,7 +36,7 @@ t('Events reads no secret from its environment (so there is none to plant a sent
         }
     };
     walk(path.join(__dirname, '..', 'server'));
-    assert.ok(names.has('EVENTS_DB_PATH') && names.has('OV_NETWORK_PUBLIC_KEY'), 'the scan sees the config');
+    assert.ok(names.has('DATABASE_URL') && names.has('OV_NETWORK_PUBLIC_KEY'), 'the scan sees the config');
     const secretish = [...names].filter((n) => /SECRET|PASSWORD|TOKEN|PRIVATE|CREDENTIAL|_KEY$/.test(n) && n !== 'OV_NETWORK_PUBLIC_KEY');
     assert.deepStrictEqual(secretish, [], 'a new secret-looking variable: give it a sentinel in this test');
 });
@@ -81,7 +81,7 @@ t('crawl: no GET, refusal or error carries a secret, a token or the key', async 
     const values = (name) => ({ id: [subs.live.id, subs.media.id, subs.appA.id, subs.appB.id, ev.public, ev.internal, ev.appA, 'sub_00000000000000000000000000', 'x', '..%2f'] }[name] || ['x']);
     const queries = ['topic=*', 'topic=live.*', `topic=app.${ids.keyA}.*`, `topic=app.${ids.keyB}.*,live.*`, 'status=dead', `subscription_id=${subs.appB.id}`, 'after_seq=0&limit=1000',
         'topics=live.*,network.notification.*&last_event_id=0', 'debug=1&include=secret'];
-    const paths = crawler.pathsFor(w.routes, values, { method: 'get', queries, extra: ['/nope', '/api/nope', '/.env', '/data/events.db', '/package.json', '/api/v1/subscriptions/../../package.json'] });
+    const paths = crawler.pathsFor(w.routes, values, { method: 'get', queries, extra: ['/nope', '/api/nope', '/.env', '/data/pglite/PG_VERSION', '/package.json', '/api/v1/subscriptions/../../package.json'] });
     const gets = await crawler.crawl(w.base, paths, people, needlesFor);
     const found = [...gets.found];
     assert.ok(gets.answered === paths.length * Object.keys(people).length, 'every request answered');
