@@ -9,11 +9,12 @@ const { http } = require('openvibe-contracts');
 const { publishRouter } = require('./api/publish');
 const { subscriptionsRouter } = require('./api/subscriptions');
 const { readRouter } = require('./api/read');
+const { policiesRouter } = require('./api/policies');
 const { mountLimits } = require('./limits');
 const { createLimits } = require('./actor-limits');
 const pkg = require('../package.json');
 
-function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log = console, valkey = null }) {
+function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log = console, valkey = null, policies = null }) {
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', 'loopback');
@@ -78,6 +79,7 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     app.use(publishRouter({ config, store, auth, worker, realtime, limits }));
     app.use(subscriptionsRouter({ config, store, auth, dnsLookup, limits }));
     app.use(readRouter({ store, auth, worker, limits }));
+    if (policies) app.use(policiesRouter({ policies, auth, limits }));
 
     app.get('/', (_req, res) => {
         res.type('text/plain').send([

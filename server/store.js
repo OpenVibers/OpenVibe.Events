@@ -91,7 +91,7 @@ function subscriptionView(row, { withSecret = false } = {}) {
     return out;
 }
 
-function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage: usageConfig = { enabled: true } } = {}) {
+function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage: usageConfig = { enabled: true }, policies = null } = {}) {
     // Project usage rollups (./usage.js): counted in the transactions below, sent as events.usage.recorded.
     const usage = createUsage(db, { clock, enabled: usageConfig.enabled !== false });
     const q = {
@@ -130,7 +130,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
             ON CONFLICT(consumer, scope) DO UPDATE SET revoked_at = GREATEST(app_revocations.revoked_at, excluded.revoked_at)`),
         revokedAt: db.prepare('SELECT revoked_at FROM app_revocations WHERE consumer = ? AND scope = ?'),
         insertDelivery: db.prepare(`INSERT INTO deliveries (event_id, subscription_id, seq, priority, attempt, status,
-            next_attempt_at, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 'pending', ?, ?, ?) ON CONFLICT DO NOTHING`),
+            next_attempt_at, ordering_key, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 'pending', ?, ?, ?, ?) ON CONFLICT DO NOTHING`),
         afterSeq: db.prepare('SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?'),
         afterSeqLike: db.prepare("SELECT * FROM events WHERE seq > ? AND event_type ILIKE ? ESCAPE '\\' ORDER BY seq LIMIT ?"),
     };
@@ -229,9 +229,13 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
             if (directive) row.redacts = 1;
             await q.insertEvent.run(row);
             await q.addReceipt.run(PUBLISH_RECEIPT, env.event_id, now);
+            // The ordering key is a property of the event type (ADR-042 decision 4): resolve it once per event and give
+            // every delivery of it the same key. No policy row (the default) resolves to null and behaves as before.
+            // Publisher intent is not read: the publish contract has no intent field.
+            const orderingKey = policies ? await policies.keyFor(env.event_type, env) : null;
             for (const s of subs) {
                 if (apps.deliverable(s, row)) {
-                    await q.insertDelivery.run(env.event_id, s.id, seq, PRIORITY_RANK[env.priority], now, now, now);
+                    await q.insertDelivery.run(env.event_id, s.id, seq, PRIORITY_RANK[env.priority], now, orderingKey, now, now);
                 }
             }
             await revocationHook(row, now);
@@ -422,47 +426,72 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
     // ── Deliveries ───────────────────────────────────────────
 
     /**
-     * Claim up to `limit` due deliveries for `owner` until `leaseUntil` (ms): the next due delivery (by priority class,
-     * then seq) of each subscription that has none in flight. The claim locks the subscription rows
-     * (FOR UPDATE SKIP LOCKED), so two workers — in one process or many — never claim the same subscription at once, and
-     * the lease it writes keeps every other worker off that subscription until recordAttempt clears it or it expires
-     * (an expired lease is claimable again: delivery is at least once). `maxApp` caps developer-app subscriptions.
+     * Claim up to `limit` due deliveries for `owner` until `leaseUntil` (ms): the best claimable delivery (by priority
+     * class, then seq) of each subscription that has room. A delivery is claimable when it is due and (ADR-042
+     * decision 4) it is the head of its ordering key — no lower-seq pending/failed row of the same (subscription, key)
+     * and nothing of that key leased — or it has no key at all. At most `subscriptions.max_inflight` deliveries of a
+     * subscription are leased at once (default 1 = today); with more, several keys of one subscription run together,
+     * never two of one key. The claim locks the subscription rows (FOR UPDATE SKIP LOCKED), so two workers — in one
+     * process or many — never claim the same subscription at once, and the lease it writes keeps every other worker off
+     * until recordAttempt clears it or it expires (an expired lease is claimable again: delivery is at least once).
+     * `maxApp` caps developer-app subscriptions.
+     *
+     * The leasing UPDATE re-checks everything in its own snapshot (READ COMMITTED does not re-evaluate the candidate
+     * query's predicates when the locked row itself did not change): the head condition, that nothing of the key is
+     * leased, and that the subscription is under its inflight cap. A claim counts only when it changed exactly one row.
      */
     const claimDeliveries = async (now, limit, { owner, leaseUntil, maxApp = limit } = {}) => {
         if (!owner || !(leaseUntil > now) || limit <= 0) return [];
+        // Claimable: due, and the head of its key (no lower-seq pending/failed row of it, nothing of it leased). Two
+        // bindings, both `now` (the due check and the lease check).
+        const claimable = (d) => `(${d}.status IN ('pending', 'failed') AND ${d}.next_attempt_at <= ?
+            AND (${d}.ordering_key IS NULL OR (
+                NOT EXISTS (SELECT 1 FROM deliveries x WHERE x.subscription_id = ${d}.subscription_id
+                    AND x.ordering_key = ${d}.ordering_key AND x.status IN ('pending', 'failed') AND x.seq < ${d}.seq)
+                AND NOT EXISTS (SELECT 1 FROM deliveries y WHERE y.subscription_id = ${d}.subscription_id
+                    AND y.ordering_key = ${d}.ordering_key AND y.lease_until > ?)
+            )))`;
+        // One binding: `now`, the lease expiry to compare against.
+        const leased = (sub) => `(SELECT COUNT(*) FROM deliveries x WHERE x.subscription_id = ${sub} AND x.lease_until > ?)`;
         return await db.tx(async () => {
-            const due = `d.status IN ('pending', 'failed') AND d.next_attempt_at <= ?`;
             // First-party and developer-app subscriptions are fetched apart, each up to its own share, then merged by
-            // priority: app subscriptions that outrank first-party ones can never crowd them out of a claim.
+            // priority: app subscriptions that outrank first-party ones can never crowd them out of a claim. Only a
+            // subscription with a CLAIMABLE delivery is a candidate (a backlog of non-heads cannot occupy claim slots).
             const candidates = (apps, n) => (n <= 0 ? [] : db.prepare(`
                 SELECT s.id, s.project_id,
-                    (SELECT d.priority FROM deliveries d WHERE d.subscription_id = s.id AND ${due} ORDER BY d.priority, d.seq LIMIT 1) AS p,
-                    (SELECT d.seq FROM deliveries d WHERE d.subscription_id = s.id AND ${due} ORDER BY d.priority, d.seq LIMIT 1) AS q
+                    (SELECT d.priority FROM deliveries d WHERE d.subscription_id = s.id AND ${claimable('d')} ORDER BY d.priority, d.seq LIMIT 1) AS p,
+                    (SELECT d.seq FROM deliveries d WHERE d.subscription_id = s.id AND ${claimable('d')} ORDER BY d.priority, d.seq LIMIT 1) AS q
                 FROM subscriptions s
                 WHERE s.enabled = 1 AND s.project_id IS ${apps ? 'NOT ' : ''}NULL
-                  AND EXISTS (SELECT 1 FROM deliveries d WHERE d.subscription_id = s.id AND ${due})
-                  AND NOT EXISTS (SELECT 1 FROM deliveries x WHERE x.subscription_id = s.id AND x.lease_until > ?)
+                  AND EXISTS (SELECT 1 FROM deliveries d WHERE d.subscription_id = s.id AND ${claimable('d')})
+                  AND ${leased('s.id')} < s.max_inflight
                 ORDER BY p, q LIMIT ?
-                FOR UPDATE OF s SKIP LOCKED`).all(now, now, now, now, n));
+                FOR UPDATE OF s SKIP LOCKED`).all(now, now, now, now, now, now, now, n));
             const subs = [...await candidates(false, limit), ...await candidates(true, Math.min(limit, Math.max(0, maxApp)))]
                 .sort((x, y) => Number(x.p) - Number(y.p) || Number(x.q) - Number(y.q));
             const picked = [];
             let apps = 0;
             const next = db.prepare(`SELECT d.*, s.project_id AS app_project_id FROM deliveries d JOIN subscriptions s ON s.id = d.subscription_id
-                WHERE d.subscription_id = ? AND d.status IN ('pending', 'failed') AND d.next_attempt_at <= ? ORDER BY d.priority, d.seq LIMIT 1`);
-            // The lease is taken only if nothing of this subscription is leased as of NOW: this statement starts after the
-            // subscription row was locked, so it sees a lease another worker committed after the candidate query's
-            // snapshot (READ COMMITTED does not re-check that query's NOT EXISTS when the locked row itself did not change).
+                WHERE d.subscription_id = ? AND ${claimable('d')} AND ${leased('d.subscription_id')} < s.max_inflight
+                ORDER BY d.priority, d.seq LIMIT 1`);
+            // The lease is taken only if it still holds as of NOW (see the method comment): claimable, under the cap,
+            // and of a key nothing else is leased on.
             const lease = db.prepare(`UPDATE deliveries d SET lease_owner = ?, lease_until = ? WHERE d.event_id = ? AND d.subscription_id = ?
-                AND d.status IN ('pending', 'failed') AND NOT EXISTS (SELECT 1 FROM deliveries x WHERE x.subscription_id = d.subscription_id AND x.lease_until > ?)`);
+                AND ${claimable('d')}
+                AND ${leased('d.subscription_id')} < (SELECT s.max_inflight FROM subscriptions s WHERE s.id = d.subscription_id)`);
             for (const sub of subs) {
                 if (picked.length >= limit) break;
                 if (sub.project_id && apps >= maxApp) continue;
-                const d = await next.get(sub.id, now);
-                if (!d) continue;
-                if ((await lease.run(owner, leaseUntil, d.event_id, d.subscription_id, now)).changes !== 1) continue;   // another worker got there first
-                picked.push({ ...d, lease_owner: owner, lease_until: leaseUntil });
-                if (sub.project_id) apps++;
+                // Up to (max_inflight − leased) deliveries of this subscription in one pass: `next` returns null when the
+                // subscription is at its cap or has no claimable delivery left.
+                for (;;) {
+                    if (picked.length >= limit || (sub.project_id && apps >= maxApp)) break;
+                    const d = await next.get(sub.id, now, now, now);
+                    if (!d) break;
+                    if ((await lease.run(owner, leaseUntil, d.event_id, d.subscription_id, now, now, now)).changes !== 1) break;   // another worker got there first
+                    picked.push({ ...d, lease_owner: owner, lease_until: leaseUntil });
+                    if (sub.project_id) apps++;
+                }
             }
             return picked;
         });
@@ -525,7 +554,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
     const requeue = async (sub, { fromSeq, eventIds, max = 10000 }) => await db.tx(async () => {
         const now = clock.now();
         let rows;
-        const cols = 'id, seq, priority, event_type, visibility, project_id, env';
+        const cols = 'id, seq, priority, event_type, visibility, project_id, env, subject_type, subject_id, actor, payload';
         if (Array.isArray(eventIds)) {
             const get = db.prepare(`SELECT ${cols} FROM events WHERE id = ?`);
             rows = (await Promise.all(eventIds.map(async id => await get.get(id)))).filter(Boolean);
@@ -535,11 +564,17 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
         }
         // Replay never widens a subscription's scope (app scope, sandbox separation).
         rows = rows.filter(r => apps.deliverable(sub, r)).slice(0, max);
-        const up = db.prepare(`INSERT INTO deliveries (event_id, subscription_id, seq, priority, attempt, status, next_attempt_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 0, 'pending', ?, ?, ?)
+        // ordering_key is written on an insert only: a row that already exists keeps the key its first fan-out gave it.
+        const up = db.prepare(`INSERT INTO deliveries (event_id, subscription_id, seq, priority, attempt, status, next_attempt_at, ordering_key, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 0, 'pending', ?, ?, ?, ?)
             ON CONFLICT(event_id, subscription_id) DO UPDATE SET status = 'pending', attempt = 0, next_attempt_at = excluded.next_attempt_at,
                 last_error = NULL, last_status = NULL, delivered_at = NULL, updated_at = excluded.updated_at`);
-        for (const r of rows) await up.run(r.id, sub.id, r.seq, PRIORITY_RANK[r.priority], now, now, now);
+        for (const r of rows) {
+            const key = policies ? await policies.keyFor(r.event_type, {
+                event_type: r.event_type, subject: { type: r.subject_type, id: r.subject_id }, actor: JSON.parse(r.actor), payload: JSON.parse(r.payload),
+            }) : null;
+            await up.run(r.id, sub.id, r.seq, PRIORITY_RANK[r.priority], now, key, now, now);
+        }
         return rows.length;
     });
 

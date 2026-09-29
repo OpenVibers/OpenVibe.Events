@@ -9,6 +9,7 @@
  */
 const { load } = require('./config');
 const { openDb, createStore } = require('./store');
+const { createPolicyLibrary } = require('./fabric/policy');
 const { createKeyStore, createAuth } = require('./auth');
 const { createWorker } = require('./worker');
 const { createRealtime } = require('./realtime');
@@ -23,7 +24,10 @@ async function start({
     config = config || load();
     // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
     const db = givenDb || await openDb(config, { log });
-    const store = createStore(db, { clock, maxHops: config.maxHops, usage: config.usage });
+    // Delivery policies (ADR-042 decisions 1 and 4): the store reads the resolved ordering key on fan-out, the admin
+    // API writes rows and drops the compiled cache. One library per process, shared by both.
+    const policies = createPolicyLibrary(db, { clock, log });
+    const store = createStore(db, { clock, maxHops: config.maxHops, usage: config.usage, policies });
     const keys = createKeyStore({ urls: [config.networkInternalUrl, config.networkUrl], pem: config.networkPublicKey, fetchImpl, log });
     const auth = createAuth({ config, keys, store });
     const metrics = createMetrics({ store });
@@ -33,7 +37,7 @@ async function start({
     const realtime = createRealtime({ store, auth, config, clock, log });
     metrics.bind({ realtime });
     const valkey = config.valkey.url ? require('openvibe-sdk/valkey').createValkey({ url: config.valkey.url, prefix: config.valkey.prefix, log }) : null;
-    const app = createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log, valkey });
+    const app = createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log, valkey, policies });
 
     // The key loads in the background (retrying while Network boots); /api/ready says when it has.
     const keyLoaded = keys.start().catch(() => null);
@@ -86,6 +90,7 @@ async function start({
     async function close() {
         clearInterval(pruneTimer);
         if (usageTimer) clearInterval(usageTimer);
+        policies.stop();
         realtime.stop();
         keys.stop();
         await worker.stop();
@@ -97,7 +102,7 @@ async function start({
         if (!givenDb) await db.close();
     }
 
-    return { config, db, store, keys, keyLoaded, auth, worker, realtime, metrics, app, server, close, prune, flushUsage };
+    return { config, db, store, keys, keyLoaded, auth, worker, realtime, metrics, app, server, policies, close, prune, flushUsage };
 }
 
 if (require.main === module) {
