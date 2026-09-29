@@ -2,6 +2,8 @@
 const assert = require('assert');
 const crypto = require('crypto');
 const nodeHttp = require('http');
+const { validate } = require('openvibe-contracts');
+const cursor = require('../server/cursor');
 const topics = require('../server/topics');
 const { hasCap, allows } = require('../server/auth');
 const { load } = require('../server/config');
@@ -49,6 +51,9 @@ t('pull: cursor, topic filter, internal events included for services', async () 
 
     let r = await request(h.base, 'GET', '/api/v1/events?topic=live.vod.*&after_seq=0&limit=1', { token: reader });
     assert.strictEqual(r.status, 200, r.text);
+    assert.ok(validate('events.read-result@1', r.body).valid, JSON.stringify(validate('events.read-result@1', r.body).errors));
+    for (const e of r.body.events) assert.deepStrictEqual(cursor.decode(e.cursor), { seq: e.seq, epoch: await h.store.epoch() });
+    assert.strictEqual(cursor.decode(r.body.next_cursor).seq, r.body.next_after_seq);
     assert.deepStrictEqual(r.body.events.map(e => e.seq), [s1]);
     assert.strictEqual(r.body.events[0].event.visibility, 'internal');
     r = await request(h.base, 'GET', `/api/v1/events?topic=live.vod.*&after_seq=${r.body.next_after_seq}`, { token: reader });

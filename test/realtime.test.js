@@ -50,7 +50,8 @@ t('visibility: public to everyone, subject only to that user, internal only to s
     assert.deepStrictEqual(seqs(a), [pub, toAliceAsSubject, byAliceAsActor]);
     assert.deepStrictEqual(seqs(b), [pub], 'bob sees nothing addressed to alice');
     assert.deepStrictEqual(seqs(svc), [pub, internal, toAliceAsSubject, byAliceAsActor]);
-    assert.strictEqual(a.messages.find(m => m.data.includes('hi alice')).id, String(toAliceAsSubject), 'SSE id is the seq');
+    const { encode } = require('../server/cursor');
+    assert.strictEqual(a.messages.find(m => m.data.includes('hi alice')).id, encode(toAliceAsSubject, await h.store.epoch()), 'SSE id is the cursor');
     for (const c of [anon, a, b, svc]) c.close();
 });
 

@@ -8,8 +8,8 @@
  * minted by Network for the signed-in person: how pages on every OpenVibe site open a stream without a
  * third-party cookie), a Bearer user or service token, the ov_token cookie, or nobody.
  *
- * Every message is `id: <seq>` + `data: {"seq":n,"event":<envelope>}`. Visibility decides who sees
- * an event:
+ * Every message is `id: <cursor>` (ADR-042 decision 7; a bare seq is still accepted for one release) +
+ * `data: {"seq":n,"event":<envelope>}`. Visibility decides who sees an event:
  *   public    anyone subscribed to a matching topic (signed-out visitors too, unless disabled)
  *   subject   only the user whose subject id is the event's actor.id or its subject.id (subject
  *             type user); a guessed topic yields nothing for anyone else. A person's topic is an
@@ -18,9 +18,10 @@
  *   internal  service principals (token with events.event.read) only, never a browser
  * Developer-app events (app.<project_key>.*, events.app.publish) are never streamed here, to anyone.
  *
- * Resume: `Last-Event-ID` (or ?last_event_id=) is a seq. Missed events are replayed first; when the
- * cursor is older than retention an `event: gap` message comes first, so the client knows to
- * refetch state. Heartbeat comment every 25 s.
+ * Resume: `Last-Event-ID` (or ?last_event_id=) is a cursor, or a bare seq for one release. Missed
+ * events are replayed first; when the cursor is older than retention — or belongs to another
+ * retention epoch — an `event: gap` message comes first, so the client knows to refetch state.
+ * Heartbeat comment every 25 s.
  *
  * Public replay window: a browser (signed out or signed in) is replayed `public` events received in
  * the last REALTIME_PUBLIC_REPLAY_SECONDS (300) only, enough to ride out a reconnect. Anything
@@ -31,6 +32,7 @@
  */
 const { http } = require('openvibe-contracts');
 const topics = require('./topics');
+const cursor = require('./cursor');
 const { rowToEnvelope } = require('./store');
 
 const ORIGIN_RE = /^https:\/\/(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*openvibe\.[a-z]{2,63}$/;
@@ -87,7 +89,7 @@ function createRealtime({ store, auth, config, clock = { now: () => Date.now() }
 
     function sendEvent(conn, row) {
         conn.lastSeq = row.seq;
-        write(conn, `id: ${row.seq}\ndata: ${JSON.stringify({ seq: row.seq, event: rowToEnvelope(row) })}\n\n`);
+        write(conn, `id: ${cursor.encode(row.seq, conn.epoch)}\ndata: ${JSON.stringify({ seq: row.seq, event: rowToEnvelope(row) })}\n\n`);
     }
 
     function sendGap(conn, gap) {
@@ -126,8 +128,19 @@ function createRealtime({ store, auth, config, clock = { now: () => Date.now() }
             return http.sendProblem(res, 503, 'realtime.over_capacity', { detail: 'too many realtime connections, retry shortly', ctx });
         }
 
+        const epoch = await store.epoch();
         const rawLast = req.headers['last-event-id'] ?? req.query.last_event_id;
-        const lastId = rawLast != null && /^\d{1,15}$/.test(String(rawLast).trim()) ? Number(String(rawLast).trim()) : null;
+        // A cursor, or — for one release — a bare seq. Anything else is ignored, as before.
+        let lastId = null;
+        let epochMismatch = false;
+        if (rawLast != null) {
+            const raw = String(rawLast).trim();
+            if (/^\d{1,15}$/.test(raw)) lastId = Number(raw);
+            else {
+                const decoded = cursor.decode(raw);
+                if (decoded) { lastId = decoded.seq; epochMismatch = decoded.epoch !== epoch; }
+            }
+        }
 
         res.status(200);
         res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
@@ -140,7 +153,7 @@ function createRealtime({ store, auth, config, clock = { now: () => Date.now() }
 
         // The connection takes its slot and joins the fan-out before the first await, so the cap holds and nothing
         // published during the catch-up is lost: those rows wait in `pending` and follow the replay, skipping what it sent.
-        const conn = { res, viewer, patterns: wanted, lastSeq: lastId, pending: [], closed: false };
+        const conn = { res, viewer, patterns: wanted, lastSeq: lastId, epoch, pending: [], closed: false };
         conns.add(conn);
         res.on('close', () => close(conn));
         write(conn, `retry: 3000\n: connected ${viewer.kind}\n\n`);
@@ -149,34 +162,37 @@ function createRealtime({ store, auth, config, clock = { now: () => Date.now() }
             if (lastId != null) {
                 const latest = await store.lastSeq();
                 const oldest = await store.oldestSeq();
-                if (lastId > latest) {
+                let at = lastId;   // where the replay starts
+                if (epochMismatch) {
+                    // The hot store was truncated or re-imported: the cursor's position belongs to a previous epoch
+                    // and cannot be mapped. The gap is the signal; the retained events then replay.
+                    sendGap(conn, { reason: 'epoch', from_seq: 1, to_seq: Math.max(oldest - 1, 0), latest_seq: latest });
+                    at = Math.max(oldest - 1, 0);
+                } else if (lastId > latest) {
                     sendGap(conn, { reason: 'cursor_ahead', from_seq: latest + 1, to_seq: lastId, latest_seq: latest });
-                    conn.lastSeq = latest;
-                } else {
-                    let cursor = lastId;
-                    if (lastId < oldest - 1) {
-                        sendGap(conn, { reason: 'retention', from_seq: lastId + 1, to_seq: oldest - 1, latest_seq: latest });
-                        cursor = oldest - 1;
-                    }
-                    // Browsers: public events older than the window are not replayed (a gap says so).
-                    const publicFrom = viewer.kind === 'service' ? 0
-                        : opts.publicReplaySeconds > 0 ? await store.firstSeqSince(clock.now() - opts.publicReplaySeconds * 1000) : latest + 1;
-                    if (cursor < publicFrom - 1) {
-                        sendGap(conn, { reason: 'public_window', from_seq: cursor + 1, to_seq: publicFrom - 1, latest_seq: latest, window_seconds: opts.publicReplaySeconds });
-                        // Signed out, only public events are visible: nothing before the window to scan.
-                        if (viewer.kind === 'anonymous') cursor = publicFrom - 1;
-                    }
-                    const accept = (row) => visibleTo(viewer, row) && !(row.visibility === 'public' && row.seq < publicFrom);
-                    const { rows, cursor: scanned } = await store.scan(cursor, {
-                        patterns: wanted, limit: opts.replayMax, scanMax: opts.replayMax * 50, accept,
-                    });
-                    for (const row of rows) sendEvent(conn, row);
-                    if (scanned < latest) {
-                        // Replay stopped at its limit: everything after `scanned` is reported as a gap.
-                        sendGap(conn, { reason: 'replay_limit', from_seq: scanned + 1, to_seq: latest, latest_seq: latest });
-                    }
-                    conn.lastSeq = latest;
+                    at = latest;
+                } else if (lastId < oldest - 1) {
+                    sendGap(conn, { reason: 'retention', from_seq: lastId + 1, to_seq: oldest - 1, latest_seq: latest });
+                    at = oldest - 1;
                 }
+                // Browsers: public events older than the window are not replayed (a gap says so).
+                const publicFrom = viewer.kind === 'service' ? 0
+                    : opts.publicReplaySeconds > 0 ? await store.firstSeqSince(clock.now() - opts.publicReplaySeconds * 1000) : latest + 1;
+                if (at < publicFrom - 1) {
+                    sendGap(conn, { reason: 'public_window', from_seq: at + 1, to_seq: publicFrom - 1, latest_seq: latest, window_seconds: opts.publicReplaySeconds });
+                    // Signed out, only public events are visible: nothing before the window to scan.
+                    if (viewer.kind === 'anonymous') at = publicFrom - 1;
+                }
+                const accept = (row) => visibleTo(viewer, row) && !(row.visibility === 'public' && row.seq < publicFrom);
+                const { rows, cursor: scanned } = await store.scan(at, {
+                    patterns: wanted, limit: opts.replayMax, scanMax: opts.replayMax * 50, accept,
+                });
+                for (const row of rows) sendEvent(conn, row);
+                if (scanned < latest) {
+                    // Replay stopped at its limit: everything after `scanned` is reported as a gap.
+                    sendGap(conn, { reason: 'replay_limit', from_seq: scanned + 1, to_seq: latest, latest_seq: latest });
+                }
+                conn.lastSeq = latest;
             }
         } catch (err) {
             // The headers are sent: a failed catch-up can only end the stream (the client reconnects with its Last-Event-ID).

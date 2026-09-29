@@ -3,7 +3,8 @@
  * The durable store (PostgreSQL through openvibe-sdk/db). An event is committed, together with one
  * delivery row per matching subscription, before anything is sent anywhere: "event persists before
  * consumer delivery". Global order is `seq`, handed out from a counter that never goes backwards,
- * even after retention has pruned the newest rows.
+ * even after retention has pruned the newest rows. Beside it a cursor (./cursor.js) names a seq plus
+ * the retention epoch — ADR-042 decision 7; seq stays on the wire for one release.
  */
 const fs = require('fs');
 const path = require('path');
@@ -11,6 +12,7 @@ const { createDb } = require('openvibe-sdk/db');
 const topics = require('./topics');
 const apps = require('./apps');
 const redaction = require('./redaction');
+const cursor = require('./cursor');
 const { createUsage, deliveryCode } = require('./usage');
 
 const PRIORITY_RANK = { critical: 0, important: 1, low: 2 };
@@ -99,6 +101,8 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
         nextSeq: db.prepare("UPDATE sequences SET value = value + 1 WHERE name = 'events' RETURNING value"),
         lastSeq: db.prepare("SELECT value FROM sequences WHERE name = 'events'"),
         minSeq: db.prepare('SELECT MIN(seq) AS s FROM events'),
+        epoch: db.prepare("SELECT value FROM store_epoch WHERE name = 'events'"),
+        bumpEpoch: db.prepare("UPDATE store_epoch SET value = value + 1 WHERE name = 'events' RETURNING value"),
         // Hop depth counts only rows the publisher's own tenancy can have caused: a first-party
         // publish ignores app events (an app that saw a public trace_id cannot poison that trace), an
         // app publish counts first-party rows plus its own project and environment.
@@ -144,6 +148,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
      */
     const insertBatch = async (items, { publisher, requestId, project = null }) => await db.tx(async () => {
         const now = clock.now();
+        const epoch = (await q.epoch.get()).value;   // the retention epoch the stored positions belong to (ADR-042)
         const results = [];
         const inserted = [];
         const subs = await q.enabledSubs.all();
@@ -159,7 +164,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
                 if (existing.source !== env.source || existing.event_type !== env.event_type) {
                     throw new StoreError(409, 'events.id_conflict', `event ${env.event_id} already exists with different content`);
                 }
-                results.push({ event_id: env.event_id, seq: existing.seq, duplicate: true });
+                results.push({ event_id: env.event_id, seq: existing.seq, duplicate: true, cursor: cursor.encode(existing.seq, epoch) });
                 continue;
             }
             if (await q.getReceipt.get(PUBLISH_RECEIPT, env.event_id)) {
@@ -230,7 +235,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
                 }
             }
             await revocationHook(row, now);
-            results.push({ event_id: env.event_id, seq, duplicate: false });
+            results.push({ event_id: env.event_id, seq, duplicate: false, cursor: cursor.encode(seq, epoch) });
             inserted.push(row);
             if (directive) {
                 const redacted = await applyRedaction(row, directive, now);
@@ -337,6 +342,17 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
     async function oldestSeq() {
         const m = (await q.minSeq.get()).s;
         return m == null ? await lastSeq() + 1 : m;
+    }
+
+    /** The retention epoch of the hot store (ADR-042 decision 7): a cursor carries it so a position from a previous
+     *  epoch — after a truncate or a re-import — is answered with a gap, never used as if it were current. */
+    async function epoch() {
+        return (await q.epoch.get()).value;
+    }
+
+    /** Advance the retention epoch. Called only when the hot store is truncated or re-imported. Returns the new epoch. */
+    async function bumpEpoch() {
+        return (await q.bumpEpoch.get()).value;
     }
 
     /**
@@ -535,14 +551,20 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
 
     // ── Checkpoints ──────────────────────────────────────────
 
+    /**
+     * A checkpoint is a cursor in parts: `cursor` is the numeric position, `epoch` the retention epoch it belongs to
+     * and `carrier` the carrier that position is on (ADR-042 decision 7). `cursor` stays numeric on the wire.
+     */
     async function getCheckpoint(consumer, topicPattern) {
-        const r = await db.prepare('SELECT cursor, updated_at FROM consumer_checkpoints WHERE consumer = ? AND topic_pattern = ?').get(consumer, topicPattern);
-        return r ? { cursor: r.cursor, updated_at: new Date(r.updated_at).toISOString() } : null;
+        const r = await db.prepare('SELECT cursor, epoch, carrier, updated_at FROM consumer_checkpoints WHERE consumer = ? AND topic_pattern = ?').get(consumer, topicPattern);
+        return r ? { cursor: r.cursor, epoch: r.epoch, carrier: r.carrier || null, updated_at: new Date(r.updated_at).toISOString() } : null;
     }
-    async function setCheckpoint(consumer, topicPattern, cursor) {
-        await db.prepare(`INSERT INTO consumer_checkpoints (consumer, topic_pattern, cursor, updated_at) VALUES (?, ?, ?, ?)
-            ON CONFLICT(consumer, topic_pattern) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at`)
-            .run(consumer, topicPattern, cursor, clock.now());
+    /** Store a position. `epoch` defaults to the current retention epoch (a legacy numeric cursor). */
+    async function setCheckpoint(consumer, topicPattern, position, { epoch: atEpoch = null, carrier = null } = {}) {
+        const at = atEpoch == null ? await epoch() : atEpoch;
+        await db.prepare(`INSERT INTO consumer_checkpoints (consumer, topic_pattern, cursor, epoch, carrier, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(consumer, topic_pattern) DO UPDATE SET cursor = excluded.cursor, epoch = excluded.epoch, carrier = excluded.carrier, updated_at = excluded.updated_at`)
+            .run(consumer, topicPattern, position, at, carrier, clock.now());
         return await getCheckpoint(consumer, topicPattern);
     }
 
@@ -567,7 +589,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
     }
 
     return {
-        db, insertBatch, redact, getEvent, revokedAt, lastSeq, oldestSeq, firstSeqSince, scan,
+        db, insertBatch, redact, getEvent, revokedAt, lastSeq, oldestSeq, epoch, bumpEpoch, firstSeqSince, scan,
         createSubscription, getSubscription, listSubscriptions, countSubscriptions, countProjectSubscriptions, setSubscriptionEnabled, rotateSubscriptionSecret,
         claimDeliveries, recordAttempt, getDelivery, listDeliveries, requeue, deliveryCounts,
         getCheckpoint, setCheckpoint, prune, ping, usage, flushUsage,

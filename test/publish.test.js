@@ -1,6 +1,7 @@
 'use strict';
 const assert = require('assert');
-const { ids } = require('openvibe-contracts');
+const { ids, validate } = require('openvibe-contracts');
+const cursor = require('../server/cursor');
 const { boot, request, serviceToken, appToken, envelope, suite } = require('./helpers');
 
 const t = suite('publish');
@@ -35,6 +36,8 @@ t('valid envelope -> 201 with a seq; defaults filled', async () => {
     assert.strictEqual(r.body.event_id, env.event_id);
     assert.ok(Number.isInteger(r.body.seq) && r.body.seq > 0);
     assert.strictEqual(r.body.duplicate, false);
+    assert.ok(validate('events.publish-result@1', r.body).valid, JSON.stringify(validate('events.publish-result@1', r.body).errors));
+    assert.deepStrictEqual(cursor.decode(r.body.cursor), { seq: r.body.seq, epoch: await h.store.epoch() });
     const row = await h.store.getEvent(env.event_id);
     assert.strictEqual(row.priority, 'important');
     assert.strictEqual(row.visibility, 'internal');

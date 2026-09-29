@@ -3,8 +3,11 @@
  * POST /api/v1/events  (service token, audience openvibe.events, capability events.event.publish;
  *                       or a developer app token with events.app.publish)
  *
- *   body: <envelope>            -> 201 { event_id, seq, duplicate: false } | 200 on a repeat
- *   body: { events: [...] }     -> 201 { results: [{ event_id, seq, duplicate }] } (<= 100, atomic)
+ *   body: <envelope>            -> 201 { event_id, seq, cursor, duplicate: false } | 200 on a repeat
+ *   body: { events: [...] }     -> 201 { results: [{ event_id, seq, cursor, duplicate }] } (<= 100, atomic)
+ *
+ * `cursor` (ADR-042 decision 7) is the opaque position beside seq; `seq` and the global-order promise
+ * stay for one release, then go.
  *
  * Every envelope must validate against events.event-envelope@1; `source` must be the calling
  * service (svc:live -> 'live'); `event_type` must start with a prefix that source owns. A

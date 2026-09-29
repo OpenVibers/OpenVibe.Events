@@ -112,7 +112,7 @@ Each delivery is `POST <endpoint>` with body `{ "event": <envelope>, "seq": n }`
 
 Operators: `GET /api/v1/deliveries?status=dead` is the dead-letter queue; `POST /api/v1/deliveries/replay { subscription_id, event_ids: [...] }` or `{ subscription_id, from_seq }` requeues retained events (that is also how a new subscription catches up on history).
 
-Pull consumers: `GET /api/v1/events?topic=media.vod.*&after_seq=<cursor>&limit=100` returns `{ events: [{ seq, event }], next_after_seq, latest_seq }`, plus `gap: { from_seq, to_seq }` when the cursor is older than retention. `PUT /api/v1/checkpoints { topic, cursor }` stores a consumer's cursor here if it has nowhere better.
+Pull consumers: `GET /api/v1/events?topic=media.vod.*&after_seq=<position>&limit=100` returns `{ events: [{ seq, cursor, event }], next_after_seq, next_cursor, latest_seq }`, plus `gap: { from_seq, to_seq }` when the position is older than retention or from another retention epoch. The opaque cursor ([ADR-042](https://github.com/OpenVibers/OpenVibe.Contracts/blob/main/docs/adr/ADR-042-events-fabric.md) decision 7) goes back in as `after=<cursor>` beside `after_seq`; `next_cursor` is the cursor for the next page, `seq`/`next_after_seq`/`latest_seq` stay for one release. `PUT /api/v1/checkpoints { topic, cursor }` stores a consumer's position here if it has nowhere better (an opaque cursor string is accepted in place of the integer; the answer carries its `epoch`, `carrier` and `next_cursor`).
 
 ## Developer apps
 
@@ -198,19 +198,19 @@ re-exports them and keeps no SQLite copies.
 const es = new EventSource('https://events.openvibe.network/realtime/stream?topics=live.stream.*', { withCredentials: true });
 // A signed-in person's own events from any OpenVibe site: a fresh ticket from Network for every (re)connect.
 const { ticket, stream_url, topics } = await (await fetch('https://openvibe.network/api/v1/realtime/ticket', { method: 'POST', headers: { Authorization: `Bearer ${networkJwt}` } })).json();
-const mine = new EventSource(`${stream_url}?topics=${topics.join(',')}&ticket=${ticket}${lastSeq != null ? `&last_event_id=${lastSeq}` : ''}`);
-es.onmessage = (m) => { const { seq, event } = JSON.parse(m.data); };
+const mine = new EventSource(`${stream_url}?topics=${topics.join(',')}&ticket=${ticket}${lastEventId != null ? `&last_event_id=${lastEventId}` : ''}`);
+es.onmessage = (m) => { lastEventId = m.lastEventId; const { seq, event } = JSON.parse(m.data); };
 es.addEventListener('gap', (m) => { /* events were missed: refetch state */ });
 ```
 
 - Auth: a **realtime ticket** (`?ticket=`), the Network `ov_token` cookie or a Bearer user JWT; a service token with `events.event.read`; or nobody (public events only, `REALTIME_ALLOW_ANONYMOUS`). An expired cookie degrades to anonymous; a bad Bearer is a 401.
 - Realtime tickets (ADR-005 amendment 2): a page on any OpenVibe site cannot count on a cookie of events.openvibe.network (third-party there), and an EventSource cannot send a header. So it asks Network for a ticket (`POST https://openvibe.network/api/v1/realtime/ticket`, answering `network.realtime-ticket-result@1`) and opens `/realtime/stream?topics=network.notification.*&ticket=<ticket>` without credentials. The ticket is an RS256 JWT signed with Network's key (`identity.realtime-ticket-claims@1`): `iss <OV_NETWORK_ISSUER>/realtime`, `sub <usr_>`, `aud [openvibe.events]`, `typ` and `purpose` `realtime`, a lifetime of at most 300 s (Network mints 120 s) and `jti rtk_…`.
   - Events accepts each ticket once, never as Bearer or cookie, and never logs it. The refusals are 401: `ticket.invalid`, `ticket.expired` and `ticket.used`.
-  - A reconnect asks for a new ticket and resumes with `last_event_id`.
+  - A reconnect asks for a new ticket and resumes with `last_event_id` (the cursor from the last message's SSE `id`).
   - Conversely, a user JWT that carries `typ` or `purpose` (a ticket, a FedCM assertion) is not a session here.
 - A person's topic: `network.notification.created` (Network's outbox; visibility `subject`, subject the recipient). `topics=network.notification.*` streams a person's own notifications and nobody else's. There is no `user:<id>` topic: it is not a valid pattern (400 `realtime.bad_topic`), and subject visibility already does its job.
 - Visibility: `public` events go to anyone subscribed to the topic; `subject` events only to the user whose subject id (`usr_…`) is the event's `actor.id` or its user `subject.id`; `internal` events never reach a browser. A guessed topic yields nothing.
-- Resume: the SSE `id` is the seq, so the browser's automatic `Last-Event-ID` (or `?last_event_id=`) replays what was missed. A cursor older than retention first gets `event: gap` (`{ reason, from_seq, to_seq }`), as does a replay that hits `REALTIME_REPLAY_MAX`.
+- Resume: the SSE `id` is the cursor (ADR-042 decision 7; a bare seq is accepted for one release), so the browser's automatic `Last-Event-ID` (or `?last_event_id=`) replays what was missed. A cursor older than retention — or from another retention epoch (`reason: "epoch"`) — first gets `event: gap` (`{ reason, from_seq, to_seq }`), as does a replay that hits `REALTIME_REPLAY_MAX`.
 - Public replay window: browsers (signed out or signed in) are replayed `public` events received in the last `REALTIME_PUBLIC_REPLAY_SECONDS` (300; 0 = none), enough to ride out a reconnect. Older public events are not replayed: the stream opens with `event: gap` (`reason: "public_window"`, `window_seconds`), and the client refetches state from the owning service. `subject` events addressed to the viewer, and service viewers, keep the whole retention. This keeps the stream from paging through a month of public history, chat lines included; nothing in the network needs more (no browser surface replays public events today).
 - Redacted events are replayed as their tombstones ([Redaction](#redaction)).
 - Heartbeat comment every 25 s; at most 20 topics per connection and `REALTIME_MAX_CONNECTIONS` (2000) overall; CORS with credentials for `https://*.openvibe.*` only.
