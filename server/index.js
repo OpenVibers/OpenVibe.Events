@@ -10,6 +10,8 @@
 const { load } = require('./config');
 const { openDb, createStore } = require('./store');
 const { createPolicyLibrary } = require('./fabric/policy');
+const { createCarriers } = require('./fabric/carriers');
+const { createPlanner } = require('./fabric/planner');
 const { createKeyStore, createAuth } = require('./auth');
 const { createWorker } = require('./worker');
 const { createRealtime } = require('./realtime');
@@ -27,7 +29,13 @@ async function start({
     // Delivery policies (ADR-042 decisions 1 and 4): the store reads the resolved ordering key on fan-out, the admin
     // API writes rows and drops the compiled cache. One library per process, shared by both.
     const policies = createPolicyLibrary(db, { clock, log });
-    const store = createStore(db, { clock, maxHops: config.maxHops, usage: config.usage, policies });
+    // Valkey (before the carriers: valkey-v1 needs it). Without VALKEY_URL it is null and no valkey carrier registers.
+    const valkey = config.valkey.url ? require('openvibe-sdk/valkey').createValkey({ url: config.valkey.url, prefix: config.valkey.prefix, log }) : null;
+    // The carrier registry (ADR-042 decision 5) and the planner that chooses among them; the store writes the chosen
+    // carrier on every delivery at fan-out and records a (class, key) decision in delivery_placements when it changes.
+    const carriers = createCarriers({ config, clock, log, valkey });
+    const planner = createPlanner({ registry: carriers, db, clock, log });
+    const store = createStore(db, { clock, maxHops: config.maxHops, usage: config.usage, policies, planner });
     const keys = createKeyStore({ urls: [config.networkInternalUrl, config.networkUrl], pem: config.networkPublicKey, fetchImpl, log });
     const auth = createAuth({ config, keys, store });
     const metrics = createMetrics({ store });
@@ -36,13 +44,24 @@ async function start({
     const worker = createWorker({ store, config, clock, fetchImpl: deliveryFetch, appPost: appPost || createGuardedPost({ lookup: dnsLookup }), log, observe: metrics.observe });
     const realtime = createRealtime({ store, auth, config, clock, log });
     metrics.bind({ realtime });
-    const valkey = config.valkey.url ? require('openvibe-sdk/valkey').createValkey({ url: config.valkey.url, prefix: config.valkey.prefix, log }) : null;
-    const app = createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log, valkey, policies });
+    const app = createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log, valkey, policies, planner, carriers });
 
     // The key loads in the background (retrying while Network boots); /api/ready says when it has.
     const keyLoaded = keys.start().catch(() => null);
     if (config.worker.enabled) worker.start();
     realtime.start();
+    // The push carriers consume their streams and re-emit remote TOPIC events to this process's SSE clients
+    // (ADR-042 decision 5). A failure to start a carrier is not fatal: the poll (pg-v1) still carries delivery.
+    try {
+        await carriers.start({
+            consumeQueue: config.worker.enabled,
+            claim: (eventId, subscriptionId) => store.claimDelivery(eventId, subscriptionId, worker.lease()),
+            deliver: (delivery) => worker.deliver(delivery),
+            onRemote: (rows) => realtime.publish(rows),
+        });
+    } catch (err) {
+        log.warn(`[events] carriers did not start: ${err.message}`);
+    }
 
     const prune = async () => {
         try {
@@ -91,6 +110,7 @@ async function start({
         clearInterval(pruneTimer);
         if (usageTimer) clearInterval(usageTimer);
         policies.stop();
+        await carriers.stop().catch(() => {});
         realtime.stop();
         keys.stop();
         await worker.stop();
@@ -102,7 +122,7 @@ async function start({
         if (!givenDb) await db.close();
     }
 
-    return { config, db, store, keys, keyLoaded, auth, worker, realtime, metrics, app, server, policies, close, prune, flushUsage };
+    return { config, db, store, keys, keyLoaded, auth, worker, realtime, metrics, app, server, policies, carriers, planner, valkey, close, prune, flushUsage };
 }
 
 if (require.main === module) {

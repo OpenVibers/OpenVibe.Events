@@ -110,8 +110,14 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
         } catch (err) {
             outcome = { ok: false, attempt, status: null, error: err.name === 'TimeoutError' ? 'timeout' : (err.message || String(err)), permanent: Boolean(err.permanent) };
         }
+        // at_most_once (ADR-042 decisions 1 and 5): a failed attempt is final, never retried. The default policy is
+        // at_least_once, so existing subscriptions keep today's retry policy.
+        let atMostOnce = false;
+        if (!outcome.ok && store.resolvePolicy) {
+            try { const pol = await store.resolvePolicy(row.event_type); atMostOnce = Boolean(pol && pol.delivery_semantics === 'at_most_once'); } catch { atMostOnce = false; }
+        }
         if (!outcome.ok) {
-            outcome.dead = outcome.permanent || attempt >= maxAttempts;
+            outcome.dead = outcome.permanent || atMostOnce || attempt >= maxAttempts;
             if (!outcome.dead) outcome.nextAttemptAt = clock.now() + backoffMs[Math.min(attempt - 1, backoffMs.length - 1)];
             if (outcome.dead) log.warn(`[worker] ${row.id} -> ${sub.id} dead after ${attempt} attempts: ${outcome.error}`);
         }
@@ -196,6 +202,9 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
         start() { if (!running) { running = true; schedule(0); } },
         async stop() { running = false; clearTimeout(timer); timer = null; await Promise.allSettled([...inflight]); },
         kick() { schedule(0); },
+        // The carrier path (ADR-042 decision 5): claim one row (store.claimDelivery) and send it through the same send().
+        deliver(delivery) { return send(delivery); },
+        lease(now = clock.now()) { return { owner, leaseUntil: now + leaseMs() }; },
         drain,
         dispatch,
         running: () => running,

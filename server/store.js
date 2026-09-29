@@ -13,6 +13,7 @@ const topics = require('./topics');
 const apps = require('./apps');
 const redaction = require('./redaction');
 const cursor = require('./cursor');
+const { carrierClass, orderingKey } = require('./fabric/policy');
 const { createUsage, deliveryCode } = require('./usage');
 
 const PRIORITY_RANK = { critical: 0, important: 1, low: 2 };
@@ -91,7 +92,7 @@ function subscriptionView(row, { withSecret = false } = {}) {
     return out;
 }
 
-function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage: usageConfig = { enabled: true }, policies = null } = {}) {
+function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage: usageConfig = { enabled: true }, policies = null, planner = null } = {}) {
     // Project usage rollups (./usage.js): counted in the transactions below, sent as events.usage.recorded.
     const usage = createUsage(db, { clock, enabled: usageConfig.enabled !== false });
     const q = {
@@ -130,7 +131,12 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
             ON CONFLICT(consumer, scope) DO UPDATE SET revoked_at = GREATEST(app_revocations.revoked_at, excluded.revoked_at)`),
         revokedAt: db.prepare('SELECT revoked_at FROM app_revocations WHERE consumer = ? AND scope = ?'),
         insertDelivery: db.prepare(`INSERT INTO deliveries (event_id, subscription_id, seq, priority, attempt, status,
-            next_attempt_at, ordering_key, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 'pending', ?, ?, ?, ?) ON CONFLICT DO NOTHING`),
+            next_attempt_at, ordering_key, carrier, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 'pending', ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`),
+        insertPlacement: db.prepare(`INSERT INTO delivery_placements (carrier_class, ordering_key, carrier, result, decided_at)
+            VALUES (?, ?, ?, ?, ?)`),
+        // The carrier a (subscription, ordering key) currently has a backlog on: what pins new deliveries of the key.
+        backlogCarrier: db.prepare(`SELECT carrier FROM deliveries WHERE subscription_id = ? AND ordering_key = ? AND status IN ('pending', 'failed')
+            AND carrier IS NOT NULL ORDER BY seq LIMIT 1`),
         afterSeq: db.prepare('SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?'),
         afterSeqLike: db.prepare("SELECT * FROM events WHERE seq > ? AND event_type ILIKE ? ESCAPE '\\' ORDER BY seq LIMIT ?"),
     };
@@ -151,6 +157,8 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
         const epoch = (await q.epoch.get()).value;   // the retention epoch the stored positions belong to (ADR-042)
         const results = [];
         const inserted = [];
+        const deliveries = [];        // the newly fanned-out deliveries, for the carrier signal after the commit
+        const placementRecords = [];  // (class, key) decisions that changed, written in this transaction
         const subs = await q.enabledSubs.all();
         let recent = null;
         let bytes = null;
@@ -232,11 +240,25 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
             // The ordering key is a property of the event type (ADR-042 decision 4): resolve it once per event and give
             // every delivery of it the same key. No policy row (the default) resolves to null and behaves as before.
             // Publisher intent is not read: the publish contract has no intent field.
-            const orderingKey = policies ? await policies.keyFor(env.event_type, env) : null;
+            const resolved = policies ? await policies.resolve(env.event_type) : { policy: null };
+            const key = resolved.policy ? orderingKey(resolved.policy, env) : null;
+            const klass = resolved.policy ? carrierClass(resolved.policy) : null;
+            // The planner (ADR-042 decision 5) picks the carrier for this (class, key) and records a change. Its chosen
+            // carrier is written on every delivery; a decision that changes is recorded in delivery_placements once.
+            const decision = (planner && klass) ? planner.place(klass, key, resolved.policy) : null;
+            if (decision && decision.record) placementRecords.push(decision.record);
+            row.carrier_class = klass;
+            row.carrier = decision ? decision.carrier : null;
             for (const s of subs) {
-                if (apps.deliverable(s, row)) {
-                    await q.insertDelivery.run(env.event_id, s.id, seq, PRIORITY_RANK[env.priority], now, orderingKey, now, now);
+                if (!apps.deliverable(s, row)) continue;
+                // Pinning (decision 4): while this subscription has a backlog on carrier X for this key, stay on X.
+                let carrier = row.carrier;
+                if (planner && key && carrier) {
+                    const pin = await q.backlogCarrier.get(s.id, key);
+                    if (pin && pin.carrier) carrier = pin.carrier;
                 }
+                await q.insertDelivery.run(env.event_id, s.id, seq, PRIORITY_RANK[env.priority], now, key, carrier, now, now);
+                if (carrier) deliveries.push({ event_id: env.event_id, subscription_id: s.id, carrier, carrier_class: klass });
             }
             await revocationHook(row, now);
             results.push({ event_id: env.event_id, seq, duplicate: false, cursor: cursor.encode(seq, epoch) });
@@ -255,7 +277,11 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
         if (project && inserted.length) {
             await usage.record({ projectId: project.projectId, env: project.env, capability: 'events.app.publish', unit: 'events', quantity: inserted.length, at: now });
         }
-        return { results, inserted };
+        // A (class, key) decision that changed is recorded once, in the same transaction as the deliveries it covers.
+        for (const rec of placementRecords) {
+            await q.insertPlacement.run(rec.carrier_class, rec.ordering_key, rec.carrier, JSON.stringify(rec.result), rec.decided_at);
+        }
+        return { results, inserted, deliveries };
     });
 
     /**
@@ -330,6 +356,11 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
 
     async function getEvent(id) {
         return await q.getEvent.get(id) || null;
+    }
+
+    /** The resolved delivery policy (../fabric/policy.js) for an event type, or null when no library is attached. */
+    async function resolvePolicy(eventType) {
+        return policies ? (await policies.resolve(eventType)).policy : null;
     }
 
     async function lastSeq() {
@@ -498,6 +529,40 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
     };
 
     /**
+     * Claim exactly one delivery (ADR-042 decision 5; the valkey-v1 QUEUE carrier calls this per stream item): the same
+     * claimable + cap + re-check rules as claimDeliveries, applied to the one (event_id, subscription_id). Returns the
+     * leased row (with app_project_id) or null when it is not the key's head yet, someone else holds it, it is at its
+     * subscription's inflight cap, it is not due, or it is already done. Nothing here depends on the caller: a null
+     * answer just means the 500 ms poll will find the delivery when it is due.
+     */
+    const claimDelivery = async (eventId, subscriptionId, { owner, leaseUntil } = {}) => {
+        const now = clock.now();
+        if (!owner || !(leaseUntil > now)) return null;
+        return await db.tx(async () => {
+            // Claims of one subscription are serialised on its row, as in claimDeliveries: without this lock a
+            // claim racing the poll re-checks its sub-selects against a snapshot taken before the other claim
+            // committed (READ COMMITTED re-evaluates only the updated row), and a delivery could be sent twice or a
+            // subscription exceed max_inflight. A subscription another worker is claiming for is skipped: that
+            // worker, or the next poll, takes the delivery.
+            const locked = await db.prepare('SELECT id FROM subscriptions WHERE id = ? AND enabled = 1 FOR UPDATE SKIP LOCKED').get(subscriptionId);
+            if (!locked) return null;
+            const r = await db.prepare(`UPDATE deliveries d SET lease_owner = ?, lease_until = ? WHERE d.event_id = ? AND d.subscription_id = ?
+                AND d.status IN ('pending', 'failed') AND d.next_attempt_at <= ?
+                AND (d.ordering_key IS NULL OR (
+                    NOT EXISTS (SELECT 1 FROM deliveries x WHERE x.subscription_id = d.subscription_id
+                        AND x.ordering_key = d.ordering_key AND x.status IN ('pending', 'failed') AND x.seq < d.seq)
+                    AND NOT EXISTS (SELECT 1 FROM deliveries y WHERE y.subscription_id = d.subscription_id
+                        AND y.ordering_key = d.ordering_key AND y.lease_until > ?)
+                ))
+                AND (SELECT COUNT(*) FROM deliveries x WHERE x.subscription_id = d.subscription_id AND x.lease_until > ?)
+                    < (SELECT s.max_inflight FROM subscriptions s WHERE s.id = d.subscription_id AND s.enabled = 1)
+                RETURNING d.*, (SELECT s.project_id FROM subscriptions s WHERE s.id = d.subscription_id) AS app_project_id`)
+                .get(owner, leaseUntil, eventId, subscriptionId, now, now, now);
+            return r || null;
+        });
+    };
+
+    /**
      * Record one delivery attempt. `app` ({ projectId, env, traceId }) marks a developer-app
      * subscription: the attempt counts toward the project's events.app.subscribe usage in the same
      * transaction.
@@ -565,15 +630,21 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
         // Replay never widens a subscription's scope (app scope, sandbox separation).
         rows = rows.filter(r => apps.deliverable(sub, r)).slice(0, max);
         // ordering_key is written on an insert only: a row that already exists keeps the key its first fan-out gave it.
-        const up = db.prepare(`INSERT INTO deliveries (event_id, subscription_id, seq, priority, attempt, status, next_attempt_at, ordering_key, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 0, 'pending', ?, ?, ?, ?)
+        const up = db.prepare(`INSERT INTO deliveries (event_id, subscription_id, seq, priority, attempt, status, next_attempt_at, ordering_key, carrier, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 0, 'pending', ?, ?, ?, ?, ?)
             ON CONFLICT(event_id, subscription_id) DO UPDATE SET status = 'pending', attempt = 0, next_attempt_at = excluded.next_attempt_at,
-                last_error = NULL, last_status = NULL, delivered_at = NULL, updated_at = excluded.updated_at`);
+                last_error = NULL, last_status = NULL, delivered_at = NULL, carrier = excluded.carrier, updated_at = excluded.updated_at`);
         for (const r of rows) {
-            const key = policies ? await policies.keyFor(r.event_type, {
-                event_type: r.event_type, subject: { type: r.subject_type, id: r.subject_id }, actor: JSON.parse(r.actor), payload: JSON.parse(r.payload),
-            }) : null;
-            await up.run(r.id, sub.id, r.seq, PRIORITY_RANK[r.priority], now, key, now, now);
+            const envelope = { event_type: r.event_type, subject: { type: r.subject_type, id: r.subject_id }, actor: JSON.parse(r.actor), payload: JSON.parse(r.payload) };
+            const resolved = policies ? await policies.resolve(r.event_type) : { policy: null };
+            const key = resolved.policy ? orderingKey(resolved.policy, envelope) : null;
+            const klass = resolved.policy ? carrierClass(resolved.policy) : null;
+            // A replay is a fresh fan-out: the planner's current carrier is chosen (and a change recorded).
+            const decision = (planner && klass) ? planner.place(klass, key, resolved.policy) : null;
+            if (decision && decision.record) await q.insertPlacement.run(decision.record.carrier_class, decision.record.ordering_key, decision.record.carrier, JSON.stringify(decision.record.result), decision.record.decided_at);
+            let carrier = decision ? decision.carrier : null;
+            if (planner && key && carrier) { const pin = await q.backlogCarrier.get(sub.id, key); if (pin && pin.carrier) carrier = pin.carrier; }
+            await up.run(r.id, sub.id, r.seq, PRIORITY_RANK[r.priority], now, key, carrier, now, now);
         }
         return rows.length;
     });
@@ -616,7 +687,13 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
         }
         const receipts = (await db.prepare('DELETE FROM idempotency_receipts WHERE processed_at < ?')
             .run(now - Math.max(receiptRetentionDays, retentionDays) * DAY_MS)).changes;
-        return { events, receipts };
+        // Placement history past the retention goes too, except each (carrier class, key)'s latest decision: it is still
+        // the one in force and explains deliveries made under it.
+        const placements = (await db.prepare(`DELETE FROM delivery_placements p WHERE p.decided_at < ? AND EXISTS (
+            SELECT 1 FROM delivery_placements q WHERE q.carrier_class = p.carrier_class
+              AND q.ordering_key IS NOT DISTINCT FROM p.ordering_key AND q.decided_at > p.decided_at)`)
+            .run(now - retentionDays * DAY_MS)).changes;
+        return { events, receipts, placements };
     }
 
     async function ping() {
@@ -624,9 +701,9 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
     }
 
     return {
-        db, insertBatch, redact, getEvent, revokedAt, lastSeq, oldestSeq, epoch, bumpEpoch, firstSeqSince, scan,
+        db, insertBatch, redact, getEvent, resolvePolicy, revokedAt, lastSeq, oldestSeq, epoch, bumpEpoch, firstSeqSince, scan,
         createSubscription, getSubscription, listSubscriptions, countSubscriptions, countProjectSubscriptions, setSubscriptionEnabled, rotateSubscriptionSecret,
-        claimDeliveries, recordAttempt, getDelivery, listDeliveries, requeue, deliveryCounts,
+        claimDeliveries, claimDelivery, recordAttempt, getDelivery, listDeliveries, requeue, deliveryCounts,
         getCheckpoint, setCheckpoint, prune, ping, usage, flushUsage,
     };
 }

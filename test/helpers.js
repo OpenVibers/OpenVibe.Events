@@ -72,7 +72,7 @@ function tmpDir() {
 }
 
 /** Boot the service. env overrides go through config.load(); `worker: 'manual'` keeps the loop off. */
-async function boot({ env = {}, clock = manualClock(), worker = 'manual', fetchImpl, deliveryFetch, appPost, dnsLookup } = {}) {
+async function boot({ env = {}, clock = manualClock(), worker = 'manual', fetchImpl, deliveryFetch, appPost, dnsLookup, db: sharedDb = null } = {}) {
     const config = load({
         NODE_ENV: 'test',
         PORT: '0',
@@ -83,8 +83,9 @@ async function boot({ env = {}, clock = manualClock(), worker = 'manual', fetchI
             ? { VALKEY_URL: process.env.OV_TEST_VALKEY_URL, VALKEY_PREFIX: `ov:events-test:${process.pid}:${ids.newId('event').slice(-8)}:` } : {}),
         ...env,
     });
-    // One database per boot (PGlite, or EVENTS_TEST_STORE=pg: the containers), dropped when the boot stops.
-    const testdb = await require('./db').testDb();
+    // One database per boot (PGlite, or EVENTS_TEST_STORE=pg: the containers), dropped when the boot stops. A caller
+    // may pass a shared, already-migrated handle (several app instances on one database: the fabric tests).
+    const testdb = sharedDb ? { db: sharedDb, close: async () => {} } : await require('./db').testDb();
     const h = await start({ config, db: testdb.db, clock, log: silent, fetchImpl, deliveryFetch, appPost, dnsLookup });
     const base = `http://127.0.0.1:${h.server.address().port}`;
     return {

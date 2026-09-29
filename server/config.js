@@ -66,6 +66,13 @@ function load(env = process.env) {
 
         // PostgreSQL (ADR-035): DATABASE_URL serves (PgBouncer), DATABASE_DIRECT_URL migrates (owner role).
         db: { url: env.DATABASE_URL || '', directUrl: env.DATABASE_DIRECT_URL || '' },
+        // Carriers (ADR-042 decisions 1-2, 5; server/fabric/carriers): the adapters to instantiate and the ones the
+        // operator switch removes. pg-v1 is always present; valkey-v1 needs VALKEY_URL and is silently absent without
+        // it. A disabled adapter is ineligible at once (reason `disabled by configuration`): the ADR's rollback.
+        carriers: {
+            enabled: list(env.EVENTS_CARRIERS, ['pg-v1', 'valkey-v1']),
+            disabled: list(env.EVENTS_CARRIERS_DISABLED, []),
+        },
         // Valkey (ADR-035): per-actor limit counters shared across processes; without it they count in this process.
         valkey: { url: env.VALKEY_URL || '', prefix: env.VALKEY_PREFIX || 'ov:events:' },
         retentionDays: int(env.EVENTS_RETENTION_DAYS, 30),

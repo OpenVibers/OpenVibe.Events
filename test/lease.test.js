@@ -78,5 +78,31 @@ t('a claim with no room, or a lease that ends now, claims nothing', async () => 
     assert.deepStrictEqual(await h.store.claimDeliveries(now, 0, { owner: 'x', leaseUntil: now + 10 }), []);
 });
 
+t('a targeted claim (the valkey-v1 path) racing the poll never double-leases a delivery', async () => {
+    const stub = await subscriber(() => 204);
+    const sub = await subscribe('leaserace', 'live.leaserace.*', stub.url);
+    for (let i = 0; i < 30; i++) await publish(envelope('live', { event_type: 'live.leaserace.x' }));
+    const pending = (await h.store.listDeliveries({ subscriptionId: sub.id, status: 'pending', limit: 100 })).sort((x, y) => Number(x.seq) - Number(y.seq));
+    assert.strictEqual(pending.length, 30);
+    let won = 0;
+    for (const d of pending) {
+        const now = h.clock.now();
+        const [poll, push] = await Promise.all([
+            h.store.claimDeliveries(now, 1, { owner: 'poll', leaseUntil: now + 60000 }),
+            h.store.claimDelivery(d.event_id, sub.id, { owner: 'push', leaseUntil: now + 60000 }),
+        ]);
+        const winners = (poll.length ? 1 : 0) + (push ? 1 : 0);
+        assert.ok(winners <= 1, `delivery ${d.event_id}: both the poll and the targeted claim leased it`);
+        const owner = poll.length ? 'poll' : push ? 'push' : null;
+        const leased = poll.length ? poll[0] : push;
+        if (!leased) continue;
+        won++;
+        assert.strictEqual(await h.store.recordAttempt(leased.event_id, sub.id, { ok: true, attempt: 1, status: 204 }, null, owner), true);
+    }
+    assert.ok(won > 0, 'the claims made progress');
+    await stub.close();
+    await h.store.setSubscriptionEnabled(sub.id, false);
+});
+
 t('stop', async () => { await h.stop(); });
 t.run();

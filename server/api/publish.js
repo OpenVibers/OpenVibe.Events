@@ -40,7 +40,7 @@ function normalize(input, ctx) {
     return env;
 }
 
-function publishRouter({ config, store, auth, worker, realtime, limits }) {
+function publishRouter({ config, store, auth, worker, realtime, limits, fabric = null }) {
     const router = express.Router();
 
     // Per-actor limits (server/actor-limits.js), in requests; a request carries up to 100 events.
@@ -149,6 +149,9 @@ function publishRouter({ config, store, auth, worker, realtime, limits }) {
         }
         if (out.inserted.length) {
             realtime.publish(out.inserted);
+            // A push carrier (ADR-042 decision 5) is signalled after the commit; a lost signal changes latency only —
+            // the worker's poll below is the floor. The local kick() keeps this process's own deliveries fast.
+            if (fabric) await fabric.signalPublish(out.inserted, out.deliveries);
             worker.kick();
         }
         const status = out.inserted.length ? 201 : 200;

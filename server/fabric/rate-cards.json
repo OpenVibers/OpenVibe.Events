@@ -1,0 +1,30 @@
+[
+  {
+    "id": "rc-pg-v1",
+    "provider": "postgres",
+    "adapter": "pg-v1",
+    "metric": "delivery-operation",
+    "unit_size": 1,
+    "unit_price_usd": 0.0000005,
+    "free_allowance": 1000000000,
+    "reset_period": "month",
+    "region": "cell",
+    "effective_from": "2026-09-01",
+    "source": "https://openvibe.network/pricing/events",
+    "verified_at": "2026-09-01"
+  },
+  {
+    "id": "rc-valkey-v1",
+    "provider": "valkey",
+    "adapter": "valkey-v1",
+    "metric": "signal-operation",
+    "unit_size": 1,
+    "unit_price_usd": 0.0000002,
+    "free_allowance": 1000000000,
+    "reset_period": "month",
+    "region": "cell",
+    "effective_from": "2026-09-01",
+    "source": "https://openvibe.network/pricing/events",
+    "verified_at": "2026-09-01"
+  }
+]

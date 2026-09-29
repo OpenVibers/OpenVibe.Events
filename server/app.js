@@ -10,11 +10,12 @@ const { publishRouter } = require('./api/publish');
 const { subscriptionsRouter } = require('./api/subscriptions');
 const { readRouter } = require('./api/read');
 const { policiesRouter } = require('./api/policies');
+const { placementRouter } = require('./api/placement');
 const { mountLimits } = require('./limits');
 const { createLimits } = require('./actor-limits');
 const pkg = require('../package.json');
 
-function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log = console, valkey = null, policies = null }) {
+function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log = console, valkey = null, policies = null, planner = null, carriers = null }) {
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', 'loopback');
@@ -76,10 +77,11 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     // One per-actor limiter for the capability routes below (server/actor-limits.js); health, ready,
     // release.json, limits.json, metrics and the realtime stream above are never limited.
     const limits = createLimits({ config, clock, metrics, log, valkey });
-    app.use(publishRouter({ config, store, auth, worker, realtime, limits }));
+    app.use(publishRouter({ config, store, auth, worker, realtime, limits, fabric: carriers }));
     app.use(subscriptionsRouter({ config, store, auth, dnsLookup, limits }));
     app.use(readRouter({ store, auth, worker, limits }));
     if (policies) app.use(policiesRouter({ policies, auth, limits }));
+    if (planner) app.use(placementRouter({ planner, policies, auth, limits, store }));
 
     app.get('/', (_req, res) => {
         res.type('text/plain').send([

@@ -114,6 +114,22 @@ Operators: `GET /api/v1/deliveries?status=dead` is the dead-letter queue; `POST 
 
 Pull consumers: `GET /api/v1/events?topic=media.vod.*&after_seq=<position>&limit=100` returns `{ events: [{ seq, cursor, event }], next_after_seq, next_cursor, latest_seq }`, plus `gap: { from_seq, to_seq }` when the position is older than retention or from another retention epoch. The opaque cursor ([ADR-042](https://github.com/OpenVibers/OpenVibe.Contracts/blob/main/docs/adr/ADR-042-events-fabric.md) decision 7) goes back in as `after=<cursor>` beside `after_seq`; `next_cursor` is the cursor for the next page, `seq`/`next_after_seq`/`latest_seq` stay for one release. `PUT /api/v1/checkpoints { topic, cursor }` stores a consumer's position here if it has nowhere better (an opaque cursor string is accepted in place of the integer; the answer carries its `epoch`, `carrier` and `next_cursor`).
 
+## The fabric: carriers, the planner and explain
+
+How an event type is carried is its delivery policy (`events.delivery-policy@1`, [ADR-042](https://github.com/OpenVibers/OpenVibe.Contracts/blob/main/docs/adr/ADR-042-events-fabric.md) decision 1). The carrier class — TOPIC (fan-out, no ack), QUEUE (competing consumers, ack) or STREAM (retained, ordered per key) — is a derived, internal label, never in the envelope. PostgreSQL stays the record: every event and every delivery is committed before any carrier sees it, and the worker's lease is the only thing that makes a send happen. A publish commits, then the chosen carrier is signalled; a lost or duplicated signal changes latency, never the outcome.
+
+Carriers (`server/fabric/carriers`; `EVENTS_CARRIERS`, default `pg-v1,valkey-v1`):
+
+- `pg-v1` — the poll. Always present, every class; the worker's 500 ms tick and its in-process `kick()` carry delivery. It is the floor every delivery falls back to.
+- `valkey-v1` — push, only when `VALKEY_URL` is set. **QUEUE:** after the commit, each new delivery is XADDed to a Valkey stream (`openvibe-sdk/queue`, consumer group `workers`); each Events process claims just that one row (`store.claimDelivery`, the same key-head and inflight-cap rules as the poll) and hands it to the worker's normal send — the item is acked either way, so a lost item only falls to the poll. **TOPIC:** the stored envelopes are PUBLISHed on a Valkey channel tagged with this process's id, and every process re-emits envelopes from other processes to its own SSE clients (deduped by event id), so an event published on one process reaches a browser connected to another. Health is an EWMA plus a breaker; while a breaker is open the planner excludes the carrier with a reason and `pg-v1` delivers.
+- `nats-v1` (STREAM) is not built yet: STREAM is carried by `pg-v1`.
+
+The planner (`server/fabric/planner.js`) calls `openvibe-sdk/placement` `plan()` per (carrier class, ordering key) with one `resource-offer@1` per adapter and the rate cards in `server/fabric/rate-cards.json`, caching decisions with hysteresis and recording a change in `delivery_placements`. A key's backlog stays on one carrier until it drains (a placement is pinned per (subscription, key), not per time window). An adapter named in `EVENTS_CARRIERS_DISABLED` is ineligible at once with reason `disabled by configuration` — the ADR's rollback; an unknown id in `EVENTS_CARRIERS` refuses to start.
+
+Explain (operators only, `events.delivery.admin`, like `/api/v1/deliveries`): `GET /api/v1/placement?event_type=<t>[&key=<k>]` answers the carrier class, the resolved policy, the planner's `platform.placement-result@1` (reasons, and per candidate its eligibility / `excluded_because` / cost / latency) and the last recorded decision; `GET /api/v1/placement/deliveries/:event_id/:subscription_id` answers a delivery's carrier and the decision in force when it was created.
+
+`delivery_semantics: at_most_once` makes a failed attempt final (`dead`, never retried); the default stays `at_least_once`.
+
 ## Developer apps
 
 Roadmap Wave 20, ADR-014. A developer app gets a token from OpenVibe.Network (`POST /oauth/token`, `grant_type=client_credentials`, `audience=openvibe.events`) with `sub: app:app_<ULID>`, `project_id: prj_<ULID>`, `env: sandbox|production`. It uses the same routes as services, with these capabilities (all `public`, openvibe-contracts ≥ 0.28.0):
