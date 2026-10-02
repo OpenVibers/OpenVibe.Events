@@ -73,7 +73,7 @@ delivery rollup, for Network; never visible to apps).
 
 `POST /api/v1/events` takes one `events.event-envelope@1` envelope, or `{ "events": [ … ] }` (up to 100, stored atomically).
 
-- `source` must be the calling service (`svc:live` publishes `source: "live"`), and `event_type` must start with a prefix that source owns (`live.*`, `media.*`, `network.*`, `community.*`, `chat.*`, `openre.*`, `billing.*`, `tips.*`, `vip.*`, `ai.*`, `games.*`, `tools.*`, `codes.*`, `host.*`; `EVENTS_SOURCE_PREFIXES` overrides).
+- `source` must be the calling service (`svc:live` publishes `source: "live"`), and `event_type` must start with a prefix that source owns (`live.*`, `media.*`, `network.*`, `community.*`, `chat.*`, `openre.*`, `billing.*`, `tips.*`, `vip.*`, `ai.*`, `games.*`, `tools.*`, `codes.*`, `host.*`, `bot.*`; `EVENTS_SOURCE_PREFIXES` overrides).
 - Idempotent on `event_id`: a repeat answers `200 { event_id, seq, duplicate: true }` and is never stored twice (even after retention, for `EVENTS_RECEIPT_RETENTION_DAYS`).
 - Missing `trace_id` is taken from the request's `traceparent`; `priority` defaults to `important`, `visibility` to `internal`.
 - Loop guard: an event whose trace already carries 8 hops (the cross-service chain depth, or the same source/type/subject repeating in the trace) is refused with `409 events.loop_detected`. The chain depth of a first-party publish counts first-party events only (developer-app events in the same trace never count toward it), so an app cannot poison a trace it has seen.
