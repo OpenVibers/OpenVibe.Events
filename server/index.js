@@ -18,6 +18,7 @@ const { createRealtime } = require('./realtime');
 const { createApp } = require('./app');
 const { createMetrics } = require('./metrics');
 const { createGuardedPost } = require('./egress');
+const { gracefulStop } = require('openvibe-sdk/service');
 
 async function start({
     config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, deliveryFetch = fetchImpl,
@@ -128,13 +129,10 @@ async function start({
 if (require.main === module) {
     require('dotenv').config();
     start().then((handles) => {
-        const shutdown = (sig) => {
-            console.log(`[events] ${sig}: shutting down`);
-            handles.close().then(() => process.exit(0), () => process.exit(1));
-            setTimeout(() => process.exit(1), 10000).unref();
-        };
-        process.on('SIGTERM', () => shutdown('SIGTERM'));
-        process.on('SIGINT', () => shutdown('SIGINT'));
+        // SIGTERM/SIGINT (openvibe-sdk/service, docs/service.md's handles family): requests in flight get 8 s,
+        // then handles.close() (the timers stopped, the carriers/realtime/worker stopped, the server closed, the
+        // database closed; a rejection exits 1); past 10 s the process exits 1.
+        gracefulStop({ name: 'events', server: handles.server, handles, drainMs: 8000, deadlineMs: 10000 });
     }).catch((err) => {
         console.error(`[events] failed to start: ${err.stack || err}`);
         process.exit(1);
