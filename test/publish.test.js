@@ -75,6 +75,15 @@ t('event_type must use a prefix the source owns', async () => {
     assert.strictEqual(r.body.code, 'events.type_not_allowed');
 });
 
+t('a bot service principal publishes bot.* only', async () => {
+    const bot = serviceToken('bot', ['events.event.publish']);
+    let r = await request(h.base, 'POST', '/api/v1/events', { token: bot, body: envelope('bot', { event_type: 'bot.robot.online' }) });
+    assert.strictEqual(r.status, 201, r.text);
+    r = await request(h.base, 'POST', '/api/v1/events', { token: bot, body: envelope('bot', { event_type: 'live.stream.started' }) });
+    assert.strictEqual(r.status, 403);
+    assert.strictEqual(r.body.code, 'events.type_not_allowed');
+});
+
 t('unknown source (not in the manifest map) -> 403', async () => {
     const r = await request(h.base, 'POST', '/api/v1/events', { token: serviceToken('stranger', ['events.event.publish']), body: envelope('stranger') });
     assert.strictEqual(r.status, 403);

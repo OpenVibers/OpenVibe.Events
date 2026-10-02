@@ -19,7 +19,9 @@ const list = (v, d) => (v == null || v === '' ? d : String(v).split(',').map(s =
 const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openre', 'billing', 'tips',
     'vip', 'ai', 'games', 'tools', 'codes', 'host', 'sources', 'search',
     // Publication products (Waves 16-19): each publishes <product>.<type>.<action> via openvibe-publishing.
-    'wiki', 'blog', 'news', 'reviews', 'deals', 'coupons', 'trade'];
+    'wiki', 'blog', 'news', 'reviews', 'deals', 'coupons', 'trade',
+    // Robot control (OpenVibe.Bot): bot.robot.*, bot.estop.*, bot.command.*
+    'bot'];
 
 function sourcePrefixes(env) {
     let map = Object.fromEntries(DEFAULT_SOURCES.map(s => [s, [`${s}.`]]));
