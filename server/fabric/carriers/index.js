@@ -2,11 +2,12 @@
 /**
  * The carrier registry (ADR-042 decisions 1-2, 5): one adapter per carrier, each with an id, the classes it can
  * carry, an offer, health, a signal() and a start/stop. pg-v1 is always present and carries every class; valkey-v1
- * is registered only when VALKEY_URL is set and carries QUEUE and TOPIC. nats-v1 is not built yet (it needs the host
- * unit), so STREAM is left to pg-v1.
+ * is registered only when VALKEY_URL is set and carries QUEUE and TOPIC; nats-v1 is registered only when NATS_URL is
+ * set and carries TOPIC over NATS Core. JetStream is not built yet (it needs the host unit), so STREAM is left to pg-v1.
  *
  * Config (server/config.js):
- *   EVENTS_CARRIERS           ids to instantiate (default pg-v1,valkey-v1). An unknown id refuses to start.
+ *   EVENTS_CARRIERS           ids to instantiate (default pg-v1,valkey-v1,nats-v1). An unknown id refuses to start.
+ *   NATS_URL                  nats://[user:pass@]host:port of the cell's NATS (nats-v1); NATS_SUBJECT_PREFIX its subjects.
  *   EVENTS_CARRIERS_DISABLED  ids excluded at once with reason `disabled by configuration` (the ADR's rollback).
  *
  * The planner asks offers(class) for one resource-offer@1 per eligible adapter and forClass(class) for the
@@ -14,8 +15,9 @@
  */
 const { createPgCarrier } = require('./pg');
 const { createValkeyCarrier, newInstanceId } = require('./valkey');
+const { createNatsCarrier } = require('./nats');
 
-const KNOWN = ['pg-v1', 'valkey-v1'];
+const KNOWN = ['pg-v1', 'valkey-v1', 'nats-v1'];
 
 function createCarriers({ config, clock = { now: () => Date.now() }, log = console, valkey = null } = {}) {
     const enabled = new Set(config.carriers.enabled);
@@ -30,6 +32,10 @@ function createCarriers({ config, clock = { now: () => Date.now() }, log = conso
         const v = createValkeyCarrier({ valkey, clock, log, instanceId: newInstanceId() });
         v.disabledReason = off('valkey-v1') ? 'disabled by configuration' : null;
         adapters.push(v);
+    }
+    // nats-v1 connects in start(), which skips a disabled adapter: switched off, it never opens a socket.
+    if (config.nats && config.nats.url) {
+        adapters.push(createNatsCarrier({ url: config.nats.url, subjectPrefix: config.nats.subjectPrefix, clock, log, instanceId: newInstanceId() }));
     }
     for (const a of adapters) if (!a.disabledReason && off(a.id)) a.disabledReason = 'disabled by configuration';
 

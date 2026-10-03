@@ -65,10 +65,10 @@ function createPlanner({ registry, db = null, clock = { now: () => Date.now() },
             offers.push(o);
         }
         const r = plan(requirements(klass, key, policy), offers, { rateCards: RATE_CARDS, now, current: current ? current.carrier : null });
-        // The offer's health already excludes an unhealthy adapter; name the breaker in the reason.
+        // The offer's health already excludes an unhealthy adapter; name the breaker (or the lost connection) in the reason.
         for (const c of r.candidates) {
             const a = registry.get(c.id);
-            if (a && !a.disabledReason && !a.healthy() && !c.eligible) c.excluded_because = `breaker open (${a.id})`;
+            if (a && !a.disabledReason && !a.healthy() && !c.eligible) c.excluded_because = (a.unhealthyReason && a.unhealthyReason()) || `breaker open (${a.id})`;
         }
         for (const e of excluded) if (!r.candidates.some((c) => c.id === e.id)) r.candidates.push(e);
         if (!r.selected) {

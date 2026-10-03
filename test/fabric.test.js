@@ -77,7 +77,7 @@ t('registry: every class -> one carrier class; unknown id refused; disabled valk
         assert.strictEqual(carrierClass(keyed('subject', c)), 'STREAM');
     }
     // An unknown adapter id in config refuses to start.
-    assert.throws(() => createCarriers({ config: load({ NODE_ENV: 'test', EVENTS_CARRIERS: 'pg-v1,nats-v1' }) }), /unknown carrier adapter "nats-v1"/);
+    assert.throws(() => createCarriers({ config: load({ NODE_ENV: 'test', EVENTS_CARRIERS: 'pg-v1,kafka-v1' }) }), /unknown carrier adapter "kafka-v1"/);
 
     // The rate cards are valid platform.rate-card@1 (the model is exercised with a small per-op figure).
     for (const card of RATE_CARDS) {
