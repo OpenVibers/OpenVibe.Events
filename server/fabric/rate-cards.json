@@ -26,5 +26,19 @@
     "effective_from": "2026-09-01",
     "source": "https://openvibe.network/pricing/events",
     "verified_at": "2026-09-01"
+  },
+  {
+    "id": "rc-nats-v1",
+    "provider": "nats",
+    "adapter": "nats-v1",
+    "metric": "signal-operation",
+    "unit_size": 1,
+    "unit_price_usd": 0.0000001,
+    "free_allowance": 1000000000,
+    "reset_period": "month",
+    "region": "cell",
+    "effective_from": "2026-10-02",
+    "source": "https://openvibe.network/pricing/events",
+    "verified_at": "2026-10-02"
   }
 ]

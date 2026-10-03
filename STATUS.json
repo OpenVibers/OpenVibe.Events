@@ -31,7 +31,7 @@
     "hourly project usage rollups (events.usage.recorded)",
     "redaction tombstones",
     "per-actor limits (openvibe-sdk/limits; shared on Valkey)",
-    "carrier fabric (ADR-042): the pg-v1 poll beside a valkey-v1 push carrier for QUEUE (streams) and TOPIC (SSE fan-out), with a placement planner, per-key pinning, delivery_placements history and a GET /api/v1/placement explain API; EVENTS_CARRIERS[_DISABLED] switches it",
+    "carrier fabric (ADR-042): the pg-v1 poll beside a valkey-v1 push carrier for QUEUE (streams) and TOPIC (SSE fan-out) and an optional nats-v1 NATS Core TOPIC carrier (NATS_URL), with a placement planner, per-key pinning, delivery_placements history and a GET /api/v1/placement explain API; EVENTS_CARRIERS[_DISABLED] switches it",
     "at_most_once delivery semantics (a failed attempt is final)"
   ]
 }

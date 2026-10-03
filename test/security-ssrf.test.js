@@ -220,6 +220,7 @@ const REVIEWED = {
     'server/worker.js appPost': [1, 'developer-app deliveries: the guarded poster (server/egress.js), covered above'],
     'server/egress.js http.request': [1, 'the guarded poster\'s https.request (default requestImpl): its own lookup pins the checked address'],
     'server/egress.js requestImpl': [1, 'the guarded poster\'s request, after parseAppEndpoint and with the guarded lookup'],
+    'server/fabric/nats-core.js net.connect': [1, 'the nats-v1 broker: NATS_URL (operator config, nats:// on loopback or the private network); never a request input'],
 };
 /** JS source with comments blanked (strings, template literals and regex literals kept). */
 function stripComments(src) {
