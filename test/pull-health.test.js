@@ -42,6 +42,15 @@ t('config: every source prefix must start with the source', () => {
     assert.strictEqual(load({}).retentionDays, 30);
 });
 
+t('config: network-wide prefixes are shared, source namespaces stay owned', () => {
+    assert.deepStrictEqual(load({}).sharedPrefixes, ['provider.']);
+    const c = load({ EVENTS_SHARED_PREFIXES: 'provider.,storage.' });
+    assert.deepStrictEqual(c.sharedPrefixes, ['provider.', 'storage.']);
+    assert.throws(() => load({ EVENTS_SHARED_PREFIXES: 'provider' }), /bad prefix/);
+    assert.throws(() => load({ EVENTS_SHARED_PREFIXES: 'media.' }), /belongs to source "media"/);
+    assert.throws(() => load({ EVENTS_SHARED_PREFIXES: 'app.' }), /reserved for developer apps/);
+});
+
 t('boot', async () => { h = await boot(); });
 
 t('pull: cursor, topic filter, internal events included for services', async () => {

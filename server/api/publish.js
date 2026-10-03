@@ -78,8 +78,11 @@ function publishRouter({ config, store, auth, worker, realtime, limits, fabric =
         }
         const prefixes = config.sourcePrefixes[env.source];
         if (!prefixes) return { status: 403, code: 'events.unknown_source', detail: `source "${env.source}" may not publish events` };
-        if (!prefixes.some(p => env.event_type.startsWith(p))) {
-            return { status: 403, code: 'events.type_not_allowed', detail: `${env.source} may publish ${prefixes.join(', ')}* only, not ${env.event_type}` };
+        // A source owns its own namespace; a network-wide prefix (server/config sharedPrefixes, e.g.
+        // provider.* for storage provider telemetry) may be published by any first-party service.
+        const allowed = [...prefixes, ...(config.sharedPrefixes || [])];
+        if (!allowed.some(p => env.event_type.startsWith(p))) {
+            return { status: 403, code: 'events.type_not_allowed', detail: `${env.source} may publish ${allowed.map(p => `${p}*`).join(', ')} only, not ${env.event_type}` };
         }
         return { env };
     }

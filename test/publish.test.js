@@ -75,6 +75,25 @@ t('event_type must use a prefix the source owns', async () => {
     assert.strictEqual(r.body.code, 'events.type_not_allowed');
 });
 
+t('any first-party service may publish the network-wide provider.* namespace', async () => {
+    const media = serviceToken('media', ['events.event.publish']);
+    // Media observes a provider's capacity/health and reports it under the network prefix.
+    for (const event_type of ['provider.health.degraded', 'provider.capacity.warning']) {
+        const r = await request(h.base, 'POST', '/api/v1/events', { token: media, body: envelope('media', { event_type }) });
+        assert.strictEqual(r.status, 201, r.text);
+    }
+    // The review's rename to Media's own namespace also passes, unchanged.
+    const r = await request(h.base, 'POST', '/api/v1/events', { token: media, body: envelope('media', { event_type: 'media.provider.health_degraded' }) });
+    assert.strictEqual(r.status, 201, r.text);
+    // Network-wide means shared: another service may report the same provider stream ...
+    const r2 = await request(h.base, 'POST', '/api/v1/events', { token: live, body: envelope('live', { event_type: 'provider.capacity.warning' }) });
+    assert.strictEqual(r2.status, 201, r2.text);
+    // ... but a shared prefix never hands a source another source's namespace.
+    const r3 = await request(h.base, 'POST', '/api/v1/events', { token: live, body: envelope('live', { event_type: 'media.vod.ready' }) });
+    assert.strictEqual(r3.status, 403);
+    assert.strictEqual(r3.body.code, 'events.type_not_allowed');
+});
+
 t('a bot service principal publishes bot.* only', async () => {
     const bot = serviceToken('bot', ['events.event.publish']);
     let r = await request(h.base, 'POST', '/api/v1/events', { token: bot, body: envelope('bot', { event_type: 'bot.robot.online' }) });

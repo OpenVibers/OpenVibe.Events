@@ -23,6 +23,15 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
     // Robot control (OpenVibe.Bot): bot.robot.*, bot.estop.*, bot.command.*
     'bot'];
 
+/**
+ * Namespaces that belong to the network rather than to one service. `provider.*` carries storage
+ * provider health/capacity telemetry, which whichever first-party service observes a provider
+ * publishes (Media, Sources, Host, ...), so any service token may publish into it. Sources still
+ * own their own namespace first; a shared prefix never replaces `<source>.`. Developer apps can
+ * never publish a shared prefix. EVENTS_SHARED_PREFIXES (comma-separated) replaces the default.
+ */
+const DEFAULT_SHARED_PREFIXES = ['provider.'];
+
 function sourcePrefixes(env) {
     let map = Object.fromEntries(DEFAULT_SOURCES.map(s => [s, [`${s}.`]]));
     if (env.EVENTS_SOURCE_PREFIXES) {
@@ -43,11 +52,25 @@ function sourcePrefixes(env) {
     return map;
 }
 
+function sharedPrefixes(env, map) {
+    const out = list(env.EVENTS_SHARED_PREFIXES, DEFAULT_SHARED_PREFIXES);
+    for (const p of out) {
+        if (!/^[a-z][a-z0-9-]*\.$/.test(p)) throw new Error(`EVENTS_SHARED_PREFIXES: bad prefix "${p}"`);
+        const source = p.slice(0, -1);
+        if (source === 'app' || source.startsWith('app-')) throw new Error(`EVENTS_SHARED_PREFIXES: "${p}" is reserved for developer apps`);
+        if (Object.prototype.hasOwnProperty.call(map, source)) {
+            throw new Error(`EVENTS_SHARED_PREFIXES: "${p}" belongs to source "${source}", not to the network`);
+        }
+    }
+    return out;
+}
+
 function load(env = process.env) {
     const nodeEnv = env.NODE_ENV || 'development';
     const isProduction = nodeEnv === 'production';
     const port = int(env.PORT, 4300);
     const maxInflight = int(env.EVENTS_MAX_INFLIGHT, 20);
+    const prefixes = sourcePrefixes(env);
     return {
         port,
         host: env.HOST || '127.0.0.1',
@@ -85,7 +108,8 @@ function load(env = process.env) {
         receiptRetentionDays: int(env.EVENTS_RECEIPT_RETENTION_DAYS, 90),
         pruneIntervalMs: int(env.EVENTS_PRUNE_INTERVAL_MS, 60 * 60 * 1000),
 
-        sourcePrefixes: sourcePrefixes(env),
+        sourcePrefixes: prefixes,
+        sharedPrefixes: sharedPrefixes(env, prefixes),
         maxBatch: 100,
         maxPayloadBytes: int(env.EVENTS_MAX_PAYLOAD_BYTES, 64 * 1024),
         maxHops: int(env.EVENTS_MAX_HOPS, 8),
