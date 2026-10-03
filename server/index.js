@@ -59,6 +59,7 @@ async function start({
             claim: (eventId, subscriptionId) => store.claimDelivery(eventId, subscriptionId, worker.lease()),
             deliver: (delivery) => worker.deliver(delivery),
             onRemote: (rows) => realtime.publish(rows),
+            getEvent: (id) => store.getEvent(id),   // nats-v1 re-emits only rows committed in PostgreSQL
         });
     } catch (err) {
         log.warn(`[events] carriers did not start: ${err.message}`);

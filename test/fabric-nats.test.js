@@ -3,8 +3,9 @@
 // it only with NATS_URL, refuses a bad URL or subject prefix, and honours the disable switch; the planner prefers it for
 // TOPIC while it is connected and explains why it is excluded when it is not. Against a real broker: two instances
 // see one remote public event once, visibility holds on the remote gateway, a duplicate signal is dropped, a lost one
-// is replayed from PostgreSQL on resume, a broker outage falls back to pg-v1 and recovers, and a disabled nats-v1
-// never connects. The broker parts need OV_TEST_NATS_URL (scripts/test-nats.sh up); without it they print one
+// is replayed from PostgreSQL on resume, a message naming an uncommitted event (or carrying a forged row) is ignored, a
+// broker outage falls back to pg-v1 and recovers, a disabled nats-v1 never connects, and a broker that refuses its
+// PUB or SUB (a permissions violation) drops it to pg-v1 with a reason. The broker parts need OV_TEST_NATS_URL (scripts/test-nats.sh up); without it they print one
 // `skipped (…)` line.
 const assert = require('assert');
 const net = require('net');
@@ -14,6 +15,8 @@ const { testDb } = require('./db');
 const { load } = require('../server/config');
 const { createCarriers } = require('../server/fabric/carriers');
 const { createPlanner, RATE_CARDS } = require('../server/fabric/planner');
+const { createNatsCarrier } = require('../server/fabric/carriers/nats');
+const { createNatsCore } = require('../server/fabric/nats-core');
 
 const t = suite('fabric-nats');
 const NATS = process.env.OV_TEST_NATS_URL || '';
@@ -127,6 +130,69 @@ t('planner: TOPIC prefers a connected nats-v1; not connected or disabled, it is 
     assert.strictEqual(ex2.result.candidates.find((c) => c.id === 'nats-v1').excluded_because, 'disabled by configuration');
 });
 
+// A NATS-shaped server speaking just enough of the protocol: it refuses every PUB while `denyPub` is set (the
+// permissions violation NATS answers on an open connection) and records the payloads it accepted.
+async function fakeNats() {
+    const state = { denyPub: false, accepted: [], conns: 0 };
+    const server = net.createServer((c) => {
+        state.conns++;
+        c.write(`INFO {"server_id":"fake","max_payload":1048576}\r\n`);
+        let buf = '';
+        let pub = null;   // the subject of a PUB whose payload line comes next
+        c.on('error', () => {});
+        c.on('data', (d) => {
+            buf += d.toString('utf8');
+            let eol;
+            while ((eol = buf.indexOf('\r\n')) >= 0) {
+                const line = buf.slice(0, eol);
+                buf = buf.slice(eol + 2);
+                if (pub !== null) {
+                    if (state.denyPub) c.write(`-ERR 'Permissions Violation for Publish to "${pub}"'\r\n`);
+                    else state.accepted.push(line);
+                    pub = null;
+                } else if (line.startsWith('PUB ')) pub = line.split(' ')[1];
+                else if (line === 'PING') c.write('PONG\r\n');
+            }
+        });
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    return { state, url: `nats://127.0.0.1:${server.address().port}`, close: () => new Promise((r) => { server.close(() => r()); server.unref(); }) };
+}
+
+t('nats-v1: a PUB refused after the handshake marks it unhealthy, TOPIC falls back to pg-v1 until the permission returns', async () => {
+    const fake = await fakeNats();
+    const carrier = createNatsCarrier({ url: fake.url, log: silent, instanceId: 'test', deniedRetryMs: 1000 });
+    try {
+        await carrier.start({});
+        assert.ok(carrier.healthy(), 'the handshake probe was accepted');
+        assert.ok(fake.state.accepted.includes('{}'), 'the handshake probes the subject');
+        const reg = createCarriers({ config: load({ NODE_ENV: 'test', EVENTS_CARRIERS: 'pg-v1' }), log: silent });
+        reg.adapters.push(carrier);   // as if registered: the planner sees this nats-v1
+        const planner = createPlanner({ registry: reg });
+        assert.strictEqual(planner.explain('TOPIC', 'live.x', topicPolicy).carrier, 'nats-v1');
+
+        fake.state.denyPub = true;
+        await carrier.signal([{ id: 'evt_lost' }], 'TOPIC');
+        await waitFor(() => !carrier.healthy(), 2000);
+        assert.strictEqual(carrier.client.connected(), true, 'NATS keeps the connection open after a permissions violation');
+        assert.strictEqual(carrier.unhealthyReason(), 'permission denied (nats-v1)');
+        const ex = planner.explain('TOPIC', 'live.x', topicPolicy);
+        assert.strictEqual(ex.carrier, 'pg-v1', JSON.stringify(ex.result));
+        assert.strictEqual(ex.result.candidates.find((c) => c.id === 'nats-v1').excluded_because, 'permission denied (nats-v1)');
+
+        // Re-opened while still refused: the handshake probe keeps it denied (no real signal is spent finding out).
+        await waitFor(() => fake.state.conns >= 2, 5000);
+        await waitFor(() => carrier.client.connected(), 5000);
+        assert.strictEqual(carrier.unhealthyReason(), 'permission denied (nats-v1)');
+        fake.state.denyPub = false;
+        await waitFor(() => carrier.healthy(), 3000);
+        assert.strictEqual(planner.explain('TOPIC', 'live.x', topicPolicy).carrier, 'nats-v1', 'chosen again once permitted');
+    } finally {
+        await carrier.stop();
+        await fake.close();
+    }
+});
+
 // ── Against a NATS broker (OV_TEST_NATS_URL) ────────────────────────────────
 
 t('nats-v1: two instances, remote fan-out once, visibility, duplicate and lost signals, outage and disable fall back to pg-v1', async () => {
@@ -201,6 +267,18 @@ t('nats-v1: two instances, remote fan-out once, visibility, duplicate and lost s
         const resumed = await open(b, { 'Last-Event-ID': before });
         await resumed.waitFor(has(L.event_id), 3000);
 
+        // Anyone else allowed on the subject: an id that was never committed is ignored, and a forged row (the old
+        // shape, with a seq far ahead) is never streamed nor advances the connection, so the sentinel still arrives.
+        const forger = createNatsCore({ url: NATS, log: silent });
+        await forger.connect();
+        const subject = `${env.NATS_SUBJECT_PREFIX}fabric.topic`;
+        const F = pub();
+        forger.publish(subject, { from: 'forged', ids: [F.event_id] });
+        forger.publish(subject, { from: 'forged', rows: [{ id: F.event_id, seq: 1e12, event_type: 'live.nt.x', visibility: 'public', envelope: JSON.stringify(F) }] });
+        await forger.close();
+        await sentinel();
+        assert.strictEqual(count(anon, F.event_id), 0, 'an uncommitted event is never streamed');
+
         // Broker outage as `c` sees it: nats-v1 drops out with a reason, pg-v1 is selected, the publish still commits
         // and reaches `c`'s own browsers; `b` does not get it live. Back up, `c` reconnects and nats-v1 is chosen again.
         const local = await open(c);
@@ -230,6 +308,27 @@ t('nats-v1: two instances, remote fan-out once, visibility, duplicate and lost s
         await publish(d.base, X);
         await sentinel();
         assert.strictEqual(count(anon, X.event_id), 0, 'a disabled carrier is never signalled');
+
+        // Permissions: a broker user that may not publish (or subscribe) on the subject keeps its connection, but
+        // nats-v1 is excluded with a reason and TOPIC goes to pg-v1; the publish still commits and reaches local clients.
+        const withUser = (u) => NATS.replace('nats://', `nats://${u}:${u}@`);
+        for (const user of ['nopub', 'nosub']) {
+            const e = await boot({ db: shared.db, clock, env: { ...env, NATS_URL: withUser(user) }, worker: 'off' });
+            try {
+                const n = e.carriers.get('nats-v1');
+                await waitFor(() => n.client.connected() && !n.healthy(), 3000);
+                await e.policies.invalidate();
+                const exDenied = await explain(e.base, 'live.nt.x');
+                assert.strictEqual(exDenied.placement.selected, 'pg-v1', `${user}: ${JSON.stringify(exDenied.placement)}`);
+                assert.strictEqual(cand(exDenied, 'nats-v1').excluded_because, 'permission denied (nats-v1)', user);
+                const mine = await open(e);
+                const D = pub();
+                await publish(e.base, D);
+                await mine.waitFor(has(D.event_id), 2000);
+            } finally {
+                await e.stop();
+            }
+        }
     } finally {
         for (const x of clients) x.close();
         for (const i of [a, b, c, d]) await i.stop();

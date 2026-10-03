@@ -5,11 +5,16 @@
  * TLS is refused). It is kept here, without a dependency, because Events needs exactly fire-and-forget publish and a
  * subscription; the broker is on loopback or the private network (deploy/nats).
  *
- *   createNatsCore({ url, name, log, reconnectMs, maxReconnectMs, connectTimeoutMs })
+ *   createNatsCore({ url, name, log, reconnectMs, maxReconnectMs, connectTimeoutMs, probe, deniedRetryMs })
  *     connect()               resolves after the first PONG; rejects on refusal, auth error or timeout. A dropped
  *                             connection reconnects with backoff (from reconnectMs up to maxReconnectMs) and
  *                             re-subscribes; connect() rejecting does not stop the retries.
  *     connected()             true while the handshake is done and the socket open
+ *     denied()                the broker's last permissions violation (a refused PUB or SUB, after which NATS keeps
+ *                             the connection open and drops the message), else null. The handshake SUBs and PUBs `{}`
+ *                             to each `probe` subject before its PING, so a refusal shows up before the first real
+ *                             publish. A denied connection is re-opened after deniedRetryMs: a handshake without a
+ *                             violation clears it.
  *     publish(subject, obj)   JSON-encodes and writes one PUB; throws when not connected or over max_payload
  *     subscribe(subject, fn)  fn(obj) per MSG (a non-JSON payload is dropped); returns an unsubscribe function
  *     close()                 stops reconnecting and closes the socket
@@ -35,7 +40,7 @@ function parseUrl(raw) {
     };
 }
 
-function createNatsCore({ url, name = 'openvibe-events', log = console, reconnectMs = 250, maxReconnectMs = 5000, connectTimeoutMs = 2000 } = {}) {
+function createNatsCore({ url, name = 'openvibe-events', log = console, reconnectMs = 250, maxReconnectMs = 5000, connectTimeoutMs = 2000, probe = [], deniedRetryMs = 30000 } = {}) {
     const target = parseUrl(url);
     const where = `${target.host}:${target.port}`;
     const subs = new Map();   // sid -> { subject, fn }
@@ -47,6 +52,8 @@ function createNatsCore({ url, name = 'openvibe-events', log = console, reconnec
     let delay = reconnectMs;
     let maxPayload = 1024 * 1024;
     let first = null;         // { resolve, reject } of the pending connect()
+    let denied = null;        // the last permissions violation on the current connection
+    let deniedTimer = null;
 
     function settle(err) {
         if (!first) return;
@@ -61,10 +68,18 @@ function createNatsCore({ url, name = 'openvibe-events', log = console, reconnec
         delay = Math.min(delay * 2, maxReconnectMs);
     }
 
+    // A permissions change needs a new connection to be seen (and the handshake probe to pass): re-open later.
+    function retryDenied(s) {
+        if (deniedTimer) return;
+        deniedTimer = setTimeout(() => { deniedTimer = null; if (sock === s) s.destroy(); }, deniedRetryMs);
+        deniedTimer.unref?.();
+    }
+
     function open() {
         if (stopped) return;
         let buf = Buffer.alloc(0);
         let handshaken = false;
+        let violation = null;     // a permissions violation seen during this connection's handshake
         const s = net.connect({ host: target.host, port: target.port });
         sock = s;
         s.setNoDelay(true);
@@ -104,18 +119,26 @@ function createNatsCore({ url, name = 'openvibe-events', log = console, reconnec
                         const connect = { verbose: false, pedantic: false, lang: 'node', version: '0', name, protocol: 1, headers: false, no_echo: true, ...target.auth };
                         let out = `CONNECT ${JSON.stringify(connect)}${CRLF}`;
                         for (const [sid, sub] of subs) out += `SUB ${sub.subject} ${sid}${CRLF}`;
+                        for (const subject of probe) out += `PUB ${subject} 2${CRLF}{}${CRLF}`;
                         s.write(`${out}PING${CRLF}`);
                     }
                 } else if (op === 'PONG') {
                     if (!handshaken) {
                         handshaken = true; ready = true; delay = reconnectMs;
                         clearTimeout(deadline);
+                        denied = violation;
+                        if (denied) retryDenied(s);
                         settle(null);
                     }
                 } else if (op === '-ERR') {
                     const why = line.slice(5).trim();
                     log.warn(`[nats] ${where}: ${why}`);
-                    if (!handshaken) s.destroy(new Error(`nats ${where}: ${why}`));
+                    // A refused PUB or SUB leaves the connection open (the message is dropped): record it, so the
+                    // carrier is unhealthy and placement falls back. Any other -ERR before the handshake is fatal.
+                    if (/permissions violation/i.test(why)) {
+                        if (!handshaken) violation = why;
+                        else if (sock === s) { denied = why; retryDenied(s); }
+                    } else if (!handshaken) s.destroy(new Error(`nats ${where}: ${why}`));
                 }
                 // +OK and anything else: nothing to do
             }
@@ -123,7 +146,7 @@ function createNatsCore({ url, name = 'openvibe-events', log = console, reconnec
         s.on('error', (err) => { if (!handshaken) settle(err); else log.warn(`[nats] ${where}: ${err.message}`); });
         s.on('close', () => {
             clearTimeout(deadline);
-            if (sock === s) { sock = null; ready = false; }
+            if (sock === s) { sock = null; ready = false; denied = null; if (deniedTimer) { clearTimeout(deniedTimer); deniedTimer = null; } }
             if (!handshaken) settle(new Error(`nats ${where}: connection closed before the handshake`));
             scheduleReconnect();
         });
@@ -139,6 +162,7 @@ function createNatsCore({ url, name = 'openvibe-events', log = console, reconnec
             });
         },
         connected: () => ready,
+        denied: () => (ready ? denied : null),
         publish(subject, obj) {
             if (!ready || !sock) throw new Error(`nats ${where}: not connected`);
             if (sock.writableLength > MAX_BUFFERED) throw new Error(`nats ${where}: ${sock.writableLength} bytes unsent (the broker is not reading)`);
@@ -158,6 +182,7 @@ function createNatsCore({ url, name = 'openvibe-events', log = console, reconnec
         async close() {
             stopped = true;
             if (timer) { clearTimeout(timer); timer = null; }
+            if (deniedTimer) { clearTimeout(deniedTimer); deniedTimer = null; }
             ready = false;
             settle(new Error('nats: closed'));
             const s = sock;
