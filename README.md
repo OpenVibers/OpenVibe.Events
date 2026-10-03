@@ -236,7 +236,7 @@ async function connect() {
 void connect();
 ```
 
-- Auth: a **realtime ticket** (`?ticket=`), the Network `ov_token` cookie or a Bearer user JWT; a service token with `events.event.read`; or nobody (public events only, `REALTIME_ALLOW_ANONYMOUS`). An expired cookie degrades to anonymous; a bad Bearer is a 401.
+- Auth: a **realtime ticket** (`?ticket=`), the Network `ov_token` cookie or a Bearer user JWT (the cookie and Bearer are host-local only: an EventSource on another OpenVibe site can send neither, so it uses a ticket); a service token with `events.event.read`; or nobody (public events only, `REALTIME_ALLOW_ANONYMOUS`). An expired cookie degrades to anonymous; a bad Bearer is a 401.
 - Realtime tickets (ADR-005 amendment 2): a page on any OpenVibe site cannot count on a cookie of events.openvibe.network (third-party there), and an EventSource cannot send a header. So it asks Network for a ticket (`POST https://openvibe.network/api/v1/realtime/ticket`, answering `network.realtime-ticket-result@1`) and opens `/realtime/stream?topics=network.notification.*&ticket=<ticket>` without credentials. The ticket is an RS256 JWT signed with Network's key (`identity.realtime-ticket-claims@1`): `iss <OV_NETWORK_ISSUER>/realtime`, `sub <usr_>`, `aud [openvibe.events]`, `typ` and `purpose` `realtime`, a lifetime of at most 300 s (Network mints 120 s) and `jti rtk_…`.
   - Events accepts each ticket once, never as Bearer or cookie, and never logs it. The refusals are 401: `ticket.invalid`, `ticket.expired` and `ticket.used`.
   - A reconnect asks for a new ticket and resumes with `last_event_id` (the cursor from the last message's SSE `id`).
@@ -295,8 +295,8 @@ Reporting a vulnerability: [SECURITY.md](SECURITY.md). The rules the code keeps:
   (`EVENTS_ENDPOINT_HOSTS`); app webhooks must be `https` and resolve only to public addresses,
   checked at creation and inside every delivery's DNS lookup ([server/egress.js](server/egress.js));
   redirects are never followed.
-- **Integrity.** Deliveries are signed per subscription (v1 and v2; consumers require v2); a
-  subscription secret is shown once.
+- **Integrity.** Deliveries are signed per subscription with the v2 signature only
+  (`X-OpenVibe-Signature-V2`; the v1 body-only header is gone); a subscription secret is shown once.
 - **Exposure.** `/api/v1/deliveries` stays host-local and `/metrics` answers direct loopback callers
   only; nginx logs `/realtime/stream` without its query string
   (`deploy/nginx/log_format_events_noquery.conf`), so tickets never reach the access log.
