@@ -106,13 +106,13 @@ POST /api/v1/subscriptions
 
 Topic patterns are dot-separated segments where `*` stands for one or more whole segments (`media.vod.*`, `*.created`, `media.*.ready`, `*`). Endpoints must be `http(s)` on `127.0.0.1` or `openvibe.<tld>`/its subdomains (`EVENTS_ENDPOINT_HOSTS`); redirects are never followed.
 
-Each delivery is `POST <endpoint>` with body `{ "event": <envelope>, "seq": n }` and headers `X-OpenVibe-Event-Id`, `X-OpenVibe-Event-Type`, `X-OpenVibe-Seq`, `X-OpenVibe-Subscription-Id`, `X-OpenVibe-Delivery-Attempt`, `X-OpenVibe-Signature: sha256=<HMAC-SHA256 of the raw body with the subscription secret>`, `X-OpenVibe-Timestamp: <unix seconds>`, `X-OpenVibe-Signature-V2: t=<that timestamp>,v2=<HMAC-SHA256 of "<t>.<raw body>">` and `traceparent` (the event's trace). Any 2xx is delivered. Anything else is retried after 1 s, 5 s, 30 s, 2 min, 10 min, 1 h (then hourly) up to 8 attempts, after which the delivery is `dead`. Priority classes go first (`critical`, `important`, `low`, then seq); one delivery per subscription is in flight at a time and at most 20 overall. Delivery is at least once and not strictly ordered; consumers dedupe with an inbox and order with `subject.revision`.
+Each delivery is `POST <endpoint>` with body `{ "event": <envelope>, "seq": n }` and headers `X-OpenVibe-Event-Id`, `X-OpenVibe-Event-Type`, `X-OpenVibe-Seq`, `X-OpenVibe-Subscription-Id`, `X-OpenVibe-Delivery-Attempt`, `X-OpenVibe-Timestamp: <unix seconds>`, `X-OpenVibe-Signature-V2: t=<that timestamp>,v2=<HMAC-SHA256 of "<t>.<raw body>">` and `traceparent` (the event's trace). During secret rotation, the v2 header also carries a second `v2=` signature made with the previous secret. Any 2xx is delivered. Anything else is retried after 1 s, 5 s, 30 s, 2 min, 10 min, 1 h (then hourly) up to 8 attempts, after which the delivery is `dead`. Priority classes go first (`critical`, `important`, `low`, then seq); one delivery per subscription is in flight at a time and at most 20 overall. Delivery is at least once and not strictly ordered; consumers dedupe with an inbox and order with `subject.revision`.
 
-**Replay window (signature v2).** v1 signs only the body, so a captured delivery verifies forever (the inbox's `event_id` dedupe is all that stops a replay). v2 signs the timestamp together with the body, and every attempt, retries included, is signed afresh with the time it is sent. Consumers check it with `verifyDeliveryV2(raw, headers, secret, { toleranceSec = 300, now })` (here) or openvibe-sdk ≥ 0.4.0 `parseDelivery(raw, headers, secret, { requireV2: true })` and reject anything more than 300 s from their clock either way. A v2 header that is present but wrong or stale is a failure: never fall back to v1 then. Rollout: Events sends both headers first, then each consumer requires v2; v1 stays on the wire until every consumer does.
+**Replay window (signature v2).** Events sends only the v2 signature. It signs the timestamp together with the raw body, and every attempt, retries included, is signed afresh with the time it is sent. Consumers check it with `verifyDeliveryV2(raw, headers, secret, { toleranceSec = 300, now })` (here) or openvibe-sdk ≥ 0.4.0 `parseDelivery(raw, headers, secret, { requireV2: true })` and reject anything more than 300 s from their clock either way. Reject a missing, wrong or stale v2 signature; do not fall back to v1.
 
 Operators: `GET /api/v1/deliveries?status=dead` is the dead-letter queue; `POST /api/v1/deliveries/replay { subscription_id, event_ids: [...] }` or `{ subscription_id, from_seq }` requeues retained events (that is also how a new subscription catches up on history).
 
-Pull consumers: `GET /api/v1/events?topic=media.vod.*&after_seq=<position>&limit=100` returns `{ events: [{ seq, cursor, event }], next_after_seq, next_cursor, latest_seq }`, plus `gap: { from_seq, to_seq }` when the position is older than retention or from another retention epoch. The opaque cursor ([ADR-042](https://github.com/OpenVibers/OpenVibe.Contracts/blob/main/docs/adr/ADR-042-events-fabric.md) decision 7) goes back in as `after=<cursor>` beside `after_seq`; `next_cursor` is the cursor for the next page, `seq`/`next_after_seq`/`latest_seq` stay for one release. `PUT /api/v1/checkpoints { topic, cursor }` stores a consumer's position here if it has nowhere better (an opaque cursor string is accepted in place of the integer; the answer carries its `epoch`, `carrier` and `next_cursor`).
+Pull consumers: start with `GET /api/v1/events?topic=media.vod.*&limit=100`, then request `GET /api/v1/events?topic=media.vod.*&after=<next_cursor>&limit=100`, using the previous response's opaque `next_cursor` ([ADR-042](https://github.com/OpenVibers/OpenVibe.Contracts/blob/main/docs/adr/ADR-042-events-fabric.md) decision 7). The response carries `{ events: [{ seq, cursor, event }], next_cursor, next_after_seq, latest_seq }`, plus `gap: { from_seq, to_seq }` when the position is older than retention or from another retention epoch. Use `next_cursor` even when no events match, since it advances past scanned events. Numeric `after_seq=<position>` remains accepted for one release; when both are supplied, `after` takes precedence. The numeric `seq`, `next_after_seq` and `latest_seq` fields also remain for one release. `PUT /api/v1/checkpoints { topic, cursor }` stores a consumer's position here if it has nowhere better (an opaque cursor string is accepted in place of the integer; the answer carries its `epoch`, `carrier` and `next_cursor`).
 
 ## The fabric: carriers, the planner and explain
 
@@ -150,7 +150,8 @@ curl -s -X POST "$EVENTS/api/v1/events" -H "Authorization: Bearer $TOKEN" -H 'Co
   "event_id": "evt_01JAB2C3D4E5F6G7H8J9K0MNPQ", "event_type": "app.'$PK'.order.created", "version": 1,
   "source": "'$SRC'", "actor": { "type": "app", "id": "'$APP'" }, "timestamp": "2026-09-23T12:00:00Z",
   "subject": { "type": "order", "id": "42" }, "payload": { "total": 3 } }'
-curl -s "$EVENTS/api/v1/events?topic=app.$PK.*&after_seq=0" -H "Authorization: Bearer $TOKEN"
+curl -s "$EVENTS/api/v1/events?topic=app.$PK.*" -H "Authorization: Bearer $TOKEN"  # first page
+curl -s "$EVENTS/api/v1/events?topic=app.$PK.*&after=$CURSOR" -H "Authorization: Bearer $TOKEN"  # CURSOR = previous next_cursor
 curl -s -X POST "$EVENTS/api/v1/subscriptions" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{ "topic_pattern": "app.'$PK'.*", "endpoint": "https://hooks.example.com/openvibe" }'   # → secret, shown once
 ```
@@ -159,7 +160,7 @@ curl -s -X POST "$EVENTS/api/v1/subscriptions" -H "Authorization: Bearer $TOKEN"
 
 **Sandbox.** Events store each app event's `project_id` and `env`. Apps see and receive only events of their own environment: sandbox events never reach production apps or production subscriptions, and production events never reach sandbox ones. First-party readers and subscribers never see sandbox events, and see production app events only through a pattern that starts with `app.`. Realtime (SSE) never streams app events. Sandbox events are pruned after `EVENTS_APP_SANDBOX_RETENTION_DAYS` (7).
 
-**Webhook endpoints (SSRF guard, [server/egress.js](server/egress.js)).** An app subscription's endpoint must be `https`, without credentials, and its hostname must resolve only to public unicast addresses (loopback, RFC 1918, link-local and cloud metadata, CGNAT, multicast, documentation and benchmarking ranges, unique-local IPv6, and v4-in-v6 forms of any of those are refused). This is checked when the subscription is created and again on every delivery attempt, inside the connection's own DNS lookup, so the socket goes to the address that was checked. A refused address is a permanent failure (dead at once; replayable). Redirects are never followed (a `3xx` is a failed attempt). Deliveries are signed exactly like first-party ones (`X-OpenVibe-Signature`, and `X-OpenVibe-Timestamp` with `X-OpenVibe-Signature-V2`).
+**Webhook endpoints (SSRF guard, [server/egress.js](server/egress.js)).** An app subscription's endpoint must be `https`, without credentials, and its hostname must resolve only to public unicast addresses (loopback, RFC 1918, link-local and cloud metadata, CGNAT, multicast, documentation and benchmarking ranges, unique-local IPv6, and v4-in-v6 forms of any of those are refused). This is checked when the subscription is created and again on every delivery attempt, inside the connection's own DNS lookup, so the socket goes to the address that was checked. A refused address is a permanent failure (dead at once; replayable). Redirects are never followed (a `3xx` is a failed attempt). Deliveries carry the same `X-OpenVibe-Timestamp` and `X-OpenVibe-Signature-V2` headers as first-party ones.
 
 **Quotas** (per project and environment, enforced here, `429 events.quota_exceeded` with `quota` = `publish_rate` (plus `Retry-After: 60`), `retained_bytes` or `subscriptions`):
 
@@ -211,12 +212,28 @@ re-exports them and keeps no SQLite copies.
 ## Realtime (SSE)
 
 ```js
-const es = new EventSource('https://events.openvibe.network/realtime/stream?topics=live.stream.*', { withCredentials: true });
-// A signed-in person's own events from any OpenVibe site: a fresh ticket from Network for every (re)connect.
-const { ticket, stream_url, topics } = await (await fetch('https://openvibe.network/api/v1/realtime/ticket', { method: 'POST', headers: { Authorization: `Bearer ${networkJwt}` } })).json();
-const mine = new EventSource(`${stream_url}?topics=${topics.join(',')}&ticket=${ticket}${lastEventId != null ? `&last_event_id=${lastEventId}` : ''}`);
-es.onmessage = (m) => { lastEventId = m.lastEventId; const { seq, event } = JSON.parse(m.data); };
-es.addEventListener('gap', (m) => { /* events were missed: refetch state */ });
+let lastEventId = null;
+async function connect() {
+    try {
+        // Network issues a fresh one-use ticket for each stream, including reconnects.
+        const response = await fetch('https://openvibe.network/api/v1/realtime/ticket', {
+            method: 'POST', headers: { Authorization: `Bearer ${networkJwt}` },
+        });
+        if (!response.ok) throw new Error(`ticket request failed: ${response.status}`);
+        const { ticket, stream_url, topics } = await response.json();
+        const url = new URL(stream_url);
+        url.searchParams.set('topics', topics.join(','));
+        url.searchParams.set('ticket', ticket);
+        if (lastEventId != null) url.searchParams.set('last_event_id', lastEventId);
+        const stream = new EventSource(url);
+        stream.onmessage = (m) => { lastEventId = m.lastEventId; const { seq, event } = JSON.parse(m.data); };
+        stream.addEventListener('gap', (m) => { /* events were missed: refetch state */ });
+        stream.onerror = () => { stream.close(); setTimeout(connect, 1000); };
+    } catch (err) {
+        setTimeout(connect, 1000);
+    }
+}
+void connect();
 ```
 
 - Auth: a **realtime ticket** (`?ticket=`), the Network `ov_token` cookie or a Bearer user JWT; a service token with `events.event.read`; or nobody (public events only, `REALTIME_ALLOW_ANONYMOUS`). An expired cookie degrades to anonymous; a bad Bearer is a 401.
