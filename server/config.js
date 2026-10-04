@@ -111,6 +111,9 @@ function load(env = process.env) {
             stream: env.NATS_STREAM || 'OV_EVENTS_STREAM',
         },
         retentionDays: int(env.EVENTS_RETENTION_DAYS, 30),
+        // retention.replay (ADR-042 decision 8): days an event stays readable in events_archive after it leaves the
+        // hot store, counted from receipt like retentionDays. 0: no replay tier (pruned events are deleted, as before).
+        replayRetentionDays: Math.max(0, int(env.EVENTS_REPLAY_RETENTION_DAYS, 365)),
         receiptRetentionDays: int(env.EVENTS_RECEIPT_RETENTION_DAYS, 90),
         pruneIntervalMs: int(env.EVENTS_PRUNE_INTERVAL_MS, 60 * 60 * 1000),
 

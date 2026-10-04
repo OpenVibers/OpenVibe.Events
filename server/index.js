@@ -67,8 +67,13 @@ async function start({
 
     const prune = async () => {
         try {
-            const r = await store.prune({ retentionDays: config.retentionDays, receiptRetentionDays: config.receiptRetentionDays, sandboxRetentionDays: config.apps.sandboxRetentionDays });
-            if (r.events || r.receipts) log.log(`[retention] pruned ${r.events} events, ${r.receipts} receipts`);
+            // Tiers (ADR-042 decision 8): hot events past EVENTS_RETENTION_DAYS move to the replay tier, which keeps them
+            // for EVENTS_REPLAY_RETENTION_DAYS (0: no replay tier, deleted as before).
+            const r = await store.prune({
+                retentionDays: config.retentionDays, replayRetentionDays: config.replayRetentionDays,
+                receiptRetentionDays: config.receiptRetentionDays, sandboxRetentionDays: config.apps.sandboxRetentionDays,
+            });
+            if (r.events || r.replay || r.receipts) log.log(`[retention] pruned ${r.events} hot events (${r.archived} moved to replay), ${r.replay} replay events, ${r.receipts} receipts`);
         } catch (err) {
             log.error(`[retention] prune failed: ${err.message}`);
         }

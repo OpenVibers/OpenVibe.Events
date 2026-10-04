@@ -6,9 +6,10 @@
  *       -> { events: [{ seq, cursor, event }], next_after_seq, next_cursor, latest_seq, gap? }
  *       `after=` takes an opaque cursor beside after_seq (ADR-042 decision 7); a cursor from another
  *       retention epoch answers `gap` — never a silent restart. `gap` ({ from_seq, to_seq }) means
- *       events after the position were already pruned by retention (or the epoch changed).
+ *       events after the position were already pruned by retention (or the epoch changed). The pull
+ *       spans the hot store and the replay tier (decision 8) with the one cursor: `gap` only outside both.
  *       Keep next_cursor as the cursor; it moves past events that did not match.
- *   GET /api/v1/events/:event_id -> { seq, cursor, event }
+ *   GET /api/v1/events/:event_id -> { seq, cursor, event }   (hot or replay)
  *   GET /api/v1/checkpoints?topic=…  /  PUT /api/v1/checkpoints { topic, cursor }
  *       a consumer's own stored cursor per topic pattern (consumer = calling principal). `cursor` is
  *       the numeric position; PUT also accepts an opaque cursor string, and both answers carry the
@@ -111,7 +112,8 @@ function readRouter({ store, auth, worker, limits }) {
         const row = await store.getEvent(String(req.params.id));
         const visible = row && (req.principal.kind === 'app' ? apps.visibleToApp(row, req.principal) : (row.env || 'production') === 'production');
         if (!visible) return http.sendProblem(res, 404, 'events.not_found', { detail: 'no such event (or pruned by retention)', ctx: req.ov });
-        return res.json({ seq: row.seq, cursor: cursor.encode(row.seq, await store.epoch()), event: rowToEnvelope(row) });
+        // A replay-tier row names the epoch its position belongs to; a hot row is in the current one.
+        return res.json({ seq: row.seq, cursor: cursor.encode(row.seq, row.epoch ?? await store.epoch()), event: rowToEnvelope(row) });
     });
 
     const consumerOf = (req) => req.principal.service || req.principal.sub;

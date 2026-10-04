@@ -112,7 +112,31 @@ Each delivery is `POST <endpoint>` with body `{ "event": <envelope>, "seq": n }`
 
 Operators: `GET /api/v1/deliveries?status=dead` is the dead-letter queue; `POST /api/v1/deliveries/replay { subscription_id, event_ids: [...] }` or `{ subscription_id, from_seq }` requeues retained events (that is also how a new subscription catches up on history).
 
-Pull consumers: start with `GET /api/v1/events?topic=media.vod.*&limit=100`, then request `GET /api/v1/events?topic=media.vod.*&after=<next_cursor>&limit=100`, using the previous response's opaque `next_cursor` ([ADR-042](https://github.com/OpenVibers/OpenVibe.Contracts/blob/main/docs/adr/ADR-042-events-fabric.md) decision 7). The response carries `{ events: [{ seq, cursor, event }], next_cursor, next_after_seq, latest_seq }`, plus `gap: { from_seq, to_seq }` when the position is older than retention or from another retention epoch. Use `next_cursor` even when no events match, since it advances past scanned events. Numeric `after_seq=<position>` remains accepted for one release; when both are supplied, `after` takes precedence. The numeric `seq`, `next_after_seq` and `latest_seq` fields also remain for one release. `PUT /api/v1/checkpoints { topic, cursor }` stores a consumer's position here if it has nowhere better (an opaque cursor string is accepted in place of the integer; the answer carries its `epoch`, `carrier` and `next_cursor`).
+Pull consumers: start with `GET /api/v1/events?topic=media.vod.*&limit=100`, then request `GET /api/v1/events?topic=media.vod.*&after=<next_cursor>&limit=100`, using the previous response's opaque `next_cursor` ([ADR-042](https://github.com/OpenVibers/OpenVibe.Contracts/blob/main/docs/adr/ADR-042-events-fabric.md) decision 7). The response carries `{ events: [{ seq, cursor, event }], next_cursor, next_after_seq, latest_seq }`, plus `gap: { from_seq, to_seq }` when the position is older than both the hot store and the replay tier (below) or from another retention epoch. Use `next_cursor` even when no events match, since it advances past scanned events. Numeric `after_seq=<position>` remains accepted for one release; when both are supplied, `after` takes precedence. The numeric `seq`, `next_after_seq` and `latest_seq` fields also remain for one release. `PUT /api/v1/checkpoints { topic, cursor }` stores a consumer's position here if it has nowhere better (an opaque cursor string is accepted in place of the integer; the answer carries its `epoch`, `carrier` and `next_cursor`).
+
+### Retention: three tiers
+
+[ADR-042](https://github.com/OpenVibers/OpenVibe.Contracts/blob/main/docs/adr/ADR-042-events-fabric.md) decision 8. An event lives in one tier at a time:
+
+| Tier | Where | Kept | Read by |
+|---|---|---|---|
+| hot | `events` (with its deliveries) | `EVENTS_RETENTION_DAYS` (30) | everything: delivery, pulls, SSE, by id, replay to subscriptions |
+| replay | `events_archive`, same database: the filter columns plus a gzip'd body, no delivery rows | `EVENTS_REPLAY_RETENTION_DAYS` (365) from receipt; `0` = no replay tier | pulls, SSE resume and `GET /api/v1/events/:id`, with the same cursor |
+| archive | one NDJSON object per month (gzip, with a manifest), outside the database | until an operator deletes it | nothing online; an operator restores a month into replay |
+
+The hourly prune (`EVENTS_PRUNE_INTERVAL_MS`) moves each hot event past `EVENTS_RETENTION_DAYS` into `events_archive` in the transaction that deletes it: 500 rows at a time, locked `FOR UPDATE SKIP LOCKED`, inserted idempotently on `event_id`, so two Events processes pruning at once each move different rows and no event is moved twice. Its deliveries go with the hot row (operator replay to a subscription, `POST /api/v1/deliveries/replay`, reaches hot events only). Replay rows past `EVENTS_REPLAY_RETENTION_DAYS` are then deleted. A pull or SSE resume runs from a cursor in the replay tier into the hot store without a `gap`; `gap` (the same shape) still means the position is older than both tiers or from another epoch. Redaction tombstones replay rows exactly as hot ones, the sandbox and environment rules read them the same way, and a re-publish of an archived `event_id` is still `duplicate: true` with its original `seq` and `cursor`. Sandbox events never enter replay: they are deleted at `EVENTS_APP_SANDBOX_RETENTION_DAYS`, as before; publish receipts keep `EVENTS_RECEIPT_RETENTION_DAYS`.
+
+`EVENTS_REPLAY_RETENTION_DAYS=0` keeps the old behaviour exactly: events past `EVENTS_RETENTION_DAYS` are deleted, and the next prune also empties `events_archive`, because no rule would prune the rows left there otherwise. `GET /limits.json` publishes the window as `replay_retention_days`.
+
+The archive tier is an operator job, never run automatically (`DATABASE_URL` as for the service):
+
+```sh
+node scripts/events-archive.js status                                  # replay rows per month, oldest hot event
+node scripts/events-archive.js export  --month 2026-01 [--older-than-days 90]
+node scripts/events-archive.js restore --month 2026-01 [--hold-days 30]
+```
+
+`export` writes the closed month's replay rows older than the cutoff to `<YYYY>/events-<YYYY-MM>.ndjson.gz` (one row per line: every column of the hot row, payload and actor as their stored JSON text, plus `epoch` and `archived_at`) and `<YYYY>/events-<YYYY-MM>.json` (`count`, `sha256`). It deletes those rows from `events_archive` only after reading the object back and matching both, and only rows unchanged since it read them (a row redacted meanwhile stays; rerun). Re-running, or exporting the rest of a month later, merges into the month's object. `restore` checks the object against its manifest, then inserts it back into `events_archive`, idempotent on `event_id`, held for `--hold-days` so the replay prune does not delete it at once. A redaction published after a month was exported does not reach its object, so restore only what you need. Export and restore of one month are serialised by a PostgreSQL advisory lock. Storage (`scripts/archive-storage.js`): a local directory, `EVENTS_ARCHIVE_DIR` (default `data/archive`), or an S3-compatible bucket when `EVENTS_ARCHIVE_S3_BUCKET` is set (`EVENTS_ARCHIVE_S3_ENDPOINT`, `_REGION`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`, `_PREFIX`; path-style, SigV4 signed with node:crypto and sent with node's `fetch`, no dependency). Each object is built in memory.
 
 ## The fabric: carriers, the planner and explain
 
@@ -252,14 +276,14 @@ void connect();
   - Conversely, a user JWT that carries `typ` or `purpose` (a ticket, a FedCM assertion) is not a session here.
 - A person's topic: `network.notification.created` (Network's outbox; visibility `subject`, subject the recipient). `topics=network.notification.*` streams a person's own notifications and nobody else's. There is no `user:<id>` topic: it is not a valid pattern (400 `realtime.bad_topic`), and subject visibility already does its job.
 - Visibility: `public` events go to anyone subscribed to the topic; `subject` events only to the user whose subject id (`usr_…`) is the event's `actor.id` or its user `subject.id`; `internal` events never reach a browser. A guessed topic yields nothing.
-- Resume: the SSE `id` is the cursor (ADR-042 decision 7; a bare seq is accepted for one release), so the browser's automatic `Last-Event-ID` (or `?last_event_id=`) replays what was missed. A cursor older than retention — or from another retention epoch (`reason: "epoch"`) — first gets `event: gap` (`{ reason, from_seq, to_seq }`), as does a replay that hits `REALTIME_REPLAY_MAX`.
+- Resume: the SSE `id` is the cursor (ADR-042 decision 7; a bare seq is accepted for one release), so the browser's automatic `Last-Event-ID` (or `?last_event_id=`) replays what was missed. A cursor older than both the hot store and the replay tier — or from another retention epoch (`reason: "epoch"`) — first gets `event: gap` (`{ reason, from_seq, to_seq }`), as does a replay that hits `REALTIME_REPLAY_MAX`.
 - Public replay window: browsers (signed out or signed in) are replayed `public` events received in the last `REALTIME_PUBLIC_REPLAY_SECONDS` (300; 0 = none), enough to ride out a reconnect. Older public events are not replayed: the stream opens with `event: gap` (`reason: "public_window"`, `window_seconds`), and the client refetches state from the owning service. `subject` events addressed to the viewer, and service viewers, keep the whole retention. This keeps the stream from paging through a month of public history, chat lines included; nothing in the network needs more (no browser surface replays public events today).
 - Redacted events are replayed as their tombstones ([Redaction](#redaction)).
 - Heartbeat comment every 25 s; at most 20 topics per connection and `REALTIME_MAX_CONNECTIONS` (2000) overall; CORS with credentials for `https://*.openvibe.*` only.
 
 ## Owns
 
-- `events`, `subscriptions`, `deliveries`, `consumer_checkpoints`, `idempotency_receipts`, `app_revocations`, `app_usage` (PostgreSQL `ov_events`, ADR-035; the realtime fan-out is in-process, one Events process)
+- `events`, `events_archive` (the replay tier), `subscriptions`, `deliveries`, `consumer_checkpoints`, `idempotency_receipts`, `app_revocations`, `app_usage` (PostgreSQL `ov_events`, ADR-035; the realtime fan-out is in-process, one Events process)
 - developer-app event scope, sandbox separation and per-project Events quotas (ADR-014)
 - canonical event envelope (event_id, trace_id, type, version, source, actor, subject + revision, payload)
 - priority classes `critical|important|low`, loop guards, backpressure, DLQ and replay
@@ -280,6 +304,7 @@ void connect();
 - event persists before consumer delivery (`test/delivery.test.js`)
 - kill a consumer mid-processing; replay creates exactly one effect (`test/outbox-inbox.test.js`)
 - browser reconnect resumes from a cursor or reports a gap (`test/realtime.test.js`)
+- a hot-pruned event stays readable through replay, a cursor across the tier boundary reports no false gap, two concurrent prunes move each event once, replay pruning answers `gap`, export → restore round-trips byte for byte, and `EVENTS_REPLAY_RETENTION_DAYS=0` behaves as before the tiers (`test/archive.test.js`)
 - a guessed private topic yields no data (`test/realtime.test.js`)
 - a developer app cannot publish, read or subscribe outside its project, sandbox never meets production, app webhooks reach public addresses only, quotas hold (`test/apps.test.js`)
 - a project's publishing and deliveries are counted per hour, refusals and failed attempts as errors, and each closed hour is sent once as `events.usage.recorded`, never visible to apps (`test/usage.test.js`)

@@ -19,8 +19,9 @@
  * Developer-app events (app.<project_key>.*, events.app.publish) are never streamed here, to anyone.
  *
  * Resume: `Last-Event-ID` (or ?last_event_id=) is a cursor, or a bare seq for one release. Missed
- * events are replayed first; when the cursor is older than retention — or belongs to another
- * retention epoch — an `event: gap` message comes first, so the client knows to refetch state.
+ * events are replayed first, from the replay tier and then the hot store (ADR-042 decision 8); when the
+ * cursor is older than both — or belongs to another retention epoch — an `event: gap` message comes
+ * first, so the client knows to refetch state.
  * Heartbeat comment every 25 s.
  *
  * Public replay window: a browser (signed out or signed in) is replayed `public` events received in

@@ -24,6 +24,10 @@ function limitsOf(config) {
                 production: off(q.production.retainedBytes), sandbox: off(q.sandbox.retainedBytes), exceeded: '429 events.quota_exceeded' },
             { id: 'retention_days', label: 'Days an event is kept', capability: 'events.app.read', unit: 'days',
                 production: config.retentionDays, sandbox: config.apps.sandboxRetentionDays, exceeded: 'pruned' },
+            // The replay window (ADR-042 decision 8): an event past retention_days is still pulled and replayed from the
+            // replay tier until replay_retention_days after receipt (0 = no replay tier). Sandbox events never enter it.
+            { id: 'replay_retention_days', label: 'Days an event can still be replayed', capability: 'events.app.read', unit: 'days',
+                production: config.replayRetentionDays, sandbox: 0, exceeded: 'gap' },
             { id: 'subscriptions', label: 'Webhook subscriptions', capability: 'events.app.subscribe', unit: 'count',
                 production: off(q.production.maxSubscriptions), sandbox: off(q.sandbox.maxSubscriptions), exceeded: '429 events.quota_exceeded' },
             { id: 'payload_bytes', label: 'Payload size of one event', capability: 'events.app.publish', unit: 'bytes',

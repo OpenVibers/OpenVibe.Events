@@ -5,6 +5,9 @@
  * consumer delivery". Global order is `seq`, handed out from a counter that never goes backwards,
  * even after retention has pruned the newest rows. Beside it a cursor (./cursor.js) names a seq plus
  * the retention epoch — ADR-042 decision 7; seq stays on the wire for one release.
+ *
+ * Retention is tiered (ADR-042 decision 8): prune() moves a hot event older than retention.hot into events_archive
+ * (./archive.js) in the transaction that deletes it, and pulls, scans and by-id reads span both tiers with one cursor.
  */
 const fs = require('fs');
 const path = require('path');
@@ -13,6 +16,7 @@ const topics = require('./topics');
 const apps = require('./apps');
 const redaction = require('./redaction');
 const cursor = require('./cursor');
+const archive = require('./archive');
 const { carrierClass, orderingKey } = require('./fabric/policy');
 const { createUsage, deliveryCode } = require('./usage');
 
@@ -24,6 +28,26 @@ const MIGRATIONS = path.join(__dirname, '..', 'migrations');
 const DEV_PGLITE = path.join(__dirname, '..', 'data', 'pglite');
 
 const PUBLISH_RECEIPT = 'events:publish';  // receipts' consumer column for accepted publishes
+
+/**
+ * Rows with seq > ? (and `filter`) from the hot store and the replay tier's current epoch, in seq order, LIMIT ?.
+ * Both branches return the hot row's columns plus `body` (NULL for a hot row; a replay row's compressed rest).
+ */
+function spanTiers(filter) {
+    return `SELECT * FROM (
+        SELECT ${[...archive.COLUMNS, ...archive.BODY].join(', ')}, NULL::bytea AS body FROM events WHERE seq > ? ${filter}
+        UNION ALL
+        SELECT ${archive.COLUMNS.join(', ')}, ${archive.BODY.map(c => `NULL AS ${c}`).join(', ')}, body FROM events_archive
+            WHERE seq > ? ${filter} AND epoch = (SELECT value FROM store_epoch WHERE name = 'events')
+    ) t ORDER BY seq LIMIT ?`;
+}
+
+/** A spanTiers row → the hot row shape. */
+function fromTier(r) {
+    if (r.body) return archive.unpack(r);
+    delete r.body;
+    return r;
+}
 
 /**
  * The serving handle (ADR-035): DATABASE_URL through PgBouncer; in development without it, an embedded PGlite database
@@ -101,7 +125,12 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
         addReceipt: db.prepare('INSERT INTO idempotency_receipts (consumer, event_id, processed_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING'),
         nextSeq: db.prepare("UPDATE sequences SET value = value + 1 WHERE name = 'events' RETURNING value"),
         lastSeq: db.prepare("SELECT value FROM sequences WHERE name = 'events'"),
-        minSeq: db.prepare('SELECT MIN(seq) AS s FROM events'),
+        // The oldest position either tier still holds; replay rows count in the current epoch only.
+        minSeq: db.prepare(`SELECT LEAST((SELECT MIN(seq) FROM events),
+            (SELECT MIN(seq) FROM events_archive WHERE epoch = (SELECT value FROM store_epoch WHERE name = 'events'))) AS s`),
+        getArchived: db.prepare('SELECT * FROM events_archive WHERE id = ?'),
+        archivedBySubject: db.prepare(`SELECT * FROM events_archive WHERE source = ? AND subject_type = ? AND subject_id = ?
+            AND redacted_at IS NULL AND redacts = 0`),
         epoch: db.prepare("SELECT value FROM store_epoch WHERE name = 'events'"),
         bumpEpoch: db.prepare("UPDATE store_epoch SET value = value + 1 WHERE name = 'events' RETURNING value"),
         // Hop depth counts only rows the publisher's own tenancy can have caused: a first-party
@@ -122,7 +151,8 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
             AND redacted_at IS NULL AND redacts = 0`),
         applyTombstone: db.prepare(`UPDATE events SET payload = @payload, actor = @actor, size_bytes = @size_bytes,
             redacted_at = @redacted_at, redacted_by = @redacted_by WHERE id = @id AND redacted_at IS NULL`),
-        firstSeqSince: db.prepare('SELECT MIN(seq) AS s FROM events WHERE received_at >= ?'),
+        firstSeqSince: db.prepare(`SELECT LEAST((SELECT MIN(seq) FROM events WHERE received_at >= ?),
+            (SELECT MIN(seq) FROM events_archive WHERE received_at >= ? AND epoch = (SELECT value FROM store_epoch WHERE name = 'events'))) AS s`),
         enabledSubs: db.prepare('SELECT id, topic_pattern, project_id, env FROM subscriptions WHERE enabled = 1'),
         projectRecent: db.prepare('SELECT COUNT(*) AS n FROM events WHERE project_id = ? AND env = ? AND received_at > ?'),
         projectBytes: db.prepare('SELECT COALESCE(SUM(size_bytes), 0)::bigint AS b FROM events WHERE project_id = ? AND env = ?'),
@@ -137,8 +167,9 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
         // The carrier a (subscription, ordering key) currently has a backlog on: what pins new deliveries of the key.
         backlogCarrier: db.prepare(`SELECT carrier FROM deliveries WHERE subscription_id = ? AND ordering_key = ? AND status IN ('pending', 'failed')
             AND carrier IS NOT NULL ORDER BY seq LIMIT 1`),
-        afterSeq: db.prepare('SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?'),
-        afterSeqLike: db.prepare("SELECT * FROM events WHERE seq > ? AND event_type ILIKE ? ESCAPE '\\' ORDER BY seq LIMIT ?"),
+        // One statement over both tiers (one snapshot): an event the prune moves between two reads can be in neither.
+        afterSeq: db.prepare(spanTiers('')),
+        afterSeqLike: db.prepare(spanTiers("AND event_type ILIKE ? ESCAPE '\\'")),
     };
 
     // ── Events ───────────────────────────────────────────────
@@ -167,12 +198,13 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
             bytes = (await q.projectBytes.get(project.projectId, project.env)).b;
         }
         for (const env of items) {
-            const existing = await q.getEvent.get(env.event_id);
+            // An id is stored once across the tiers: one moved to replay is still a duplicate (with its position).
+            const existing = await q.getEvent.get(env.event_id) || await q.getArchived.get(env.event_id);
             if (existing) {
                 if (existing.source !== env.source || existing.event_type !== env.event_type) {
                     throw new StoreError(409, 'events.id_conflict', `event ${env.event_id} already exists with different content`);
                 }
-                results.push({ event_id: env.event_id, seq: existing.seq, duplicate: true, cursor: cursor.encode(existing.seq, epoch) });
+                results.push({ event_id: env.event_id, seq: existing.seq, duplicate: true, cursor: cursor.encode(existing.seq, existing.epoch ?? epoch) });
                 continue;
             }
             if (await q.getReceipt.get(PUBLISH_RECEIPT, env.event_id)) {
@@ -286,13 +318,15 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
 
     /**
      * Turn the targets of `directive` (server/redaction.js) into tombstones on behalf of `by` (the
-     * stored row of the redacting event). Throws StoreError 403 when an event id names an event of
-     * another owner. Returns [{ id, seq, columns }] for the rows it rewrote.
+     * stored row of the redacting event), in either tier. Throws StoreError 403 when an event id names
+     * an event of another owner. Returns [{ id, seq, columns }] for the rows it rewrote.
      */
     async function applyRedaction(by, directive, now) {
-        const targets = new Map();
+        const targets = new Map();   // id -> the row (hot, or unpacked from replay)
         for (const id of directive.eventIds) {
-            const r = await q.getEvent.get(id);
+            const hot = await q.getEvent.get(id);
+            const archived = hot ? null : await q.getArchived.get(id);
+            const r = hot || (archived && archive.unpack(archived));
             if (!r) continue;   // never stored, or pruned already
             if (!redaction.sameOwner(by, r)) {
                 throw new StoreError(403, 'events.redaction_not_allowed', `event ${id} belongs to ${r.source}; ${by.source} may redact only its own events`,
@@ -305,15 +339,31 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
                 for (const r of await q.redactBySubject.all(by.source, directive.subjectType, subjectId)) {
                     if (redaction.sameOwner(by, r)) targets.set(r.id, r);
                 }
+                for (const a of await q.archivedBySubject.all(by.source, directive.subjectType, subjectId)) {
+                    const r = archive.unpack(a);
+                    if (redaction.sameOwner(by, r)) targets.set(r.id, r);
+                }
             }
         }
         const out = [];
         for (const r of targets.values()) {
             if (r.id === by.id) continue;
             const columns = redaction.tombstone(r, { by: by.id, at: now });
-            if ((await q.applyTombstone.run({ id: r.id, ...columns })).changes) out.push({ id: r.id, seq: r.seq, columns });
+            // A hot row the prune moved since it was read is tombstoned where it is now: the move holds the row lock
+            // until it commits, so the hot UPDATE finds nothing and the replay row is visible to the next statement.
+            if ((await q.applyTombstone.run({ id: r.id, ...columns })).changes || await tombstoneArchived(r.id, columns)) {
+                out.push({ id: r.id, seq: r.seq, columns });
+            }
         }
         return out;
+    }
+
+    /** Rewrite a replay row as a tombstone (its body re-packed). False when it is not there or already redacted. */
+    async function tombstoneArchived(id, columns) {
+        const a = await db.prepare('SELECT * FROM events_archive WHERE id = ? AND redacted_at IS NULL FOR UPDATE').get(id);
+        if (!a) return false;
+        const row = { ...archive.unpack(a), ...columns };
+        return (await db.prepare('UPDATE events_archive SET body = ?, redacted_at = ? WHERE id = ?').run(archive.pack(row), columns.redacted_at, id)).changes === 1;
     }
 
     /**
@@ -354,8 +404,12 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
         return r ? r.revoked_at : null;
     }
 
+    /** The stored row of an event, hot or replay (an unpacked replay row also carries its `epoch`); null when neither tier has it. */
     async function getEvent(id) {
-        return await q.getEvent.get(id) || null;
+        const hot = await q.getEvent.get(id);
+        if (hot) return hot;
+        const archived = await q.getArchived.get(id);
+        return archived ? archive.unpack(archived) : null;
     }
 
     /** The resolved delivery policy (../fabric/policy.js) for an event type, or null when no library is attached. */
@@ -369,7 +423,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
 
     /** First seq received at or after `ms`; the next seq to be handed out when there is none. */
     async function firstSeqSince(ms) {
-        const m = (await q.firstSeqSince.get(ms)).s;
+        const m = (await q.firstSeqSince.get(ms, ms)).s;
         return m == null ? await lastSeq() + 1 : m;
     }
 
@@ -393,7 +447,8 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
     /**
      * Events with seq > afterSeq that match any of `patterns`, in order, filtered by `accept(row)`.
      * Scans at most `scanMax` rows; returns { rows, cursor } where cursor is the last seq examined
-     * (so a pull consumer's cursor moves past rows that did not match).
+     * (so a pull consumer's cursor moves past rows that did not match). Spans the replay tier and the
+     * hot store as one sequence (ADR-042 decision 8): replay rows come back unpacked, in the hot shape.
      */
     async function scan(afterSeq, { patterns = ['*'], limit = 100, scanMax = 5000, accept = () => true } = {}) {
         const rows = [];
@@ -401,7 +456,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
         let scanned = 0;
         const single = patterns.length === 1 && patterns[0] !== '*' ? topics.toLike(patterns[0]) : null;
         for (;;) {
-            const page = single ? await q.afterSeqLike.all(cursor, single, 500) : await q.afterSeq.all(cursor, 500);
+            const page = (single ? await q.afterSeqLike.all(cursor, single, cursor, single, 500) : await q.afterSeq.all(cursor, cursor, 500)).map(fromTier);
             for (const row of page) {
                 scanned++;
                 cursor = row.seq;
@@ -677,13 +732,55 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
     // ── Retention ────────────────────────────────────────────
 
     /**
-     * Drop events (and their deliveries) older than retentionDays (sandbox events older than
-     * sandboxRetentionDays, when shorter), and old publish receipts.
+     * Move up to `limit` hot events received before `cutoff` into the replay tier, in one transaction: the rows are
+     * locked FOR UPDATE SKIP LOCKED, copied into events_archive (idempotent on the event id) and deleted (their
+     * deliveries go with them). A row another prune — or a redaction, or a claim cascading on it — holds is skipped,
+     * never waited on: two Events processes pruning at once take disjoint rows, and a row one of them moved is gone
+     * from `events` when the other's next batch looks. Returns how many hot rows it removed.
      */
-    async function prune({ retentionDays = 30, receiptRetentionDays = 90, sandboxRetentionDays = retentionDays, now = clock.now() } = {}) {
-        let events = (await db.prepare('DELETE FROM events WHERE received_at < ?').run(now - retentionDays * DAY_MS)).changes;
-        if (sandboxRetentionDays < retentionDays) {
-            events += (await db.prepare("DELETE FROM events WHERE env = 'sandbox' AND received_at < ?").run(now - sandboxRetentionDays * DAY_MS)).changes;
+    const moveBatch = async (cutoff, limit, now) => await db.tx(async () => {
+        const rows = await db.prepare(`SELECT * FROM events WHERE received_at < ? AND env != 'sandbox' ORDER BY seq LIMIT ?
+            FOR UPDATE SKIP LOCKED`).all(cutoff, limit);
+        if (!rows.length) return 0;
+        const at = (await q.epoch.get()).value;
+        const put = db.prepare(`INSERT INTO events_archive (${archive.COLUMNS.join(', ')}, epoch, body, archived_at)
+            VALUES (${archive.COLUMNS.map(() => '?').join(', ')}, ?, ?, ?) ON CONFLICT (id) DO NOTHING`);
+        for (const r of rows) await put.run(...archive.COLUMNS.map(c => r[c]), at, archive.pack(r), now);
+        return (await db.prepare('DELETE FROM events WHERE id = ANY(?)').run(rows.map(r => r.id))).changes;
+    });
+
+    /**
+     * Retention in tiers (ADR-042 decision 8). With replayRetentionDays > 0, events older than retentionDays move
+     * from the hot store into the replay tier (moveBatch, `batchSize` at a time, at most `maxBatches` per call; the
+     * next call continues), and replay rows older than replayRetentionDays are dropped. With 0 (the default here;
+     * the service passes EVENTS_REPLAY_RETENTION_DAYS) there is no replay tier: old events are deleted as before and
+     * the replay tier is emptied, so nothing is kept without a rule that prunes it. Rows an operator restored stay
+     * until their hold_until either way. Sandbox events never enter replay: they are deleted older than
+     * sandboxRetentionDays (or retentionDays, if shorter). Old publish receipts go as before.
+     */
+    async function prune({ retentionDays = 30, replayRetentionDays = 0, receiptRetentionDays = 90, sandboxRetentionDays = retentionDays,
+        now = clock.now(), batchSize = 500, maxBatches = 200 } = {}) {
+        const hotCutoff = now - retentionDays * DAY_MS;
+        let events = 0;
+        let archived = 0;
+        let replay = 0;
+        if (replayRetentionDays > 0) {
+            events += (await db.prepare("DELETE FROM events WHERE env = 'sandbox' AND received_at < ?")
+                .run(now - Math.min(retentionDays, sandboxRetentionDays) * DAY_MS)).changes;
+            for (let i = 0; i < maxBatches; i++) {
+                const n = await moveBatch(hotCutoff, batchSize, now);
+                archived += n;
+                if (n < batchSize) break;   // done, or the rest is locked by a concurrent prune that is moving it
+            }
+            events += archived;
+            replay = (await db.prepare('DELETE FROM events_archive WHERE received_at < ? AND (hold_until IS NULL OR hold_until < ?)')
+                .run(now - replayRetentionDays * DAY_MS, now)).changes;
+        } else {
+            events += (await db.prepare('DELETE FROM events WHERE received_at < ?').run(hotCutoff)).changes;
+            if (sandboxRetentionDays < retentionDays) {
+                events += (await db.prepare("DELETE FROM events WHERE env = 'sandbox' AND received_at < ?").run(now - sandboxRetentionDays * DAY_MS)).changes;
+            }
+            replay = (await db.prepare('DELETE FROM events_archive WHERE hold_until IS NULL OR hold_until < ?').run(now)).changes;
         }
         const receipts = (await db.prepare('DELETE FROM idempotency_receipts WHERE processed_at < ?')
             .run(now - Math.max(receiptRetentionDays, retentionDays) * DAY_MS)).changes;
@@ -693,7 +790,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
             SELECT 1 FROM delivery_placements q WHERE q.carrier_class = p.carrier_class
               AND q.ordering_key IS NOT DISTINCT FROM p.ordering_key AND q.decided_at > p.decided_at)`)
             .run(now - retentionDays * DAY_MS)).changes;
-        return { events, receipts, placements };
+        return { events, archived, replay, receipts, placements };
     }
 
     async function ping() {
