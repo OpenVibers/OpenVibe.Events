@@ -106,7 +106,7 @@ POST /api/v1/subscriptions
 
 Topic patterns are dot-separated segments where `*` stands for one or more whole segments (`media.vod.*`, `*.created`, `media.*.ready`, `*`). Endpoints must be `http(s)` on `127.0.0.1` or `openvibe.<tld>`/its subdomains (`EVENTS_ENDPOINT_HOSTS`); redirects are never followed. A caller may supply its own `secret` (a string of 32..256 characters; the same bound on `POST /api/v1/subscriptions/:id/rotate-secret`), otherwise Events generates a `whsec_…` one; either way it is returned once, on creation, and the consumer needs it to verify the v2 signature. The consumer is the calling service, and re-creating a subscription it already holds for the same `topic_pattern` and `endpoint` answers `409 events.subscription_exists` with the existing `subscription_id`, so an ensure-at-boot script re-runs safely.
 
-Each delivery is `POST <endpoint>` with body `{ "event": <envelope>, "seq": n }` and headers `X-OpenVibe-Event-Id`, `X-OpenVibe-Event-Type`, `X-OpenVibe-Seq`, `X-OpenVibe-Subscription-Id`, `X-OpenVibe-Delivery-Attempt`, `X-OpenVibe-Timestamp: <unix seconds>`, `X-OpenVibe-Signature-V2: t=<that timestamp>,v2=<HMAC-SHA256 of "<t>.<raw body>">` and `traceparent` (the event's trace). During secret rotation, the v2 header also carries a second `v2=` signature made with the previous secret. Any 2xx is delivered. Anything else is retried after 1 s, 5 s, 30 s, 2 min, 10 min, 1 h (then hourly) up to 8 attempts, after which the delivery is `dead`. Priority classes go first (`critical`, `important`, `low`, then seq); one delivery per subscription is in flight at a time and at most 20 overall. Delivery is at least once and not strictly ordered; consumers dedupe with an inbox and order with `subject.revision`.
+Each delivery is `POST <endpoint>` with body `{ "event": <envelope>, "seq": n }` and headers `X-OpenVibe-Event-Id`, `X-OpenVibe-Event-Type`, `X-OpenVibe-Seq`, `X-OpenVibe-Subscription-Id`, `X-OpenVibe-Delivery-Attempt`, `X-OpenVibe-Timestamp: <unix seconds>`, `X-OpenVibe-Signature-V2: t=<that timestamp>,v2=<HMAC-SHA256 of "<t>.<raw body>">` and `traceparent` (the event's trace). During secret rotation, the v2 header also carries a second `v2=` signature made with the previous secret. Any 2xx is delivered. Anything else is retried after 1 s, 5 s, 30 s, 2 min, 10 min, 1 h (then hourly) up to 8 attempts, after which the delivery is `dead`. Priority classes go first (`critical`, `important`, `low`, then seq); one delivery per subscription is in flight at a time and at most 20 overall. Delivery is at least once and not strictly ordered; consumers dedupe with an inbox and order with `subject.revision` (`createPgOrderedInbox` below does both).
 
 **Replay window (signature v2).** Events sends only the v2 signature. It signs the timestamp together with the raw body, and every attempt, retries included, is signed afresh with the time it is sent. Consumers check it with `verifyDeliveryV2(raw, headers, secret, { toleranceSec = 300, now })` (here) or openvibe-sdk ≥ 0.4.0 `parseDelivery(raw, headers, secret, { requireV2: true })` and reject anything more than 300 s from their clock either way. Reject a missing, wrong or stale v2 signature; do not fall back to v1.
 
@@ -208,6 +208,14 @@ app.post('/internal/events', express.json({ verify: (req, _res, buf) => { req.ra
 in one transaction, so a crash before commit leaves nothing behind and the redelivery runs it again, and a crash after
 commit makes the redelivery a no-op. The outbox and inbox are openvibe-sdk's PostgreSQL kits (ADR-042): this package
 re-exports them and keeps no SQLite copies.
+
+`createPgOrderedInbox(db)` adds a per-key head (the table from `events.inboxHeadsSchema()`, beside the inbox's): `apply(consumer, event, fn)`
+records the receipt, moves the head of the subject's key (`events.subjectKey(event)`: `["<type>","<id>"]`, or its `sha256:` past 200
+characters, never truncated) to `subject.revision` only if that is higher, and runs
+`fn(t)`, all in one transaction. It answers `{ duplicate: true }`, `{ stale: true, head }` (an equal or older revision, for
+example a dead delivery replayed after its successor: the receipt is kept and `fn` does not run, so answer 2xx) or
+`{ stale: false, result }`. `{ key, revision }` overrides both; an event without them is only deduplicated. Concurrent
+applies on one key serialise on its head row, so effects commit in increasing revisions.
 
 ## Realtime (SSE)
 
