@@ -74,6 +74,43 @@ t('subscription API: create, list own, secret shown once', async () => {
     await stub.close();
 });
 
+t('subscription secret: supplied 32..256 kept, a duplicate 409 names the existing id', async () => {
+    const stub = await subscriber();
+    const secret = `whsec_${'ab'.repeat(32)}`;                       // 70 characters
+    const created = await subscribe(media, { topic_pattern: 'live.secret.*', endpoint: stub.url, secret });
+    assert.strictEqual(created.status, 201, created.text);
+    assert.strictEqual(created.body.secret, secret, 'the supplied secret is kept and returned once');
+    const dup = await subscribe(media, { topic_pattern: 'live.secret.*', endpoint: stub.url, secret });
+    assert.strictEqual(dup.status, 409);
+    assert.strictEqual(dup.body.code, 'events.subscription_exists');
+    assert.match(dup.body.subscription_id, /^sub_/, 'the 409 carries the existing id');
+    assert.strictEqual(dup.body.subscription_id, created.body.id);
+
+    // The bound is 32..256 (server/api/subscriptions.js); refuse it here, not with a late delivery failure.
+    const bounds = [
+        ['boundshort', 'x'.repeat(31), 422],
+        ['boundlong', 'x'.repeat(257), 422],
+        ['bound32', 'x'.repeat(32), 201],
+        ['bound256', 'x'.repeat(256), 201],
+    ];
+    const made = [];
+    for (const [service, value, status] of bounds) {
+        const token = serviceToken(service, ['events.subscription.manage']);
+        const res = await subscribe(token, { topic_pattern: 'live.bound.*', endpoint: stub.url, secret: value });
+        assert.strictEqual(res.status, status, `${service}: ${res.text}`);
+        if (status === 422) {
+            assert.strictEqual(res.body.code, 'events.bad_request');
+            assert.match(res.body.detail, /32\.\.256/);
+        } else {
+            assert.strictEqual(res.body.secret, value);
+            made.push([token, res.body.id]);
+        }
+    }
+    await request(h.base, 'POST', `/api/v1/subscriptions/${created.body.id}/disable`, { token: media });
+    for (const [token, id] of made) await request(h.base, 'POST', `/api/v1/subscriptions/${id}/disable`, { token });
+    await stub.close();
+});
+
 t('SSRF: only http(s) endpoints on 127.0.0.1 or *.openvibe.* are accepted', async () => {
     const bad = [
         'http://10.0.0.5/hook', 'http://169.254.169.254/latest/meta-data', 'http://localhost:4000/x', 'http://[::1]:4000/x',
