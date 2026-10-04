@@ -29,6 +29,10 @@ const LATENCY_CLASS = {
     domain: 'interactive', critical: 'critical', background: 'background', bulk: 'bulk', webhook: 'interactive',
 };
 
+// STREAM (durability required + an ordering key) may only go to a carrier that keeps its messages and an order per key;
+// QUEUE and TOPIC carriers only signal over the PostgreSQL record, so they ask the gateway capability alone.
+const CLASS_CAPABILITIES = { STREAM: ['events:gateway', 'events:durable', 'events:ordered'] };
+
 function requirements(klass, key, policy) {
     const lat = (policy && policy.latency) || {};
     const objective = OBJECTIVES[(policy && policy.routing && policy.routing.objective) || 'balanced'] || 'balanced';
@@ -38,7 +42,7 @@ function requirements(klass, key, policy) {
         latency_class: LATENCY_CLASS[klass] || 'interactive',
         objective,
         partition_key: key || undefined,
-        capabilities: ['events:gateway'],
+        capabilities: CLASS_CAPABILITIES[klass] || ['events:gateway'],
         latency_op: 'ack_p95',
         ...(Number.isFinite(lat.maximum_p95_ms) ? { max_latency_ms: lat.maximum_p95_ms } : {}),
         units: 1,

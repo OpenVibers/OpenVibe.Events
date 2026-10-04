@@ -40,5 +40,19 @@
     "effective_from": "2026-10-02",
     "source": "https://openvibe.network/pricing/events",
     "verified_at": "2026-10-02"
+  },
+  {
+    "id": "rc-nats-js-v1",
+    "provider": "nats",
+    "adapter": "nats-js-v1",
+    "metric": "stream-operation",
+    "unit_size": 1,
+    "unit_price_usd": 0.0000002,
+    "free_allowance": 1000000000,
+    "reset_period": "month",
+    "region": "cell",
+    "effective_from": "2026-10-04",
+    "source": "https://openvibe.network/pricing/events",
+    "verified_at": "2026-10-04"
   }
 ]

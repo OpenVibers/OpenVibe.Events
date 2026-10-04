@@ -92,18 +92,24 @@ function load(env = process.env) {
         // PostgreSQL (ADR-035): DATABASE_URL serves (PgBouncer), DATABASE_DIRECT_URL migrates (owner role).
         db: { url: env.DATABASE_URL || '', directUrl: env.DATABASE_DIRECT_URL || '' },
         // Carriers (ADR-042 decisions 1-2, 5; server/fabric/carriers): the adapters to instantiate and the ones the
-        // operator switch removes. pg-v1 is always present; valkey-v1 needs VALKEY_URL and nats-v1 NATS_URL, each
-        // silently absent without it. A disabled adapter is ineligible at once (reason `disabled by configuration`):
-        // the ADR's rollback.
+        // operator switch removes. pg-v1 is always present; valkey-v1 needs VALKEY_URL, nats-v1 NATS_URL and nats-js-v1
+        // NATS_URL with JetStream on, each silently absent without it. A disabled adapter is ineligible at once (reason
+        // `disabled by configuration`): the ADR's rollback.
         carriers: {
-            enabled: list(env.EVENTS_CARRIERS, ['pg-v1', 'valkey-v1', 'nats-v1']),
+            enabled: list(env.EVENTS_CARRIERS, ['pg-v1', 'valkey-v1', 'nats-v1', 'nats-js-v1']),
             disabled: list(env.EVENTS_CARRIERS_DISABLED, []),
         },
         // Valkey (ADR-035): per-actor limit counters shared across processes; without it they count in this process.
         valkey: { url: env.VALKEY_URL || '', prefix: env.VALKEY_PREFIX || 'ov:events:' },
-        // NATS Core (ADR-042 decision 5, optional): the nats-v1 TOPIC carrier, cross-process SSE fan-out. Loopback or
-        // the private network only; nats:// with an optional user:pass or token. Never the record.
-        nats: { url: env.NATS_URL || '', subjectPrefix: env.NATS_SUBJECT_PREFIX || 'ov.events.' },
+        // NATS (ADR-042 decisions 5-6, optional): the nats-v1 TOPIC carrier (cross-process SSE fan-out) and, unless
+        // NATS_JETSTREAM=off, the nats-js-v1 STREAM carrier on the JetStream stream NATS_STREAM. Loopback or the private
+        // network only; nats:// with an optional user:pass or token. Never the record.
+        nats: {
+            url: env.NATS_URL || '',
+            subjectPrefix: env.NATS_SUBJECT_PREFIX || 'ov.events.',
+            jetstream: env.NATS_JETSTREAM !== 'off',
+            stream: env.NATS_STREAM || 'OV_EVENTS_STREAM',
+        },
         retentionDays: int(env.EVENTS_RETENTION_DAYS, 30),
         receiptRetentionDays: int(env.EVENTS_RECEIPT_RETENTION_DAYS, 90),
         pruneIntervalMs: int(env.EVENTS_PRUNE_INTERVAL_MS, 60 * 60 * 1000),

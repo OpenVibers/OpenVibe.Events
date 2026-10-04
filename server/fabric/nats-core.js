@@ -1,11 +1,12 @@
 'use strict';
 /**
  * A minimal NATS Core client (the text protocol: INFO, CONNECT, PING/PONG, PUB, SUB, UNSUB, MSG, +OK, -ERR) for the
- * nats-v1 TOPIC carrier. Core NATS only: no JetStream, no headers, no request/reply, no TLS (a server that requires
- * TLS is refused). It is kept here, without a dependency, because Events needs exactly fire-and-forget publish and a
- * subscription; the broker is on loopback or the private network (deploy/nats).
+ * nats-v1 TOPIC carrier and the nats-js-v1 STREAM carrier. No headers and no TLS (a server that requires TLS is
+ * refused). JetStream is reached through its JSON API over plain request/reply (carriers/jetstream.js), so it needs no
+ * client library either. It is kept here, without a dependency, because Events needs exactly publish, a subscription
+ * and request/reply; the broker is on loopback or the private network (deploy/nats).
  *
- *   createNatsCore({ url, name, log, reconnectMs, maxReconnectMs, connectTimeoutMs, probe, deniedRetryMs })
+ *   createNatsCore({ url, name, log, reconnectMs, maxReconnectMs, connectTimeoutMs, probe, deniedRetryMs, inboxPrefix, onConnect })
  *     connect()               resolves after the first PONG; rejects on refusal, auth error or timeout. A dropped
  *                             connection reconnects with backoff (from reconnectMs up to maxReconnectMs) and
  *                             re-subscribes; connect() rejecting does not stop the retries.
@@ -15,13 +16,21 @@
  *                             to each `probe` subject before its PING, so a refusal shows up before the first real
  *                             publish. A denied connection is re-opened after deniedRetryMs: a handshake without a
  *                             violation clears it.
- *     publish(subject, obj)   JSON-encodes and writes one PUB; throws when not connected or over max_payload
- *     subscribe(subject, fn)  fn(obj) per MSG (a non-JSON payload is dropped); returns an unsubscribe function
+ *     publish(subject, obj, reply)       JSON-encodes and writes one PUB (with an optional reply subject); throws
+ *                                        when not connected or over max_payload
+ *     publishRaw(subject, data, reply)   the same with a string or Buffer as is (a JetStream ack is an empty body)
+ *     request(subject, obj, { timeoutMs })  publish with a reply subject under `inboxPrefix` (default `_INBOX.<id>.`)
+ *                             and resolve with the first JSON reply; rejects on timeout (a non-JSON reply is
+ *                             dropped, so it times out too) or close()
+ *     subscribe(subject, fn)  fn(obj, { subject, reply }) per MSG (a non-JSON payload is dropped); returns an
+ *                             unsubscribe function
+ *     onConnect()             (option) called after every handshake, the first and each reconnect
  *     close()                 stops reconnecting and closes the socket
  *
  * The URL is nats://[user:pass@|token@]host[:4222]. It is never logged (it can carry a credential).
  */
 const net = require('net');
+const crypto = require('crypto');
 
 const CRLF = '\r\n';
 const MAX_LINE = 64 * 1024;
@@ -40,7 +49,8 @@ function parseUrl(raw) {
     };
 }
 
-function createNatsCore({ url, name = 'openvibe-events', log = console, reconnectMs = 250, maxReconnectMs = 5000, connectTimeoutMs = 2000, probe = [], deniedRetryMs = 30000 } = {}) {
+function createNatsCore({ url, name = 'openvibe-events', log = console, reconnectMs = 250, maxReconnectMs = 5000, connectTimeoutMs = 2000, probe = [], deniedRetryMs = 30000,
+    inboxPrefix = `_INBOX.${crypto.randomBytes(8).toString('hex')}.`, onConnect = null } = {}) {
     const target = parseUrl(url);
     const where = `${target.host}:${target.port}`;
     const subs = new Map();   // sid -> { subject, fn }
@@ -54,6 +64,9 @@ function createNatsCore({ url, name = 'openvibe-events', log = console, reconnec
     let first = null;         // { resolve, reject } of the pending connect()
     let denied = null;        // the last permissions violation on the current connection
     let deniedTimer = null;
+    const pending = new Map();   // request token -> { resolve, reject, timer }
+    let nextToken = 1;
+    let inboxSid = 0;            // the one wildcard subscription replies arrive on (made at the first request)
 
     function settle(err) {
         if (!first) return;
@@ -104,7 +117,8 @@ function createNatsCore({ url, name = 'openvibe-events', log = console, reconnec
                     if (sub) {
                         let obj;
                         try { obj = JSON.parse(payload.toString('utf8')); } catch { continue; }
-                        try { sub.fn(obj); } catch (err) { log.warn(`[nats] handler ${sub.subject}: ${err.message}`); }
+                        const meta = { subject: parts[1], reply: parts.length === 5 ? parts[3] : null };
+                        try { sub.fn(obj, meta); } catch (err) { log.warn(`[nats] handler ${sub.subject}: ${err.message}`); }
                     }
                     continue;
                 }
@@ -129,6 +143,7 @@ function createNatsCore({ url, name = 'openvibe-events', log = console, reconnec
                         denied = violation;
                         if (denied) retryDenied(s);
                         settle(null);
+                        if (onConnect) { try { onConnect(); } catch (err) { log.warn(`[nats] onConnect: ${err.message}`); } }
                     }
                 } else if (op === '-ERR') {
                     const why = line.slice(5).trim();
@@ -152,6 +167,35 @@ function createNatsCore({ url, name = 'openvibe-events', log = console, reconnec
         });
     }
 
+    function publishRaw(subject, body, reply) {
+        if (!ready || !sock) throw new Error(`nats ${where}: not connected`);
+        if (sock.writableLength > MAX_BUFFERED) throw new Error(`nats ${where}: ${sock.writableLength} bytes unsent (the broker is not reading)`);
+        const data = Buffer.isBuffer(body) ? body : Buffer.from(String(body ?? ''), 'utf8');
+        if (data.length > maxPayload) throw Object.assign(new Error(`nats: payload ${data.length} bytes over max_payload ${maxPayload}`), { code: 'max_payload' });
+        sock.write(Buffer.concat([Buffer.from(`PUB ${subject}${reply ? ` ${reply}` : ''} ${data.length}${CRLF}`), data, Buffer.from(CRLF)]));
+    }
+
+    function subscribe(subject, fn) {
+        const sid = nextSid++;
+        subs.set(sid, { subject, fn });
+        if (ready && sock) sock.write(`SUB ${subject} ${sid}${CRLF}`);
+        return {
+            sid,
+            async unsubscribe() {
+                subs.delete(sid);
+                if (ready && sock) sock.write(`UNSUB ${sid}${CRLF}`);
+            },
+        };
+    }
+
+    function onReply(obj, { subject }) {
+        const p = pending.get(subject.slice(inboxPrefix.length));
+        if (!p) return;   // late (timed out) or not ours
+        pending.delete(subject.slice(inboxPrefix.length));
+        clearTimeout(p.timer);
+        p.resolve(obj);
+    }
+
     return {
         connect() {
             if (ready) return Promise.resolve();
@@ -163,24 +207,23 @@ function createNatsCore({ url, name = 'openvibe-events', log = console, reconnec
         },
         connected: () => ready,
         denied: () => (ready ? denied : null),
-        publish(subject, obj) {
-            if (!ready || !sock) throw new Error(`nats ${where}: not connected`);
-            if (sock.writableLength > MAX_BUFFERED) throw new Error(`nats ${where}: ${sock.writableLength} bytes unsent (the broker is not reading)`);
-            const data = Buffer.from(JSON.stringify(obj), 'utf8');
-            if (data.length > maxPayload) throw Object.assign(new Error(`nats: payload ${data.length} bytes over max_payload ${maxPayload}`), { code: 'max_payload' });
-            sock.write(Buffer.concat([Buffer.from(`PUB ${subject} ${data.length}${CRLF}`), data, Buffer.from(CRLF)]));
+        publish(subject, obj, reply) { publishRaw(subject, JSON.stringify(obj), reply); },
+        publishRaw,
+        request(subject, obj, { timeoutMs = 2000 } = {}) {
+            if (!inboxSid) inboxSid = subscribe(`${inboxPrefix}*`, onReply).sid;
+            const token = String(nextToken++);
+            return new Promise((resolve, reject) => {
+                const timer = setTimeout(() => { pending.delete(token); reject(new Error(`nats ${where}: request ${subject} timed out`)); }, timeoutMs);
+                timer.unref?.();
+                pending.set(token, { resolve, reject, timer });
+                try { publishRaw(subject, JSON.stringify(obj), `${inboxPrefix}${token}`); }
+                catch (err) { clearTimeout(timer); pending.delete(token); reject(err); }
+            });
         },
-        subscribe(subject, fn) {
-            const sid = nextSid++;
-            subs.set(sid, { subject, fn });
-            if (ready && sock) sock.write(`SUB ${subject} ${sid}${CRLF}`);
-            return async () => {
-                subs.delete(sid);
-                if (ready && sock) sock.write(`UNSUB ${sid}${CRLF}`);
-            };
-        },
+        subscribe(subject, fn) { return subscribe(subject, fn).unsubscribe; },
         async close() {
             stopped = true;
+            for (const [token, p] of pending) { clearTimeout(p.timer); pending.delete(token); p.reject(new Error('nats: closed')); }
             if (timer) { clearTimeout(timer); timer = null; }
             if (deniedTimer) { clearTimeout(deniedTimer); deniedTimer = null; }
             ready = false;
