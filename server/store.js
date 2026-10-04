@@ -258,7 +258,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
                     if (pin && pin.carrier) carrier = pin.carrier;
                 }
                 await q.insertDelivery.run(env.event_id, s.id, seq, PRIORITY_RANK[env.priority], now, key, carrier, now, now);
-                if (carrier) deliveries.push({ event_id: env.event_id, subscription_id: s.id, carrier, carrier_class: klass });
+                if (carrier) deliveries.push({ event_id: env.event_id, subscription_id: s.id, carrier, carrier_class: klass, ordering_key: key });
             }
             await revocationHook(row, now);
             results.push({ event_id: env.event_id, seq, duplicate: false, cursor: cursor.encode(seq, epoch) });

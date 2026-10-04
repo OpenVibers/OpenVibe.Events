@@ -3,11 +3,13 @@
  * The carrier registry (ADR-042 decisions 1-2, 5): one adapter per carrier, each with an id, the classes it can
  * carry, an offer, health, a signal() and a start/stop. pg-v1 is always present and carries every class; valkey-v1
  * is registered only when VALKEY_URL is set and carries QUEUE and TOPIC; nats-v1 is registered only when NATS_URL is
- * set and carries TOPIC over NATS Core. JetStream is not built yet (it needs the host unit), so STREAM is left to pg-v1.
+ * set and carries TOPIC over NATS Core; nats-js-v1 is registered when NATS_URL is set and NATS_JETSTREAM is not `off`
+ * and carries STREAM over JetStream. Without them STREAM is pg-v1's.
  *
  * Config (server/config.js):
- *   EVENTS_CARRIERS           ids to instantiate (default pg-v1,valkey-v1,nats-v1). An unknown id refuses to start.
- *   NATS_URL                  nats://[user:pass@]host:port of the cell's NATS (nats-v1); NATS_SUBJECT_PREFIX its subjects.
+ *   EVENTS_CARRIERS           ids to instantiate (default pg-v1,valkey-v1,nats-v1,nats-js-v1). An unknown id refuses to start.
+ *   NATS_URL                  nats://[user:pass@]host:port of the cell's NATS (nats-v1, nats-js-v1); NATS_SUBJECT_PREFIX
+ *                             its subjects; NATS_JETSTREAM=off leaves nats-js-v1 out; NATS_STREAM its stream name.
  *   EVENTS_CARRIERS_DISABLED  ids excluded at once with reason `disabled by configuration` (the ADR's rollback).
  *
  * The planner asks offers(class) for one resource-offer@1 per eligible adapter and forClass(class) for the
@@ -16,8 +18,9 @@
 const { createPgCarrier } = require('./pg');
 const { createValkeyCarrier, newInstanceId } = require('./valkey');
 const { createNatsCarrier } = require('./nats');
+const { createJetStreamCarrier } = require('./jetstream');
 
-const KNOWN = ['pg-v1', 'valkey-v1', 'nats-v1'];
+const KNOWN = ['pg-v1', 'valkey-v1', 'nats-v1', 'nats-js-v1'];
 
 function createCarriers({ config, clock = { now: () => Date.now() }, log = console, valkey = null } = {}) {
     const enabled = new Set(config.carriers.enabled);
@@ -33,9 +36,12 @@ function createCarriers({ config, clock = { now: () => Date.now() }, log = conso
         v.disabledReason = off('valkey-v1') ? 'disabled by configuration' : null;
         adapters.push(v);
     }
-    // nats-v1 connects in start(), which skips a disabled adapter: switched off, it never opens a socket.
+    // nats-v1 and nats-js-v1 connect in start(), which skips a disabled adapter: switched off, they never open a socket.
     if (config.nats && config.nats.url) {
         adapters.push(createNatsCarrier({ url: config.nats.url, subjectPrefix: config.nats.subjectPrefix, clock, log, instanceId: newInstanceId() }));
+        if (config.nats.jetstream) {
+            adapters.push(createJetStreamCarrier({ url: config.nats.url, subjectPrefix: config.nats.subjectPrefix, stream: config.nats.stream, clock, log, instanceId: newInstanceId() }));
+        }
     }
     for (const a of adapters) if (!a.disabledReason && off(a.id)) a.disabledReason = 'disabled by configuration';
 
@@ -60,23 +66,25 @@ function createCarriers({ config, clock = { now: () => Date.now() }, log = conso
         forClass,
         eligible,
 
-        /** Signal one carrier with rows (kind is 'QUEUE' or 'TOPIC'); fail open — never throws to the caller. */
+        /** Signal one carrier with rows (kind is 'QUEUE', 'TOPIC' or 'STREAM'); fail open — never throws to the caller. */
         async signal(carrierId, rows, kind) {
             const a = get(carrierId);
             if (!a || a.disabledReason || !rows || !rows.length) return;
             try { await a.signal(rows, kind); } catch (err) { log.warn(`[carriers] ${carrierId} signal: ${err.message}`); }
         },
 
-        /** After a publish commits: QUEUE deliveries to their stream, TOPIC events to their channel. The worker's
-         *  kick() beside this is what makes a local process fast; a remote process is woken by the carrier. */
+        /** After a publish commits: QUEUE and STREAM deliveries to their carrier, TOPIC events to their channel. The
+         *  worker's kick() beside this is what makes a local process fast; a remote process is woken by the carrier. */
         async signalPublish(events = [], deliveries = []) {
-            const byQueue = new Map();
-            for (const d of deliveries) {
-                if (d.carrier_class !== 'QUEUE' || !d.carrier) continue;
-                if (!byQueue.has(d.carrier)) byQueue.set(d.carrier, []);
-                byQueue.get(d.carrier).push(d);
+            for (const kind of ['QUEUE', 'STREAM']) {
+                const byCarrier = new Map();
+                for (const d of deliveries) {
+                    if (d.carrier_class !== kind || !d.carrier) continue;
+                    if (!byCarrier.has(d.carrier)) byCarrier.set(d.carrier, []);
+                    byCarrier.get(d.carrier).push(d);
+                }
+                for (const [cid, rows] of byCarrier) await this.signal(cid, rows, kind);
             }
-            for (const [cid, rows] of byQueue) await this.signal(cid, rows, 'QUEUE');
 
             const byTopic = new Map();
             for (const e of events) {

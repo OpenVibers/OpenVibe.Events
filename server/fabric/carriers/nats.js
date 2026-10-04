@@ -18,7 +18,7 @@
  * consecutive publish errors (../signals.js). While any fails the planner drops nats-v1 with the reason from
  * unhealthyReason(); the client reconnects in the background and the adapter is eligible again once it is back.
  *
- * JetStream (STREAM) is not built here: STREAM stays on pg-v1.
+ * JetStream (STREAM) is ./jetstream.js (nats-js-v1), on the same broker and client.
  */
 const { createNatsCore } = require('../nats-core');
 const { createSignals } = require('../signals');
