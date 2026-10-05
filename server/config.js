@@ -179,6 +179,18 @@ function load(env = process.env) {
             flushIntervalMs: Math.max(1000, int(env.EVENTS_USAGE_FLUSH_MS, 5 * 60 * 1000)),
         },
 
+        // Billing readings (server/billing.js, plan T5 step 14): each closed hour's queue operations per production
+        // project become one platform.usage-sample@1 reading, posted to Billing (billing.usage.record). intervalMs 0
+        // (the default): off, nothing aggregated or sent. Without OV_BILLING_INTERNAL_URL readings are stored, not sent.
+        billing: {
+            intervalMs: Math.max(0, int(env.EVENTS_BILLING_INTERVAL_MS, 0)),
+            url: (env.OV_BILLING_INTERNAL_URL || '').trim().replace(/\/+$/, ''),
+            audience: env.OV_BILLING_AUDIENCE || 'openvibe.billing',
+            clientId: env.OV_OAUTH_CLIENT_ID || 'events',
+            clientSecret: env.OV_OAUTH_CLIENT_SECRET || '',
+            timeoutMs: Math.max(1000, int(env.OV_BILLING_TIMEOUT_MS, 10000)),
+        },
+
         // Realtime (SSE) gateway
         realtime: {
             maxConnections: int(env.REALTIME_MAX_CONNECTIONS, 2000),

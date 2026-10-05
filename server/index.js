@@ -18,11 +18,12 @@ const { createRealtime } = require('./realtime');
 const { createApp } = require('./app');
 const { createMetrics } = require('./metrics');
 const { createGuardedPost } = require('./egress');
+const { createBillingReadings } = require('./billing');
 const { gracefulStop } = require('openvibe-sdk/service');
 
 async function start({
     config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, deliveryFetch = fetchImpl,
-    appPost = undefined, dnsLookup = undefined, log = console, listen = true,
+    appPost = undefined, dnsLookup = undefined, billingFetch = fetchImpl, log = console, listen = true,
 } = {}) {
     config = config || load();
     // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
@@ -101,6 +102,11 @@ async function start({
     const usageTimer = config.usage && config.usage.enabled ? setInterval(flushUsage, config.usage.flushIntervalMs) : null;
     usageTimer?.unref?.();
 
+    // Billing readings (server/billing.js, plan T5 step 14): one loop per process, off unless EVENTS_BILLING_INTERVAL_MS
+    // is set; it aggregates closed hours into billing_readings and posts them to Billing (OV_BILLING_INTERNAL_URL).
+    const billing = createBillingReadings({ db, config: config.billing, networkUrl: config.networkInternalUrl, clock, fetchImpl: billingFetch, log });
+    billing.start();
+
     let server = null;
     if (listen) {
         server = await new Promise((resolve, reject) => {
@@ -116,6 +122,7 @@ async function start({
     async function close() {
         clearInterval(pruneTimer);
         if (usageTimer) clearInterval(usageTimer);
+        await billing.stop();
         policies.stop();
         await carriers.stop().catch(() => {});
         realtime.stop();
@@ -129,7 +136,7 @@ async function start({
         if (!givenDb) await db.close();
     }
 
-    return { config, db, store, keys, keyLoaded, auth, worker, realtime, metrics, app, server, policies, carriers, planner, valkey, close, prune, flushUsage };
+    return { config, db, store, keys, keyLoaded, auth, worker, realtime, metrics, app, server, policies, carriers, planner, valkey, close, prune, flushUsage, billing };
 }
 
 if (require.main === module) {

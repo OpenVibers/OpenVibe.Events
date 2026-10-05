@@ -25,8 +25,10 @@ const crawler = require('./security-crawl');
 const t = suite('security-secrets');
 let w;
 const needles = {};
+// Secrets Events does read from its environment, each planted in the world below as a sentinel the crawl looks for.
+const PLANTED = { OV_OAUTH_CLIENT_SECRET: `ovsecret-events-client-${crypto.randomBytes(12).toString('hex')}` };
 
-t('Events reads no secret from its environment (so there is none to plant a sentinel in)', async () => {
+t('Events reads no secret from its environment but the planted ones', async () => {
     const names = new Set();
     const walk = (d) => {
         for (const f of fs.readdirSync(d)) {
@@ -37,13 +39,16 @@ t('Events reads no secret from its environment (so there is none to plant a sent
     };
     walk(path.join(__dirname, '..', 'server'));
     assert.ok(names.has('DATABASE_URL') && names.has('OV_NETWORK_PUBLIC_KEY'), 'the scan sees the config');
-    const secretish = [...names].filter((n) => /SECRET|PASSWORD|TOKEN|PRIVATE|CREDENTIAL|_KEY$/.test(n) && n !== 'OV_NETWORK_PUBLIC_KEY');
-    assert.deepStrictEqual(secretish, [], 'a new secret-looking variable: give it a sentinel in this test');
+    const secretish = [...names].filter((n) => /SECRET|PASSWORD|TOKEN|PRIVATE|CREDENTIAL|_KEY$/.test(n) && n !== 'OV_NETWORK_PUBLIC_KEY' && !PLANTED[n]);
+    assert.deepStrictEqual(secretish, [], 'a new secret-looking variable: give it a sentinel in this test (PLANTED)');
 });
 
 t('world', async () => {
-    w = await buildWorld();
+    // The Billing client is built (URL and secret set; the loop stays off), so its token client holds the secret.
+    w = await buildWorld({ env: { ...PLANTED, OV_BILLING_INTERNAL_URL: 'http://127.0.0.1:9' } });
+    assert.strictEqual(w.h.billing.sending, true);
     Object.assign(needles, w.secrets);
+    Object.entries(PLANTED).forEach(([name, value]) => { needles[`${name} (planted)`] = value; });
     // The Network private key (Events only ever has the public half).
     const pem = (k) => k.split('\n').filter((l) => l && !l.startsWith('-----'));
     const pub = pem(crypto.createPublicKey(w.privateKey).export({ type: 'spki', format: 'pem' })).join('');
