@@ -4,12 +4,15 @@
  * carry, an offer, health, a signal() and a start/stop. pg-v1 is always present and carries every class; valkey-v1
  * is registered only when VALKEY_URL is set and carries QUEUE and TOPIC; nats-v1 is registered only when NATS_URL is
  * set and carries TOPIC over NATS Core; nats-js-v1 is registered when NATS_URL is set and NATS_JETSTREAM is not `off`
- * and carries STREAM over JetStream. Without them STREAM is pg-v1's.
+ * and carries STREAM over JetStream; cloud-v1 is registered only when CLOUD_QUEUE_URL is set and carries QUEUE.
+ * Without them STREAM is pg-v1's.
  *
  * Config (server/config.js):
- *   EVENTS_CARRIERS           ids to instantiate (default pg-v1,valkey-v1,nats-v1,nats-js-v1). An unknown id refuses to start.
+ *   EVENTS_CARRIERS           ids to instantiate (default pg-v1,valkey-v1,nats-v1,nats-js-v1,cloud-v1). An unknown id refuses to start.
  *   NATS_URL                  nats://[user:pass@]host:port of the cell's NATS (nats-v1, nats-js-v1); NATS_SUBJECT_PREFIX
  *                             its subjects; NATS_JETSTREAM=off leaves nats-js-v1 out; NATS_STREAM its stream name.
+ *   CLOUD_QUEUE_URL           the SQS-compatible endpoint of cloud-v1 (CLOUD_QUEUE_REGION, _PREFIX, _ACCESS_KEY,
+ *                             _SECRET_KEY); unset leaves cloud-v1 out.
  *   EVENTS_CARRIERS_DISABLED  ids excluded at once with reason `disabled by configuration` (the ADR's rollback).
  *
  * The planner asks offers(class) for one resource-offer@1 per eligible adapter and forClass(class) for the
@@ -19,8 +22,9 @@ const { createPgCarrier } = require('./pg');
 const { createValkeyCarrier, newInstanceId } = require('./valkey');
 const { createNatsCarrier } = require('./nats');
 const { createJetStreamCarrier } = require('./jetstream');
+const { createCloudCarrier } = require('./cloud');
 
-const KNOWN = ['pg-v1', 'valkey-v1', 'nats-v1', 'nats-js-v1'];
+const KNOWN = ['pg-v1', 'valkey-v1', 'nats-v1', 'nats-js-v1', 'cloud-v1'];
 
 function createCarriers({ config, clock = { now: () => Date.now() }, log = console, valkey = null } = {}) {
     const enabled = new Set(config.carriers.enabled);
@@ -42,6 +46,10 @@ function createCarriers({ config, clock = { now: () => Date.now() }, log = conso
         if (config.nats.jetstream) {
             adapters.push(createJetStreamCarrier({ url: config.nats.url, subjectPrefix: config.nats.subjectPrefix, stream: config.nats.stream, clock, log, instanceId: newInstanceId() }));
         }
+    }
+    // cloud-v1 signals over fetch in signal(); a disabled one is never signalled (signal() skips it), so it is inert.
+    if (config.cloud && config.cloud.url) {
+        adapters.push(createCloudCarrier({ url: config.cloud.url, region: config.cloud.region, prefix: config.cloud.prefix, accessKey: config.cloud.accessKey, secretKey: config.cloud.secretKey, clock, log }));
     }
     for (const a of adapters) if (!a.disabledReason && off(a.id)) a.disabledReason = 'disabled by configuration';
 

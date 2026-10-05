@@ -92,11 +92,11 @@ function load(env = process.env) {
         // PostgreSQL (ADR-035): DATABASE_URL serves (PgBouncer), DATABASE_DIRECT_URL migrates (owner role).
         db: { url: env.DATABASE_URL || '', directUrl: env.DATABASE_DIRECT_URL || '' },
         // Carriers (ADR-042 decisions 1-2, 5; server/fabric/carriers): the adapters to instantiate and the ones the
-        // operator switch removes. pg-v1 is always present; valkey-v1 needs VALKEY_URL, nats-v1 NATS_URL and nats-js-v1
-        // NATS_URL with JetStream on, each silently absent without it. A disabled adapter is ineligible at once (reason
-        // `disabled by configuration`): the ADR's rollback.
+        // operator switch removes. pg-v1 is always present; valkey-v1 needs VALKEY_URL, nats-v1 NATS_URL, nats-js-v1
+        // NATS_URL with JetStream on and cloud-v1 CLOUD_QUEUE_URL, each silently absent without it. A disabled adapter
+        // is ineligible at once (reason `disabled by configuration`): the ADR's rollback.
         carriers: {
-            enabled: list(env.EVENTS_CARRIERS, ['pg-v1', 'valkey-v1', 'nats-v1', 'nats-js-v1']),
+            enabled: list(env.EVENTS_CARRIERS, ['pg-v1', 'valkey-v1', 'nats-v1', 'nats-js-v1', 'cloud-v1']),
             disabled: list(env.EVENTS_CARRIERS_DISABLED, []),
         },
         // Valkey (ADR-035): per-actor limit counters shared across processes; without it they count in this process.
@@ -109,6 +109,16 @@ function load(env = process.env) {
             subjectPrefix: env.NATS_SUBJECT_PREFIX || 'ov.events.',
             jetstream: env.NATS_JETSTREAM !== 'off',
             stream: env.NATS_STREAM || 'OV_EVENTS_STREAM',
+        },
+        // Cloud queue (ADR-042 decision 5, optional): the cloud-v1 QUEUE carrier over an SQS-compatible endpoint
+        // (<CLOUD_QUEUE_URL>, signed with SigV4: CLOUD_QUEUE_REGION, CLOUD_QUEUE_ACCESS_KEY, CLOUD_QUEUE_SECRET_KEY).
+        // CLOUD_QUEUE_PREFIX is an optional path prefix under the URL. Off unless CLOUD_QUEUE_URL is set.
+        cloud: {
+            url: env.CLOUD_QUEUE_URL || '',
+            region: env.CLOUD_QUEUE_REGION || 'us-east-1',
+            prefix: env.CLOUD_QUEUE_PREFIX || '',
+            accessKey: env.CLOUD_QUEUE_ACCESS_KEY || '',
+            secretKey: env.CLOUD_QUEUE_SECRET_KEY || '',
         },
         retentionDays: int(env.EVENTS_RETENTION_DAYS, 30),
         // retention.replay (ADR-042 decision 8): days an event stays readable in events_archive after it leaves the
