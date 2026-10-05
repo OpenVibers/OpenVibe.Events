@@ -26,7 +26,12 @@ const t = suite('security-secrets');
 let w;
 const needles = {};
 // Secrets Events does read from its environment, each planted in the world below as a sentinel the crawl looks for.
-const PLANTED = { OV_OAUTH_CLIENT_SECRET: `ovsecret-events-client-${crypto.randomBytes(12).toString('hex')}` };
+const PLANTED = {
+    OV_OAUTH_CLIENT_SECRET: `ovsecret-events-client-${crypto.randomBytes(12).toString('hex')}`,
+    // cloud-v1 (an SQS-compatible queue): signs requests, never echoed.
+    CLOUD_QUEUE_ACCESS_KEY: `ovsecret-events-cloud-access-${crypto.randomBytes(12).toString('hex')}`,
+    CLOUD_QUEUE_SECRET_KEY: `ovsecret-events-cloud-secret-${crypto.randomBytes(12).toString('hex')}`,
+};
 
 t('Events reads no secret from its environment but the planted ones', async () => {
     const names = new Set();
