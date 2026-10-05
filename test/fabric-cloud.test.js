@@ -152,6 +152,17 @@ t('planner: cloud-v1 is unpriced while up; a down broker (breaker open) excludes
     } finally { await sqs.close(); }
 });
 
+t('a hung queue cannot hold the publish: each request is bounded by timeoutMs and counts as a failure', async () => {
+    const silentLog = { warn() {}, info() {}, error() {} };
+    // A fetch that never answers unless its abort signal fires.
+    const hung = (_url, opts) => new Promise((_resolve, reject) => { opts.signal.addEventListener('abort', () => reject(opts.signal.reason)); });
+    const c = createCloudCarrier({ url: 'http://queue.test/q', timeoutMs: 50, concurrency: 4, log: silentLog, fetchImpl: hung });
+    const t0 = Date.now();
+    await c.signal(Array.from({ length: 8 }, (_, i) => ({ event_id: `evt_${i}`, subscription_id: 'sub' })), 'QUEUE');
+    const took = Date.now() - t0;
+    assert.ok(took < 1000, `eight hung requests finish in about two timeouts (took ${took} ms)`);
+});
+
 t('EVENTS_CARRIERS_DISABLED=cloud-v1: QUEUE stays on pg-v1 and the reason is configuration', async () => {
     const reg = createCarriers({ config: load({ NODE_ENV: 'test', CLOUD_QUEUE_URL: 'http://127.0.0.1:1/queue/ov-events', EVENTS_CARRIERS_DISABLED: 'cloud-v1' }), log: silent });
     assert.strictEqual(reg.get('cloud-v1').disabledReason, 'disabled by configuration');

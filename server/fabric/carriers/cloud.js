@@ -25,8 +25,6 @@ const SERVICE = 'sqs';
 
 const sha256 = (data) => crypto.createHash('sha256').update(data).digest('hex');
 const hmac = (key, data) => crypto.createHmac('sha256', key).update(data).digest();
-/** RFC 3986 encoding of one path segment, as SigV4 wants it. */
-const encodeSegment = (s) => encodeURIComponent(s).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 
 /** The SigningKey/Authorization for one request; `headers` are the ones to sign (lower-case names, host included). */
 function signV4({ method, path: p, headers, payloadHash, region, service, accessKeyId, secretAccessKey, amzDate }) {
@@ -50,7 +48,7 @@ function queueUrl(url, prefix) {
     return u.toString();
 }
 
-function createCloudCarrier({ url, region = 'us-east-1', prefix = '', accessKey = '', secretKey = '', clock = { now: () => Date.now() }, log = console, fetchImpl = fetch } = {}) {
+function createCloudCarrier({ url, region = 'us-east-1', prefix = '', accessKey = '', secretKey = '', timeoutMs = 3000, concurrency = 8, clock = { now: () => Date.now() }, log = console, fetchImpl = fetch } = {}) {
     const signals = createSignals({ now: () => clock.now() });
     const endpoint = queueUrl(url, prefix);
 
@@ -68,14 +66,16 @@ function createCloudCarrier({ url, region = 'us-east-1', prefix = '', accessKey 
         const headers = { host: u.host, 'content-type': 'application/x-www-form-urlencoded; charset=utf-8', 'x-amz-content-sha256': payloadHash, 'x-amz-date': amzDate };
         const sent = { 'content-type': headers['content-type'], 'x-amz-content-sha256': payloadHash, 'x-amz-date': amzDate };
         if (accessKey && secretKey) sent.authorization = signV4({ method: 'POST', path: u.pathname, headers, payloadHash, region, service: SERVICE, accessKeyId: accessKey, secretAccessKey: secretKey, amzDate });
-        const res = await fetchImpl(endpoint, { method: 'POST', headers: sent, body, redirect: 'manual' });
+        // Bounded: a slow or hung queue must not hold the publish that signalled it (the poll still carries the row).
+        const res = await fetchImpl(endpoint, { method: 'POST', headers: sent, body, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });
         if (!res.ok) throw new Error(`queue answered ${res.status}`);
     }
 
     async function signalQueue(rows) {
         const t0 = clock.now();
         try {
-            for (const r of rows) await send(r);
+            // At most `concurrency` requests in flight, so a batch is bounded by about rows/concurrency timeouts.
+            for (let i = 0; i < rows.length; i += concurrency) await Promise.all(rows.slice(i, i + concurrency).map(send));
             signals.record('queue', true, clock.now() - t0);
         } catch (err) {
             signals.record('queue', false);
