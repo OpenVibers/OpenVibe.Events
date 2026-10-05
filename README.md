@@ -203,6 +203,8 @@ Quotas recorded in Network (`dev_quotas`) are not read yet: that needs `network.
 
 **Usage** ([server/usage.js](server/usage.js), roadmap WS-N task 4). Each project's use is counted per environment and UTC hour in the transaction that does the work: `events.app.publish` in `events` (events stored; a repeated `event_id` is not counted) with every refused publish request as an error (its problem code, status, trace id and, when one event was refused, its `event_id`), and `events.app.subscribe` in `deliveries` (webhook attempts to the project's subscriptions; one without a 2xx is an error, `events.delivery.http_<status>`, `events.delivery.timeout` or `events.delivery.failed`, with the event id and its trace id). A minute after an hour closes, each rollup is stored once as an `events.usage.recorded` event (source `events`, subject the project, visibility `internal`, payload `common.usage-recorded@1` from openvibe-contracts 0.63.0) in the transaction that marks it sent, so Events is its own outbox; first-party subscribers get it like any event, apps never see it. OpenVibe.Network subscribes to it for the project dashboard on openvibe.codes. `EVENTS_USAGE=off` counts nothing; `EVENTS_USAGE_FLUSH_MS` (300000) is how often closed hours are looked for. Sent rollups are kept 7 days in `app_usage`.
 
+**Billing readings** ([server/billing.js](server/billing.js), plan T5 step 14; [docs/cutover-events-billing-readings.md](docs/cutover-events-billing-readings.md)). Each closed UTC hour, one aggregate query turns a production project's queue operations (each publish and each delivered webhook counts `ceil(bytes / 65536)`, at least 1) into one `platform.usage-sample@1` reading, metric `queue-operation-64kb`, `idempotency_key` `events:queue-operation-64kb:<project>:<hour>`, stored once in `billing_readings` and never edited, then posted to Billing (`billing.usage.record`, `POST /api/v1/usage`) with Events' Network service token. Off by default: `EVENTS_BILLING_INTERVAL_MS` (0) turns the loop on, `OV_BILLING_INTERNAL_URL` and `OV_OAUTH_CLIENT_SECRET` let it send (unset: readings stay queued). Sandbox and first-party traffic are not billed.
+
 ## Client library
 
 `require('openvibe-events')` (package `main` is [lib/client.js](lib/client.js); services can depend on this repo by tarball):
@@ -283,7 +285,7 @@ void connect();
 
 ## Owns
 
-- `events`, `events_archive` (the replay tier), `subscriptions`, `deliveries`, `consumer_checkpoints`, `idempotency_receipts`, `app_revocations`, `app_usage` (PostgreSQL `ov_events`, ADR-035; the realtime fan-out is in-process, one Events process)
+- `events`, `events_archive` (the replay tier), `subscriptions`, `deliveries`, `consumer_checkpoints`, `idempotency_receipts`, `app_revocations`, `app_usage`, `billing_readings`, `billing_periods` (PostgreSQL `ov_events`, ADR-035; the realtime fan-out is in-process, one Events process)
 - developer-app event scope, sandbox separation and per-project Events quotas (ADR-014)
 - canonical event envelope (event_id, trace_id, type, version, source, actor, subject + revision, payload)
 - priority classes `critical|important|low`, loop guards, backpressure, DLQ and replay
@@ -308,6 +310,7 @@ void connect();
 - a guessed private topic yields no data (`test/realtime.test.js`)
 - a developer app cannot publish, read or subscribe outside its project, sandbox never meets production, app webhooks reach public addresses only, quotas hold (`test/apps.test.js`)
 - a project's publishing and deliveries are counted per hour, refusals and failed attempts as errors, and each closed hour is sent once as `events.usage.recorded`, never visible to apps (`test/usage.test.js`)
+- each closed hour's queue operations per production project become one valid `platform.usage-sample@1` reading, rounded per 64 KiB, created once and never edited; the sender marks it sent on a 2xx, refuses it on a 4xx about the reading, keeps it pending on a 5xx, and two senders never post it twice; off by default (`test/billing.test.js`)
 
 ## Bootstrap / extraction source
 

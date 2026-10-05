@@ -7,7 +7,7 @@
   "runtime": "node 22, express, PostgreSQL 18 (openvibe-sdk/db, async) + Valkey 9",
   "port": 4300,
   "domain": "events.openvibe.network",
-  "contracts": "openvibe-contracts v0.81.0",
+  "contracts": "openvibe-contracts v0.94.2",
   "capabilities": [
     "events.event.publish",
     "events.subscription.manage",
@@ -30,6 +30,7 @@
     "realtime SSE with cursor resume, gap reports and Network tickets",
     "developer-app publish, read and subscribe with sandbox separation, SSRF-guarded webhooks and project quotas",
     "hourly project usage rollups (events.usage.recorded)",
+    "queue-operation-64kb billing readings (platform.usage-sample@1) per production project and closed hour, posted to Billing through billing.usage.record (EVENTS_BILLING_INTERVAL_MS, off by default; docs/cutover-events-billing-readings.md)",
     "redaction tombstones",
     "per-actor limits (openvibe-sdk/limits; shared on Valkey)",
     "carrier fabric (ADR-042): the pg-v1 poll beside a valkey-v1 push carrier for QUEUE (streams) and TOPIC (SSE fan-out) an optional nats-v1 NATS Core TOPIC carrier (NATS_URL) and an optional nats-js-v1 JetStream STREAM carrier (NATS_URL, NATS_JETSTREAM; deploy/nats), with a placement planner, per-key pinning, delivery_placements history and a GET /api/v1/placement explain API; EVENTS_CARRIERS[_DISABLED] switches it",
