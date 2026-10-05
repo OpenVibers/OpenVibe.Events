@@ -103,6 +103,20 @@ t('a bot service principal publishes bot.* only', async () => {
     assert.strictEqual(r.body.code, 'events.type_not_allowed');
 });
 
+t('a watch service principal publishes watch.* only', async () => {
+    const watch = serviceToken('watch', ['events.event.publish']);
+    // Real ids from openvibe-contracts (Watch, v0.102.0+): watch.watch.triggered, not watch.triggered.
+    let r = await request(h.base, 'POST', '/api/v1/events', { token: watch, body: envelope('watch', { event_type: 'watch.watch.triggered' }) });
+    assert.strictEqual(r.status, 201, r.text);
+    r = await request(h.base, 'POST', '/api/v1/events', { token: watch, body: envelope('watch', { event_type: 'live.stream.started' }) });
+    assert.strictEqual(r.status, 403);
+    assert.strictEqual(r.body.code, 'events.type_not_allowed');
+    // A source not in the list cannot claim the watch namespace.
+    r = await request(h.base, 'POST', '/api/v1/events', { token: serviceToken('stranger', ['events.event.publish']), body: envelope('stranger', { event_type: 'watch.watch.triggered' }) });
+    assert.strictEqual(r.status, 403);
+    assert.strictEqual(r.body.code, 'events.unknown_source');
+});
+
 t('unknown source (not in the manifest map) -> 403', async () => {
     const r = await request(h.base, 'POST', '/api/v1/events', { token: serviceToken('stranger', ['events.event.publish']), body: envelope('stranger') });
     assert.strictEqual(r.status, 403);

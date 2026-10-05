@@ -21,7 +21,9 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
     // Publication products (Waves 16-19): each publishes <product>.<type>.<action> via openvibe-publishing.
     'wiki', 'blog', 'news', 'reviews', 'deals', 'coupons', 'trade',
     // Robot control (OpenVibe.Bot): bot.robot.*, bot.estop.*, bot.command.*
-    'bot'];
+    'bot',
+    // Watch (OpenVibe.Watch): watch.observation.recorded, watch.watch.triggered, watch.check.failed
+    'watch'];
 
 /**
  * Namespaces that belong to the network rather than to one service. `provider.*` carries storage
