@@ -29,7 +29,7 @@ t('realtime example gets a new ticket and resumes from the last cursor', async (
             assert.strictEqual(options.headers.Authorization, 'Bearer test-user-token');
             return { ok: true, json: async () => ({
                 ticket: `ticket-${requests}`,
-                stream_url: 'https://events.openvibe.network/realtime/stream',
+                stream_url: 'https://openvibe.events/realtime/stream',
                 topics: ['network.notification.*'],
             }) };
         },
