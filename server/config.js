@@ -77,16 +77,18 @@ function load(env = process.env) {
     const port = int(env.PORT, 4300);
     const maxInflight = int(env.EVENTS_MAX_INFLIGHT, 20);
     const prefixes = sourcePrefixes(env);
-    const baseUrl = (env.BASE_URL || (isProduction ? 'https://events.openvibe.network' : `http://localhost:${port}`)).replace(/\/$/, '');
+    // openvibe.events is the API origin and the product origin (plan T7); events.openvibe.network answers
+    // until every client moves, then redirects (308). Everything Events names about itself uses this.
+    const baseUrl = (env.BASE_URL || (isProduction ? 'https://openvibe.events' : `http://localhost:${port}`)).replace(/\/$/, '');
     return {
         port,
         host: env.HOST || '127.0.0.1',
         nodeEnv,
         isProduction,
         baseUrl,
-        // The product domain (openvibe.events, plan expansion II): the canonical origin of the home page
-        // and its robots.txt/sitemap.xml/llms.txt. The API stays at baseUrl. Local development follows baseUrl.
-        siteUrl: (env.EVENTS_SITE_URL || (isProduction ? 'https://openvibe.events' : baseUrl)).replace(/\/$/, ''),
+        // The product origin is the API origin (plan T7): the home page and its robots.txt/sitemap.xml/
+        // llms.txt are served from baseUrl. EVENTS_SITE_URL overrides it for a deployment that serves them apart.
+        siteUrl: (env.EVENTS_SITE_URL || baseUrl).replace(/\/$/, ''),
 
         // Identity: OpenVibe.Network issues service tokens and user JWTs (RS256).
         networkUrl: (env.OV_NETWORK_URL || 'https://openvibe.network').replace(/\/$/, ''),

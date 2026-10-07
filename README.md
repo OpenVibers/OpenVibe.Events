@@ -2,8 +2,8 @@
 
 > Durable events, subscriptions, delivery, retry, dead letters and replay for the network.
 
-**Status:** alpha (roadmap Wave 3), deployed on `openvibe-ovh` (unit `openvibe-events`, 127.0.0.1:4300, public at `https://events.openvibe.network`). Live (`live.stream.*`), Media, Chat, Games, Network and OpenRe publish to it in production, and every consumer webhook requires signature v2. Media's completion events reach Live through Events (`/internal/media-events`; Live keeps the older `/internal/media-webhook` during the transition), and the shared notification bell can follow `network.notification.created` over the realtime stream with a Network ticket.  
-**Domain:** `events.openvibe.network` (the realtime gateway is served here too: ADR-005 put Realtime inside Events, and `realtime.openvibe.network` has no runtime of its own). The product domain `openvibe.events` serves only the home page and its `robots.txt`/`sitemap.xml`/`llms.txt`, and redirects everything else here.  
+**Status:** alpha (roadmap Wave 3), deployed on `openvibe-ovh` (unit `openvibe-events`, 127.0.0.1:4300, public at `https://openvibe.events`). Live (`live.stream.*`), Media, Chat, Games, Network and OpenRe publish to it in production, and every consumer webhook requires signature v2. Media's completion events reach Live through Events (`/internal/media-events`; Live keeps the older `/internal/media-webhook` during the transition), and the shared notification bell can follow `network.notification.created` over the realtime stream with a Network ticket.  
+**Domain:** `openvibe.events` is the API and product origin (plan T7): the JSON API, the realtime gateway (ADR-005 put Realtime inside Events; `realtime.openvibe.network` has no runtime of its own), the home page and its `robots.txt`/`sitemap.xml`/`llms.txt`. `events.openvibe.network` answers the same surface until every client moves, then redirects (308).  
 **Plan:** OpenVibe End-to-End Realignment & Implementation Plan, revision 3 (20 Sep 2026), §6 and §6.3.  
 **License:** AGPL-3.0 (same as every OpenVibe service).
 
@@ -20,7 +20,7 @@ npm run dev            # http://127.0.0.1:4300
 npm test               # every test/*.test.js, temp databases, no network needed
 ```
 
-Node 22 in production (`fnm exec --using=22.22.1 npm test`). Production: `/opt/openvibe.events`, env `/etc/openvibe/events.env`, unit [deploy/systemd/openvibe-events.service](deploy/systemd/openvibe-events.service), store PostgreSQL (`ov_events` on the host's data role), nginx [deploy/nginx/events.openvibe.network.conf](deploy/nginx/events.openvibe.network.conf) (public vhost exposes `/realtime/stream`, health, and the token-guarded `/api/v1/events`, `/api/v1/subscriptions` and `/api/v1/checkpoints` for developer apps; `/api/v1/deliveries` stays host-local; services on the host call `127.0.0.1:4300`).
+Node 22 in production (`fnm exec --using=22.22.1 npm test`). Production: `/opt/openvibe.events`, env `/etc/openvibe/events.env`, unit [deploy/systemd/openvibe-events.service](deploy/systemd/openvibe-events.service), store PostgreSQL (`ov_events` on the host's data role), nginx [deploy/nginx/openvibe.events.conf](deploy/nginx/openvibe.events.conf) (the public vhost, on the API and product origin: it exposes the home and its discovery files, `/realtime/stream`, health, and the token-guarded `/api/v1/events`, `/api/v1/subscriptions` and `/api/v1/checkpoints` for developer apps; `/api/v1/deliveries` stays host-local; services on the host call `127.0.0.1:4300`).
 
 `GET /api/health` is liveness. `GET /api/ready` (openvibe-shared/ready) is 200 only when every required check passes — `db` (a real query), `network_jwks` (the Network signing key has loaded; it retries every 30 s while Network boots) and `delivery_worker` (when `EVENTS_WORKER` is on) — and 503 otherwise, with `failed: [...]`. The optional `dlq` check fails once more than `EVENTS_DLQ_DEGRADED_AT` (default 100) deliveries are dead: the service stays ready (200) and reports `status: "degraded"`, `degraded: ["dlq"]`. Each check carries `status`, `required`, `latency_ms`, `checked_at` and, for `dlq`, `detail: { depth, threshold }`; `latest_seq`, `deliveries`, `worker` and `realtime_connections` are still in the body. **Shape change (Track O):** `checks` used to be booleans (`{ db, worker, key }`); they are now objects keyed `db`, `network_jwks`, `delivery_worker`, `dlq`.
 
@@ -180,7 +180,7 @@ Roadmap Wave 20, ADR-014. A developer app gets a token from OpenVibe.Network (`P
 **Names.** `project_key` is `p` followed by the project's ULID in lowercase: `prj_01JAB2C3D4E5F6G7H8J9K0MNPQ` → `p01jab2c3d4e5f6g7h8j9k0mnpq`. An app event's `source` is `app-` followed by the app's ULID in lowercase: `app:app_01JAB…` → `app-01jab…`. Both fit the existing `events.event-envelope@1` patterns, so the envelope contract did not change. `actor` is `{ "type": "app", "id": "app_<ULID>" }`, or the user in the token's `on_behalf_of`. First-party services can never publish `app.*` (the source names `app` and `app-*` are reserved and refused in `EVENTS_SOURCE_PREFIXES`).
 
 ```bash
-EVENTS=https://events.openvibe.network
+EVENTS=https://openvibe.events
 PK=p$(echo "${PRJ#prj_}" | tr 'A-Z' 'a-z')              # project_key
 SRC=app-$(echo "${APP#app_}" | tr 'A-Z' 'a-z')         # source
 curl -s -X POST "$EVENTS/api/v1/events" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{
@@ -284,7 +284,7 @@ void connect();
 ```
 
 - Auth: a **realtime ticket** (`?ticket=`), the Network `ov_token` cookie or a Bearer user JWT (the `ov_token` cookie is scoped to its issuing host, and an EventSource cannot set an Authorization header, so a client on another site uses a ticket); a service token with `events.event.read`; or nobody (public events only, `REALTIME_ALLOW_ANONYMOUS`). An expired cookie degrades to anonymous; a bad Bearer is a 401.
-- Realtime tickets (ADR-005 amendment 2): a page on any OpenVibe site cannot count on a cookie of events.openvibe.network (third-party there), and an EventSource cannot send a header. So it asks Network for a ticket (`POST https://openvibe.network/api/v1/realtime/ticket`, answering `network.realtime-ticket-result@1`) and opens `/realtime/stream?topics=network.notification.*&ticket=<ticket>` without credentials. The ticket is an RS256 JWT signed with Network's key (`identity.realtime-ticket-claims@1`): `iss <OV_NETWORK_ISSUER>/realtime`, `sub <usr_>`, `aud [openvibe.events]`, `typ` and `purpose` `realtime`, a lifetime of at most 300 s (Network mints 120 s) and `jti rtk_…`.
+- Realtime tickets (ADR-005 amendment 2): a page on any OpenVibe site cannot count on a cookie of openvibe.events (third-party there), and an EventSource cannot send a header. So it asks Network for a ticket (`POST https://openvibe.network/api/v1/realtime/ticket`, answering `network.realtime-ticket-result@1`) and opens `/realtime/stream?topics=network.notification.*&ticket=<ticket>` without credentials. The ticket is an RS256 JWT signed with Network's key (`identity.realtime-ticket-claims@1`): `iss <OV_NETWORK_ISSUER>/realtime`, `sub <usr_>`, `aud [openvibe.events]`, `typ` and `purpose` `realtime`, a lifetime of at most 300 s (Network mints 120 s) and `jti rtk_…`.
   - Events accepts each ticket once, never as Bearer or cookie, and never logs it. The refusals are 401: `ticket.invalid`, `ticket.expired` and `ticket.used`.
   - A reconnect asks for a new ticket and resumes with `last_event_id` (the cursor from the last message's SSE `id`).
   - Conversely, a user JWT that carries `typ` or `purpose` (a ticket, a FedCM assertion) is not a session here.
@@ -356,10 +356,10 @@ Production deploys with `sudo ovhost deploy events` on the host (strategy `git-c
 fast-forward `/opt/openvibe.events`, install on a lockfile change, restart, wait for `/api/ready`).
 The unit is `openvibe-events.service` on `127.0.0.1:4300`, the env file `/etc/openvibe/events.env`. The database is
 `ov_events` on the host's data role (`sudo /opt/openvibe.host/roles/data/add-service.sh events` writes its settings); the
-release migrates it at boot. nginx serves `events.openvibe.network` from
-[deploy/nginx/events.openvibe.network.conf](deploy/nginx/events.openvibe.network.conf); the product domain `openvibe.events` gets
-[deploy/nginx/openvibe.events.conf](deploy/nginx/openvibe.events.conf) instead, installed when openvibe.events is cut over from
-its OpenVibe.Sites placeholder (the Sites vhost of the same name is replaced; nothing else changes on `events.openvibe.network`). ovhost treats open
+release migrates it at boot. nginx serves `openvibe.events`, the API and product origin, from
+[deploy/nginx/openvibe.events.conf](deploy/nginx/openvibe.events.conf); `events.openvibe.network` answers the same
+surface from [deploy/nginx/events.openvibe.network.conf](deploy/nginx/events.openvibe.network.conf) until every client
+moves, then redirects (308). ovhost treats open
 realtime connections as a report-only drain, so `--wait-idle` waits for them.
 Rollback: ovhost puts the previous sha back by itself when `/api/ready` does not answer 2xx after the
 restart; afterwards `sudo ovhost rollback events --to <sha>`. Migrations only add tables and columns.
