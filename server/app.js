@@ -11,6 +11,7 @@ const { subscriptionsRouter } = require('./api/subscriptions');
 const { readRouter } = require('./api/read');
 const { policiesRouter } = require('./api/policies');
 const { placementRouter } = require('./api/placement');
+const { resourcesRouter } = require('./api/resources');
 const { mountLimits } = require('./limits');
 const { createLimits } = require('./actor-limits');
 const { renderHome, HOME_CSP } = require('./home');
@@ -90,6 +91,9 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     app.use(readRouter({ store, auth, worker, limits }));
     if (policies) app.use(policiesRouter({ policies, auth, limits }));
     if (planner) app.use(placementRouter({ planner, policies, auth, limits, store }));
+    // The authority resource index (ADR-048, capability events.resource.read): the subscriptions Events owns,
+    // for OpenVibe.Services' fan-out. First-party like the routes above; no per-actor limit of its own.
+    app.use(resourcesRouter({ store, auth }));
 
     // Discovery for the product domain (openvibe.events): robots.txt, sitemap.xml, llms.txt.
     app.use(createDiscoveryRoutes({ config }));

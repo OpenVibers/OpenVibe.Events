@@ -496,6 +496,13 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
     async function countSubscriptions(consumer) {
         return (await db.prepare('SELECT COUNT(*) AS n FROM subscriptions WHERE consumer = ?').get(consumer)).n;
     }
+    /**
+     * Every subscription of one project, for the authority resource index (server/api/resources.js): `?project=prj_…`
+     * is its tenancy boundary, so a row of another project — or a project-less first-party one — is never returned.
+     */
+    async function listProjectSubscriptions(projectId) {
+        return await db.prepare('SELECT * FROM subscriptions WHERE project_id = ? ORDER BY id').all(projectId);
+    }
     /** Rotate a subscription's secret: the old one keeps signing (next to the new) until overlapMs from now. */
     async function rotateSubscriptionSecret(id, secret, overlapMs) {
         const now = clock.now();
@@ -799,7 +806,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
 
     return {
         db, insertBatch, redact, getEvent, resolvePolicy, revokedAt, lastSeq, oldestSeq, epoch, bumpEpoch, firstSeqSince, scan,
-        createSubscription, getSubscription, listSubscriptions, countSubscriptions, countProjectSubscriptions, setSubscriptionEnabled, rotateSubscriptionSecret,
+        createSubscription, getSubscription, listSubscriptions, listProjectSubscriptions, countSubscriptions, countProjectSubscriptions, setSubscriptionEnabled, rotateSubscriptionSecret,
         claimDeliveries, claimDelivery, recordAttempt, getDelivery, listDeliveries, requeue, deliveryCounts,
         getCheckpoint, setCheckpoint, prune, ping, usage, flushUsage,
     };

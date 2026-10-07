@@ -36,8 +36,9 @@ Services call with an OpenVibe.Network client-credentials token (`POST /oauth/to
 | `events.subscription.manage` | `/api/v1/subscriptions…` (own subscriptions only) |
 | `events.event.read` | `GET /api/v1/events`, `GET /api/v1/events/:id`, `/api/v1/checkpoints`, realtime as a service |
 | `events.delivery.admin` | `GET /api/v1/deliveries`, `POST /api/v1/deliveries/replay` |
+| `events.resource.read` | `GET /api/v1/resources`, `GET /api/v1/resources/:ovrn` (the [resource index](#resource-index)) |
 
-These four are `internal` in `openvibe-contracts` (never granted to developer apps). Developer apps use the three `public` capabilities in [Developer apps](#developer-apps) instead, on the same routes. `server/auth.js` grants with the contracts rule (exact id or a `family.*` grant) and hands the decision to `capabilities.check()` for every id the installed contracts know (the pinned v0.80.0 knows all seven).
+These four are `internal` in `openvibe-contracts` (never granted to developer apps). Developer apps use the three `public` capabilities in [Developer apps](#developer-apps) instead, on the same routes. `events.resource.read` is `first-party` (ADR-048) and still `planned` in `openvibe-contracts` until the deploy lands — the guard is the same service-token check, and the same 401/403, every other route here gets. `server/auth.js` grants with the contracts rule (exact id or a `family.*` grant) and hands the decision to `capabilities.check()` for every id the installed contracts know (the pinned v0.107.0 knows all eight).
 
 Sandbox tokens (`env: sandbox`, developer apps only) are accepted only on the developer-app routes; every other route answers `401 token.sandbox_refused`. App tokens are never judged on a first-party capability: an app token on an operator route is a `403`.
 
@@ -62,12 +63,13 @@ Never limited: `/api/health`, `/api/ready`, `/release.json`, `/limits.json`, `/m
 ## Capabilities
 
 Implemented here (the service manifest's `capabilities`): the four internal ones in the table above
-(`events.event.publish`, `events.event.read`, `events.subscription.manage`, `events.delivery.admin`)
-and the three public developer-app ones (`events.app.publish`, `events.app.read`,
-`events.app.subscribe`, [Developer apps](#developer-apps)). Events calls no other service with a
-grant: it only loads the Network signing key (JWKS) and makes the signed deliveries its subscriptions
-ask for. It produces one event of its own, `events.usage.recorded` (a project's hourly publishing and
-delivery rollup, for Network; never visible to apps).
+(`events.event.publish`, `events.event.read`, `events.subscription.manage`, `events.delivery.admin`),
+the three public developer-app ones (`events.app.publish`, `events.app.read`, `events.app.subscribe`,
+[Developer apps](#developer-apps)) and the first-party `events.resource.read` (ADR-048,
+[Resource index](#resource-index); `planned` in `openvibe-contracts` until the deploy lands). Events
+calls no other service with a grant: it only loads the Network signing key (JWKS) and makes the signed
+deliveries its subscriptions ask for. It produces one event of its own, `events.usage.recorded` (a
+project's hourly publishing and delivery rollup, for Network; never visible to apps).
 
 ## Publishing
 
@@ -137,6 +139,15 @@ node scripts/events-archive.js restore --month 2026-01 [--hold-days 30]
 ```
 
 `export` writes the closed month's replay rows older than the cutoff to `<YYYY>/events-<YYYY-MM>.ndjson.gz` (one row per line: every column of the hot row, payload and actor as their stored JSON text, plus `epoch` and `archived_at`) and `<YYYY>/events-<YYYY-MM>.json` (`count`, `sha256`). It deletes those rows from `events_archive` only after reading the object back and matching both, and only rows unchanged since it read them (a row redacted meanwhile stays; rerun). Re-running, or exporting the rest of a month later, merges into the month's object. `restore` checks the object against its manifest, then inserts it back into `events_archive`, idempotent on `event_id`, held for `--hold-days` so the replay prune does not delete it at once. A redaction published after a month was exported does not reach its object, so restore only what you need. Export and restore of one month are serialised by a PostgreSQL advisory lock. Storage (`scripts/archive-storage.js`): a local directory, `EVENTS_ARCHIVE_DIR` (default `data/archive`), or an S3-compatible bucket when `EVENTS_ARCHIVE_S3_BUCKET` is set (`EVENTS_ARCHIVE_S3_ENDPOINT`, `_REGION`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`, `_PREFIX`; path-style, SigV4 signed with node:crypto and sent with node's `fetch`, no dependency). Each object is built in memory.
+
+## Resource index
+
+`GET /api/v1/resources` is this authority's resource index (ADR-048 section 3; capability `events.resource.read`): the surface OpenVibe.Services fans out over and merges, so it can list every resource of the network without owning any service's rows. It pages `common.resource-summary@1` for the resources Events owns — today its subscriptions (`sub_<ULID>`, kind `events.subscription`, read from the `subscriptions` table) — as `common.resource-list-result@1`; `GET /api/v1/resources/:ovrn` reads one by its OVRN (`common.resource-summary@1`).
+
+- Query: `?project=prj_…&kind=events.subscription&cursor=…&limit=…`. `?project=` is the tenancy boundary: only that project's subscriptions answer, never another project's and never a project-less one. Without it the first-party caller sees everything. `?kind=` picks a kind (an unknown one is an empty page, not an error); `cursor` is the opaque cursor from the previous page's `next_cursor`; `limit` defaults to 100 and is at most 1000. Pages are ordered by `(kind, id)`.
+- Summary: `id`, `kind`, `service: "events"`, `project_id` (when the subscription is a project's), `owner` (when the consumer is a `usr_` subject), `name` (the topic pattern), `state` (`active` | `disabled`, from `enabled`), `created_at`. Every summary and every page is validated against the released `common.resource-*` schemas (`test/resource-index.test.js`).
+- OVRN: present exactly when `openvibe-contracts`' `contracts.resources.nameOf` composes one — `ovrn:events:<prj_…>:subscription/sub_…` for a project-scoped subscription. A project-less subscription is a first-party one (a service consumer with no project): it has no project segment, so no name, and only the unscoped caller sees it at all. An event is not a resource (`evt_` is what `common.resource-name@1` refuses by design) and a project's queue is a derived carrier class, not a stored row, so `events.queue` joins the index only when Events stores a queue row.
+- Errors: `400 resources.bad_query` for a value the index cannot honour (a project that is not a `prj_` id, a `limit` outside 1-1000, a cursor it did not issue) and `404 resources.unknown_resource` for an OVRN that names nothing it composes, both problem+json. Answers carry `Cache-Control: private, max-age=60`. The capability is `first-party`: a developer app's token is a `403`, as on every first-party route, and the two routes are not per-actor limited — they are one fan-out call each, not a browser's traffic.
 
 ## The fabric: carriers, the planner and explain
 
