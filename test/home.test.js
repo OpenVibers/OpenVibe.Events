@@ -1,12 +1,14 @@
 'use strict';
-// The product home (plan expansion II): openvibe.events renders server/home.js for a browser and keeps
-// the text/plain API index for curl and API clients, serves the pinned OpenVibe Frame at /shared, and
-// answers robots.txt, sitemap.xml and llms.txt. A parse-only check of the new nginx vhost too.
+// The product home (plan T7: openvibe.events is the API and product origin): it renders server/home.js
+// for a browser and keeps the text/plain API index for curl and API clients, serves the pinned OpenVibe
+// Frame at /shared, answers robots.txt, sitemap.xml and llms.txt, and names its own origin everywhere.
+// A parse-only check of the nginx vhost too.
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const nodeHttp = require('http');
 const { boot, suite } = require('./helpers');
+const { load } = require('../server/config');
 const { HOME_CSP } = require('../server/home');
 
 const SITE = 'https://openvibe.events';
@@ -42,7 +44,15 @@ function raw(base, p, headers = {}) {
     });
 }
 
-t('boot with the product domain configured', async () => { h = await boot({ env: { EVENTS_SITE_URL: SITE } }); });
+t('in production the API origin and the product origin are the same host', () => {
+    const production = load({ NODE_ENV: 'production' });
+    assert.strictEqual(production.baseUrl, SITE, 'the API origin defaults to openvibe.events');
+    assert.strictEqual(production.siteUrl, SITE, 'the product origin is the same origin');
+});
+
+t('boot with openvibe.events as both the API and the product origin', async () => {
+    h = await boot({ env: { BASE_URL: SITE } });   // siteUrl follows baseUrl
+});
 
 t('GET / as a browser: the home page, its CSP and its cache policy', async () => {
     const r = await raw(h.base, '/', { Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' });
@@ -54,6 +64,9 @@ t('GET / as a browser: the home page, its CSP and its cache policy', async () =>
     assert.strictEqual((r.body.match(/<h1\b/g) || []).length, 1, 'exactly one h1');
     assert.ok(r.body.includes('Events your services'), 'the hero text');
     assert.ok(r.body.includes(`<link rel="canonical" href="${SITE}/">`), 'the canonical product origin');
+    assert.ok(r.body.includes(`The API is at ${SITE}`), 'the hero note names the API origin');
+    assert.ok(r.body.includes(`${SITE}/api/v1/events`), 'the API examples use the API origin');
+    assert.ok(!r.body.includes('events.openvibe.network'), 'the home names no other origin');
 });
 
 t('the home links the pinned Frame stylesheet, and /shared serves it', async () => {
@@ -101,23 +114,28 @@ t('llms.txt is a plain-text map that starts with the site name', async () => {
     assert.ok(r.body.startsWith('# OpenVibe.Events'), r.body.slice(0, 40));
     assert.ok(r.body.includes('> Durable events for the OpenVibe network'), 'the home summary');
     assert.ok(r.body.includes('https://github.com/OpenVibers/OpenVibe.Events#readme'), 'the guide');
+    assert.ok(r.body.includes(`The API and the realtime gateway are at ${SITE}`), 'the discovery names the API origin');
 });
 
-t('deploy/nginx/openvibe.events.conf proxies the product surface and nothing else', () => {
+t('deploy/nginx/openvibe.events.conf is the API and product origin, with no redirect to the old host', () => {
     const conf = fs.readFileSync(path.join(__dirname, '..', 'deploy', 'nginx', 'openvibe.events.conf'), 'utf8');
     assert.match(conf, /server_name openvibe\.events;/);
     assert.match(conf, /server_name www\.openvibe\.events;/);
     assert.ok(conf.includes('/etc/letsencrypt/live/openvibe.events/fullchain.pem'));
     assert.ok(conf.includes('/etc/letsencrypt/live/openvibe.events/privkey.pem'));
     assert.ok(!conf.includes('$proxy_add_x_forwarded_for'), 'the client address is never appended to');
-    for (const loc of ['location = / {', 'location ^~ /shared/ {', 'location = /robots.txt {', 'location = /sitemap.xml {', 'location = /llms.txt {']) {
+    // The product surface (plan expansion II) and everything the API host proxies (plan T7).
+    for (const loc of ['location = / {', 'location ^~ /shared/ {', 'location = /robots.txt {', 'location = /sitemap.xml {', 'location = /llms.txt {',
+        'location = /realtime/stream {', 'location = /api/health', 'location = /api/ready', 'location = /release.json', 'location = /limits.json']) {
         assert.ok(conf.includes(loc), `${loc} is proxied`);
     }
+    assert.ok(conf.includes('location ~ ^/api/v1/(events|subscriptions|checkpoints)(/|$)'), 'the token-guarded API block');
+    assert.ok(conf.includes('location /api/ {'), 'the /api/ refusal block');
+    assert.ok(conf.includes('proxy_buffering off;'), 'SSE is not buffered');
+    assert.ok(conf.includes('proxy_read_timeout 1h;'), 'SSE keeps its long read timeout');
     const refusals = [conf.indexOf('location = /metrics { return 404; }'), conf.indexOf('location /internal/ { return 404; }')];
     assert.ok(refusals.every((i) => i >= 0), 'metrics and /internal/ are refused');
-    const catchAll = conf.indexOf('location / { return 301 https://events.openvibe.network$request_uri; }');
-    assert.ok(catchAll >= 0, 'everything else goes to the API host');
-    assert.ok(Math.max(...refusals) < catchAll, 'the refusals come before the catch-all');
+    assert.ok(!conf.includes('events.openvibe.network$request_uri'), 'no catch-all redirect to the old API host');
     assert.ok(conf.includes('return 301 https://openvibe.events$request_uri;'), ':80 and www reach the apex');
 });
 

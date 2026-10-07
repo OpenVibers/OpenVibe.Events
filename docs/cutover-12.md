@@ -21,7 +21,7 @@ reads span both tables. `EVENTS_REPLAY_RETENTION_DAYS` defaults to 365; `0` is t
    takes milliseconds and holds no lock on `events`.
 2. `/etc/openvibe/events.env`: nothing to add for the default (365 days of replay). To keep today's behaviour, set
    `EVENTS_REPLAY_RETENTION_DAYS=0` and restart.
-3. Check: `curl -s https://events.openvibe.network/limits.json` lists `replay_retention_days`; after the first prune
+3. Check: `curl -s https://openvibe.events/limits.json` lists `replay_retention_days`; after the first prune
    (start + up to `EVENTS_PRUNE_INTERVAL_MS`) the journal (`ov access run openvibe-ovh journal openvibe-events.service 200`)
    shows `[retention] pruned N hot events (N moved to replay), …` when anything was due, and
    `node scripts/events-archive.js status` (on the host, with the service env) lists the replay rows per month.

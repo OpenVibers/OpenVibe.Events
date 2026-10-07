@@ -5,7 +5,7 @@
  *
  *   GET /robots.txt    welcomes search and AI crawlers to the home page, keeps the API and the
  *                      realtime gateway out of the index, and always names the sitemap
- *   GET /sitemap.xml   the product home only (the API and realtime live at events.openvibe.network)
+ *   GET /sitemap.xml   the product home only (openvibe.events is the API origin too, plan T7)
  *   GET /llms.txt      what OpenVibe.Events does today, in plain language: the README's Purpose,
  *                      Publishing, Subscriptions and delivery, Developer apps and Realtime sections
  *

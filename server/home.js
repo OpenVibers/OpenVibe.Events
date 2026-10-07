@@ -1,8 +1,8 @@
 'use strict';
 
 /**
- * The product home of OpenVibe.Events (openvibe.events, plan expansion II: the product domain; the API stays at
- * events.openvibe.network). The OpenVibe Frame (openvibe-shared/shell) around openvibe-shared/showcase sections
+ * The product home of OpenVibe.Events (openvibe.events, plan T7: the API origin is the product origin too).
+ * The OpenVibe Frame (openvibe-shared/shell) around openvibe-shared/showcase sections
  * for developers. Every claim restates the README (Publishing, Subscriptions and delivery, Developer apps,
  * Realtime) and the code; nothing here reads data.
  *
@@ -26,7 +26,7 @@ const HOME_CSP = [
     "style-src 'self' 'unsafe-inline' https://openvibe.network https://fonts.googleapis.com https://cdnjs.cloudflare.com",
     "font-src 'self' data: https://fonts.gstatic.com https://cdnjs.cloudflare.com",
     "img-src 'self' data: https:",
-    "connect-src 'self' https://openvibe.network https://events.openvibe.network",
+    "connect-src 'self' https://openvibe.network https://openvibe.events",
     "frame-src 'self' https://openvibe.network",
     "frame-ancestors 'none'",
     "object-src 'none'",
@@ -59,7 +59,7 @@ function sections({ apiUrl }) {
         lede: 'The event backbone of the OpenVibe network. Publish an event once and every subscriber gets it: stored durably, signed, '
             + 'retried with backoff, and replayable after a failure. Live, Media, Chat, Games, Network and OpenRe.Stream publish to it in production.',
         actions: [{ label: 'Read the guide', href: `${SOURCE}#readme`, primary: true }, { label: 'See an example', href: '#examples' }],
-        note: 'Alpha. The API is at events.openvibe.network; developer apps sign in through OpenVibe.Network.',
+        note: `Alpha. The API is at ${apiUrl}; developer apps sign in through OpenVibe.Network.`,
     }) + showcase.features({
         title: 'What you get',
         items: [
