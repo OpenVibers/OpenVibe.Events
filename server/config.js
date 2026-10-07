@@ -73,12 +73,16 @@ function load(env = process.env) {
     const port = int(env.PORT, 4300);
     const maxInflight = int(env.EVENTS_MAX_INFLIGHT, 20);
     const prefixes = sourcePrefixes(env);
+    const baseUrl = (env.BASE_URL || (isProduction ? 'https://events.openvibe.network' : `http://localhost:${port}`)).replace(/\/$/, '');
     return {
         port,
         host: env.HOST || '127.0.0.1',
         nodeEnv,
         isProduction,
-        baseUrl: (env.BASE_URL || (isProduction ? 'https://events.openvibe.network' : `http://localhost:${port}`)).replace(/\/$/, ''),
+        baseUrl,
+        // The product domain (openvibe.events, plan expansion II): the canonical origin of the home page
+        // and its robots.txt/sitemap.xml/llms.txt. The API stays at baseUrl. Local development follows baseUrl.
+        siteUrl: (env.EVENTS_SITE_URL || (isProduction ? 'https://openvibe.events' : baseUrl)).replace(/\/$/, ''),
 
         // Identity: OpenVibe.Network issues service tokens and user JWTs (RS256).
         networkUrl: (env.OV_NETWORK_URL || 'https://openvibe.network').replace(/\/$/, ''),

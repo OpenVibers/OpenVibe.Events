@@ -13,6 +13,9 @@ const { policiesRouter } = require('./api/policies');
 const { placementRouter } = require('./api/placement');
 const { mountLimits } = require('./limits');
 const { createLimits } = require('./actor-limits');
+const { renderHome, HOME_CSP } = require('./home');
+const { createDiscoveryRoutes } = require('./discovery');
+const ovServe = require('openvibe-shared/serve');
 const pkg = require('../package.json');
 
 function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log = console, valkey = null, policies = null, planner = null, carriers = null }) {
@@ -32,6 +35,11 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
         res.setHeader('X-Content-Type-Options', 'nosniff');
         next();
     });
+
+    // The product home's own browser files (the OpenVibe Frame, openvibe-shared/serve) under
+    // content-addressed /shared/* URLs, from this repo's pinned openvibe-shared. Mounted before the
+    // routers and outside the per-actor limiter: it is static and unauthenticated.
+    app.use('/shared', ovServe.handler());
 
     // Realtime first: it answers CORS preflights and must not go through the JSON body parser.
     app.options('/realtime/stream', realtime.cors);
@@ -83,7 +91,22 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     if (policies) app.use(policiesRouter({ policies, auth, limits }));
     if (planner) app.use(placementRouter({ planner, policies, auth, limits, store }));
 
-    app.get('/', (_req, res) => {
+    // Discovery for the product domain (openvibe.events): robots.txt, sitemap.xml, llms.txt.
+    app.use(createDiscoveryRoutes({ config }));
+
+    // GET / on the product domain: the home page for a browser (server/home.js, openvibe.events), the
+    // API index for curl and API clients (`*/*`, no Accept, or any non-HTML Accept). Vary: Accept so a
+    // shared cache never serves one to the other. The home carries its own CSP (HOME_CSP); the only
+    // global security header is X-Content-Type-Options above, kept on every route.
+    app.get('/', (req, res) => {
+        res.vary('Accept');
+        if (req.accepts(['text/plain', 'text/html']) === 'text/html') {
+            return res.type('html')
+                .set('Content-Security-Policy', HOME_CSP)
+                // private: Cloudflare caches by URL and ignores Vary: Accept, so a shared copy could reach an API client.
+                .set('Cache-Control', 'private, max-age=300')
+                .send(renderHome({ siteUrl: config.siteUrl, apiUrl: config.baseUrl }));
+        }
         res.type('text/plain').send([
             'OpenVibe.Events: durable events, subscriptions, signed delivery, dead letters and replay.',
             '',

@@ -20,7 +20,7 @@
   "capabilitiesRegistered": true,
   "deployed": true,
   "deployment": "Deployed with `sudo ovhost deploy events`: /opt/openvibe.events, unit openvibe-events, 127.0.0.1:4300; public at https://events.openvibe.network (realtime SSE, health, token-guarded /api/v1/events, /api/v1/subscriptions, /api/v1/checkpoints; /api/v1/deliveries host-local); real traffic since 2026-09-23 (Live, Media, Chat, Games, Network and OpenRe publish; on 2026-09-23 8 subscriptions, held by Search, Tips, VIP, News and Reviews); restore drill passed 2026-09-23",
-  "updated": "2026-10-05",
+  "updated": "2026-10-07",
   "features": [
     "durable event store with the canonical envelope",
     "subscriptions with signed webhook delivery (v1 and v2), retry, dead letters and replay",
