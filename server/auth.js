@@ -33,6 +33,10 @@ const CAPS = Object.freeze({
     appPublish: 'events.app.publish',
     appRead: 'events.app.read',
     appSubscribe: 'events.app.subscribe',
+    // The authority resource index (ADR-048, plan T13 step 8). `planned` in openvibe-contracts until the
+    // deploy lands, so capabilities.check() answers capability.unknown and the local rule (exact id or a
+    // `family.*` grant) decides — the same rule, and the same 401/403, every other service route gets.
+    resourceRead: 'events.resource.read',
 });
 
 // ── Network public key ─────────────────────────────────────
