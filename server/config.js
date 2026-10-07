@@ -23,7 +23,9 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
     // Robot control (OpenVibe.Bot): bot.robot.*, bot.estop.*, bot.command.*
     'bot',
     // Watch (OpenVibe.Watch): watch.observation.recorded, watch.watch.triggered, watch.check.failed
-    'watch'];
+    'watch',
+    // Run (OpenVibe.Run, plan T14): run.job.queued|started|succeeded|failed|cancelled|expired
+    'run'];
 
 /**
  * Namespaces that belong to the network rather than to one service. `provider.*` carries storage
