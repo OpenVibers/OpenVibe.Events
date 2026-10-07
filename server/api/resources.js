@@ -23,8 +23,8 @@
  * That is also what GET /api/v1/resources/:ovrn can read: only a resource whose computed ovrn equals the one
  * asked for answers, so an OVRN naming another project, or a project-less subscription's id, is a 404.
  *
- * The capability stays `planned` in openvibe-contracts until the deploy lands and Opus flips it (this step
- * does not change Contracts); the guard is the same service-token check every other first-party route uses.
+ * The capability is `active` in openvibe-contracts since v0.110.0; the guard is the same service-token check
+ * every other first-party route uses.
  */
 const express = require('express');
 const contracts = require('openvibe-contracts');

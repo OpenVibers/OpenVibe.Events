@@ -25,7 +25,9 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
     // Watch (OpenVibe.Watch): watch.observation.recorded, watch.watch.triggered, watch.check.failed
     'watch',
     // Run (OpenVibe.Run, plan T14): run.job.queued|started|succeeded|failed|cancelled|expired
-    'run'];
+    'run',
+    // Space (OpenVibe.Space, plan T10 step 3): space.thread.created, space.post.created, space.moderation.action
+    'space'];
 
 /**
  * Namespaces that belong to the network rather than to one service. `provider.*` carries storage
