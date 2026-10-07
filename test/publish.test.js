@@ -117,6 +117,22 @@ t('a watch service principal publishes watch.* only', async () => {
     assert.strictEqual(r.body.code, 'events.unknown_source');
 });
 
+t('a space service principal publishes space.* only', async () => {
+    const space = serviceToken('space', ['events.event.publish']);
+    // Real ids from openvibe-contracts (Space, v0.110.0+): space.thread.created, space.post.created, space.moderation.action.
+    for (const event_type of ['space.thread.created', 'space.post.created', 'space.moderation.action']) {
+        const r = await request(h.base, 'POST', '/api/v1/events', { token: space, body: envelope('space', { event_type }) });
+        assert.strictEqual(r.status, 201, r.text);
+    }
+    let r = await request(h.base, 'POST', '/api/v1/events', { token: space, body: envelope('space', { event_type: 'live.stream.started' }) });
+    assert.strictEqual(r.status, 403);
+    assert.strictEqual(r.body.code, 'events.type_not_allowed');
+    // A source not in the list cannot claim the space namespace.
+    r = await request(h.base, 'POST', '/api/v1/events', { token: serviceToken('stranger', ['events.event.publish']), body: envelope('stranger', { event_type: 'space.thread.created' }) });
+    assert.strictEqual(r.status, 403);
+    assert.strictEqual(r.body.code, 'events.unknown_source');
+});
+
 t('unknown source (not in the manifest map) -> 403', async () => {
     const r = await request(h.base, 'POST', '/api/v1/events', { token: serviceToken('stranger', ['events.event.publish']), body: envelope('stranger') });
     assert.strictEqual(r.status, 403);

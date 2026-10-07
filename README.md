@@ -38,7 +38,7 @@ Services call with an OpenVibe.Network client-credentials token (`POST /oauth/to
 | `events.delivery.admin` | `GET /api/v1/deliveries`, `POST /api/v1/deliveries/replay` |
 | `events.resource.read` | `GET /api/v1/resources`, `GET /api/v1/resources/:ovrn` (the [resource index](#resource-index)) |
 
-These four are `internal` in `openvibe-contracts` (never granted to developer apps). Developer apps use the three `public` capabilities in [Developer apps](#developer-apps) instead, on the same routes. `events.resource.read` is `first-party` (ADR-048) and still `planned` in `openvibe-contracts` until the deploy lands — the guard is the same service-token check, and the same 401/403, every other route here gets. `server/auth.js` grants with the contracts rule (exact id or a `family.*` grant) and hands the decision to `capabilities.check()` for every id the installed contracts know (the pinned v0.107.0 knows all eight).
+These four are `internal` in `openvibe-contracts` (never granted to developer apps). Developer apps use the three `public` capabilities in [Developer apps](#developer-apps) instead, on the same routes. `events.resource.read` is `first-party` (ADR-048), `active` in `openvibe-contracts` since v0.110.0 — the guard is the same service-token check, and the same 401/403, every other route here gets. `server/auth.js` grants with the contracts rule (exact id or a `family.*` grant) and hands the decision to `capabilities.check()` for every id the installed contracts know (the pinned v0.110.0 knows all eight).
 
 Sandbox tokens (`env: sandbox`, developer apps only) are accepted only on the developer-app routes; every other route answers `401 token.sandbox_refused`. App tokens are never judged on a first-party capability: an app token on an operator route is a `403`.
 
@@ -66,7 +66,7 @@ Implemented here (the service manifest's `capabilities`): the four internal ones
 (`events.event.publish`, `events.event.read`, `events.subscription.manage`, `events.delivery.admin`),
 the three public developer-app ones (`events.app.publish`, `events.app.read`, `events.app.subscribe`,
 [Developer apps](#developer-apps)) and the first-party `events.resource.read` (ADR-048,
-[Resource index](#resource-index); `planned` in `openvibe-contracts` until the deploy lands). Events
+[Resource index](#resource-index); `active` in `openvibe-contracts` since v0.110.0). Events
 calls no other service with a grant: it only loads the Network signing key (JWKS) and makes the signed
 deliveries its subscriptions ask for. It produces one event of its own, `events.usage.recorded` (a
 project's hourly publishing and delivery rollup, for Network; never visible to apps).
@@ -75,7 +75,7 @@ project's hourly publishing and delivery rollup, for Network; never visible to a
 
 `POST /api/v1/events` takes one `events.event-envelope@1` envelope, or `{ "events": [ … ] }` (up to 100, stored atomically).
 
-- `source` must be the calling service (`svc:live` publishes `source: "live"`), and `event_type` must start with a prefix that source owns (`live.*`, `media.*`, `network.*`, `community.*`, `chat.*`, `openre.*`, `billing.*`, `tips.*`, `vip.*`, `ai.*`, `games.*`, `tools.*`, `codes.*`, `host.*`, `bot.*`, `watch.*`, `run.*`, and the publication products (`wiki.*`, `blog.*`, `news.*`, `reviews.*`, `deals.*`, `coupons.*`, `trade.*`, `sources.*`, `search.*`); `EVENTS_SOURCE_PREFIXES` overrides). A network-wide prefix may be published by any first-party service: `provider.*` carries storage provider health/capacity telemetry (`provider.health.degraded`, `provider.capacity.warning`), so whichever service observes a provider can report it; `EVENTS_SHARED_PREFIXES` overrides.
+- `source` must be the calling service (`svc:live` publishes `source: "live"`), and `event_type` must start with a prefix that source owns (`live.*`, `media.*`, `network.*`, `community.*`, `chat.*`, `openre.*`, `billing.*`, `tips.*`, `vip.*`, `ai.*`, `games.*`, `tools.*`, `codes.*`, `host.*`, `bot.*`, `watch.*`, `run.*`, `space.*`, and the publication products (`wiki.*`, `blog.*`, `news.*`, `reviews.*`, `deals.*`, `coupons.*`, `trade.*`, `sources.*`, `search.*`); `EVENTS_SOURCE_PREFIXES` overrides). A network-wide prefix may be published by any first-party service: `provider.*` carries storage provider health/capacity telemetry (`provider.health.degraded`, `provider.capacity.warning`), so whichever service observes a provider can report it; `EVENTS_SHARED_PREFIXES` overrides.
 - Idempotent on `event_id`: a repeat answers `200 { event_id, seq, duplicate: true }` and is never stored twice (even after retention, for `EVENTS_RECEIPT_RETENTION_DAYS`).
 - Missing `trace_id` is taken from the request's `traceparent`; `priority` defaults to `important`, `visibility` to `internal`.
 - Loop guard: an event whose trace already carries 8 hops (the cross-service chain depth, or the same source/type/subject repeating in the trace) is refused with `409 events.loop_detected`. The chain depth of a first-party publish counts first-party events only (developer-app events in the same trace never count toward it), so an app cannot poison a trace it has seen.
