@@ -7,7 +7,9 @@
   "runtime": "node 22, express, PostgreSQL 18 (openvibe-sdk/db, async) + Valkey 9",
   "port": 4300,
   "domain": "openvibe.events",
-  "contracts": "openvibe-contracts v0.110.0",
+  "contracts": "openvibe-contracts v0.112.0",
+  "sdk": "openvibe-sdk v0.26.0",
+  "shared": "openvibe-shared v2.13.0",
   "capabilities": [
     "events.event.publish",
     "events.subscription.manage",
@@ -20,7 +22,6 @@
   "capabilitiesRegistered": true,
   "deployed": true,
   "deployment": "Deployed with `sudo ovhost deploy events`: /opt/openvibe.events, unit openvibe-events, 127.0.0.1:4300; public at https://openvibe.events (plan T7: the API and product origin; realtime SSE, health, token-guarded /api/v1/events, /api/v1/subscriptions, /api/v1/checkpoints; /api/v1/deliveries host-local; events.openvibe.network answers the same surface until every client moves, then redirects 308); real traffic since 2026-09-23 (Live, Media, Chat, Games, Network and OpenRe publish; on 2026-09-23 8 subscriptions, held by Search, Tips, VIP, News and Reviews); restore drill passed 2026-09-23",
-  "updated": "2026-10-07",
   "features": [
     "durable event store with the canonical envelope",
     "subscriptions with signed webhook delivery (v1 and v2), retry, dead letters and replay",
@@ -35,5 +36,6 @@
     "per-actor limits (openvibe-sdk/limits; shared on Valkey)",
     "carrier fabric (ADR-042): the pg-v1 poll beside a valkey-v1 push carrier for QUEUE (streams) and TOPIC (SSE fan-out) an optional nats-v1 NATS Core TOPIC carrier (NATS_URL) and an optional nats-js-v1 JetStream STREAM carrier (NATS_URL, NATS_JETSTREAM; deploy/nats) and an optional cloud-v1 SQS-compatible QUEUE carrier (CLOUD_QUEUE_URL; SigV4, no dependency), with a placement planner, per-key pinning, delivery_placements history and a GET /api/v1/placement explain API; EVENTS_CARRIERS[_DISABLED] switches it",
     "at_most_once delivery semantics (a failed attempt is final)"
-  ]
+  ],
+  "updated": "2026-10-07"
 }
