@@ -136,6 +136,10 @@ t('deploy/nginx/openvibe.events.conf is the API and product origin, with no redi
     const refusals = [conf.indexOf('location = /metrics { return 404; }'), conf.indexOf('location /internal/ { return 404; }')];
     assert.ok(refusals.every((i) => i >= 0), 'metrics and /internal/ are refused');
     assert.ok(!conf.includes('events.openvibe.network$request_uri'), 'no catch-all redirect to the old API host');
+    const old = fs.readFileSync(path.join(__dirname, '..', 'deploy', 'nginx', 'events.openvibe.network.conf'), 'utf8')
+        .split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    assert.ok(!old.includes('proxy_pass'), 'events.openvibe.network serves nothing itself');
+    assert.strictEqual((old.match(/return 308 https:\/\/openvibe\.events\$request_uri;/g) || []).length, 2, 'HTTP and HTTPS answer 308 to openvibe.events');
     assert.ok(conf.includes('return 301 https://openvibe.events$request_uri;'), ':80 and www reach the apex');
 });
 
