@@ -69,6 +69,31 @@ t('GET / as a browser: the home page, its CSP and its cache policy', async () =>
     assert.ok(!r.body.includes('events.openvibe.network'), 'the home names no other origin');
 });
 
+t('the home CSP lets Cloudflare Web Analytics load and report (it injects its beacon on this zone)', () => {
+    assert.match(HOME_CSP, /script-src [^;]*https:\/\/static\.cloudflareinsights\.com/);
+    assert.match(HOME_CSP, /connect-src [^;]*https:\/\/cloudflareinsights\.com/);
+});
+
+t('a browser gets a page for a path nothing serves (lang, title, icon); an API client the problem document', async () => {
+    const page = await raw(h.base, '/no-such-page', { Accept: 'text/html,*/*;q=0.8' });
+    assert.strictEqual(page.status, 404);
+    assert.match(page.headers['content-type'], /^text\/html/);
+    assert.ok(page.body.includes('<html lang="en">') && page.body.includes('<title>Not found') && page.body.includes('rel="icon"'), page.body.slice(0, 300));
+    const api = await raw(h.base, '/no-such-page', { Accept: 'application/json' });
+    assert.strictEqual(api.status, 404);
+    assert.match(api.headers['content-type'], /problem\+json|json/);
+    const apiPath = await raw(h.base, '/api/v1/nothing', { Accept: 'text/html' });
+    assert.match(apiPath.headers['content-type'], /json/, 'an /api/ path answers JSON whatever it accepts');
+});
+
+t('/favicon.ico is the app icon (SVG), cached a day', async () => {
+    const r = await raw(h.base, '/favicon.ico', {});
+    assert.strictEqual(r.status, 200);
+    assert.match(r.headers['content-type'], /^image\/svg\+xml/);
+    assert.ok(r.body.startsWith('<svg'));
+    assert.strictEqual(r.headers['cache-control'], 'public, max-age=86400');
+});
+
 t('the home links the pinned Frame stylesheet, and /shared serves it', async () => {
     const r = await raw(h.base, '/', { Accept: 'text/html' });
     const href = /<link rel="stylesheet" href="([^"]+)"/.exec(r.body);

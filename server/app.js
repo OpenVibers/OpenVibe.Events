@@ -14,7 +14,8 @@ const { placementRouter } = require('./api/placement');
 const { resourcesRouter } = require('./api/resources');
 const { mountLimits } = require('./limits');
 const { createLimits } = require('./actor-limits');
-const { renderHome, HOME_CSP } = require('./home');
+const { renderHome, renderNotFound, HOME_CSP } = require('./home');
+const appIcon = require('openvibe-shared/app-icon');
 const { createDiscoveryRoutes } = require('./discovery');
 const ovServe = require('openvibe-shared/serve');
 const pkg = require('../package.json');
@@ -126,7 +127,16 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
         ].join('\n'));
     });
 
-    app.use((req, res) => http.sendProblem(res, 404, 'events.not_found', { detail: `no route ${req.method} ${req.path}`, ctx: req.ov }));
+    // Browsers ask for /favicon.ico on their own: the app icon, as SVG.
+    app.get('/favicon.ico', (req, res) => res.type('image/svg+xml').set('Cache-Control', 'public, max-age=86400').send(appIcon.favicon({ site: 'events' })));
+
+    // A browser asking for a page that is not here gets a page; an API client the problem document.
+    app.use((req, res) => {
+        if (req.method === 'GET' && !req.path.startsWith('/api/') && req.accepts(['application/json', 'text/html']) === 'text/html') {
+            return res.status(404).type('html').set('Content-Security-Policy', HOME_CSP).set('Cache-Control', 'no-store').send(renderNotFound());
+        }
+        return http.sendProblem(res, 404, 'events.not_found', { detail: `no route ${req.method} ${req.path}`, ctx: req.ov });
+    });
 
     // eslint-disable-next-line no-unused-vars
     app.use((err, req, res, _next) => {

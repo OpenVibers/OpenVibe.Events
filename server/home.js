@@ -22,11 +22,13 @@ const DESCRIPTION = 'Durable events for the OpenVibe network: publish once, and 
 
 const HOME_CSP = [
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline' https://openvibe.network",
+    // Cloudflare Web Analytics: Cloudflare injects its beacon at the edge on this zone; script-src loads it and connect-src
+    // is where it reports (performance timing only, no cookies).
+    "script-src 'self' 'unsafe-inline' https://openvibe.network https://static.cloudflareinsights.com",
     "style-src 'self' 'unsafe-inline' https://openvibe.network https://fonts.googleapis.com https://cdnjs.cloudflare.com",
     "font-src 'self' data: https://fonts.gstatic.com https://cdnjs.cloudflare.com",
     "img-src 'self' data: https:",
-    "connect-src 'self' https://openvibe.network https://openvibe.events",
+    "connect-src 'self' https://openvibe.network https://openvibe.events https://cloudflareinsights.com",
     "frame-src 'self' https://openvibe.network",
     "frame-ancestors 'none'",
     "object-src 'none'",
@@ -118,4 +120,12 @@ ${sections({ apiUrl })}
     });
 }
 
-module.exports = { renderHome, HOME_CSP, DESCRIPTION, sections };
+/** The page a browser gets for a path nothing serves: a real document (language, title, the app icon), not JSON. */
+function renderNotFound() {
+    return ['<!doctype html>', '<html lang="en">', '<head>', '<meta charset="utf-8">', '<meta name="viewport" content="width=device-width, initial-scale=1">',
+        `<title>Not found · ${SITE_NAME}</title>`, '<meta name="robots" content="noindex">', appIcon.headTags({ site: 'events' }), '</head>',
+        '<body style="font-family:system-ui,sans-serif;margin:3rem auto;max-width:36rem;padding:0 1rem;line-height:1.5">',
+        '<h1>Not found</h1>', `<p>Nothing is here. <a href="/">${SITE_NAME}</a> · <a href="${NETWORK_URL}">OpenVibe</a></p>`, '</body>', '</html>'].join('\n');
+}
+
+module.exports = { renderHome, renderNotFound, HOME_CSP, DESCRIPTION, sections };
