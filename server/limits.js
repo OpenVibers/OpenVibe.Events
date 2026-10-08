@@ -1,7 +1,7 @@
 'use strict';
 /**
  * GET /limits.json (roadmap WS-N task 7): the limits a developer project meets here, read from the
- * running configuration, so OpenVibe.Codes' limits page (openvibe.codes/docs/limits) shows what is
+ * running configuration, so OpenVibe.Services' limits page (openvibe.services/docs/limits) shows what is
  * enforced and never restates it. Public: nothing in it is per project or secret.
  *
  *   limits[]  id, label, capability (the grant it bounds; null for the anonymous realtime stream),
