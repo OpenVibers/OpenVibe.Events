@@ -389,5 +389,5 @@ Part of the [OpenVibe network](https://openvibe.network). Built in the open by [
 <!-- versions:start -->
 - openvibe-contracts: v0.112.0
 - openvibe-sdk: v0.35.0
-- openvibe-shared: v2.13.2
+- openvibe-shared: v2.15.0
 <!-- versions:end -->
