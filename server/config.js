@@ -27,7 +27,11 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
     // Run (OpenVibe.Run, plan T14): run.job.queued|started|succeeded|failed|cancelled|expired
     'run',
     // Space (OpenVibe.Space, plan T10 step 3): space.thread.created, space.post.created, space.moderation.action
-    'space'];
+    'space',
+    // Inventory (OpenVibe.Inventory, ADR-054): inventory.item.granted|equipped|consumed|revoked, inventory.definition.published
+    'inventory',
+    // Services (OpenVibe.Services, the developer console): its services.* events
+    'services'];
 
 /**
  * Namespaces that belong to the network rather than to one service. `provider.*` carries storage
