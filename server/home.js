@@ -59,7 +59,7 @@ function sections({ apiUrl }) {
         eyebrow: 'OpenVibe.Events · alpha',
         title: 'Events your services', accent: 'can count on.',
         lede: 'The event backbone of the OpenVibe network. Publish an event once and every subscriber gets it: stored durably, signed, '
-            + 'retried with backoff, and replayable after a failure. Live, Media, Chat, Games, Network and OpenRe.Stream publish to it in production.',
+            + 'retried with backoff, and replayable after a failure. Live, Media, Chat, Games, Network and OpenRestream publish to it in production.',
         actions: [{ label: 'Read the guide', href: `${SOURCE}#readme`, primary: true }, { label: 'See an example', href: '#examples' }],
         note: `Alpha. The API is at ${apiUrl}; developer apps sign in through OpenVibe.Network.`,
     }) + showcase.features({
