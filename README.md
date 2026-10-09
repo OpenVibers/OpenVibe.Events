@@ -2,7 +2,7 @@
 
 > Durable events, subscriptions, delivery, retry, dead letters and replay for the network.
 
-**Status:** alpha (roadmap Wave 3), deployed on `openvibe-ovh` (unit `openvibe-events`, 127.0.0.1:4300, public at `https://openvibe.events`). Live (`live.stream.*`), Media, Chat, Games, Network and OpenRe publish to it in production, and every consumer webhook requires signature v2. Media's completion events reach Live through Events (`/internal/media-events`; Live keeps the older `/internal/media-webhook` during the transition), and the shared notification bell can follow `network.notification.created` over the realtime stream with a Network ticket.  
+**Status:** alpha (roadmap Wave 3), deployed on `openvibe-ovh` (unit `openvibe-events`, 127.0.0.1:4300, public at `https://openvibe.events`). Live (`live.stream.*`), Media, Chat, Games, Network and OpenRestream publish to it in production, and every consumer webhook requires signature v2. Media's completion events reach Live through Events (`/internal/media-events`; Live keeps the older `/internal/media-webhook` during the transition), and the shared notification bell can follow `network.notification.created` over the realtime stream with a Network ticket.  
 **Domain:** `openvibe.events` is the API and product origin (plan T7): the JSON API, the realtime gateway (ADR-005 put Realtime inside Events; `realtime.openvibe.network` has no runtime of its own), the home page and its `robots.txt`/`sitemap.xml`/`llms.txt`. `events.openvibe.network` answers 308 to the same path on openvibe.events.  
 **Plan:** OpenVibe End-to-End Realignment & Implementation Plan, revision 3 (20 Sep 2026), §6 and §6.3.  
 **License:** AGPL-3.0 (same as every OpenVibe service).
