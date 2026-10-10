@@ -388,6 +388,6 @@ Part of the [OpenVibe network](https://openvibe.network). Built in the open by [
 
 <!-- versions:start -->
 - openvibe-contracts: v0.132.0
-- openvibe-sdk: v0.40.0
+- openvibe-sdk: v0.42.0
 - openvibe-shared: v3.0.1
 <!-- versions:end -->
