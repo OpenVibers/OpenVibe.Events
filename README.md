@@ -3,7 +3,7 @@
 > Durable events, subscriptions, delivery, retry, dead letters and replay for the network.
 
 **Status:** alpha (roadmap Wave 3), deployed on `openvibe-ovh` (unit `openvibe-events`, 127.0.0.1:4300, public at `https://openvibe.events`). Live (`live.stream.*`), Media, Chat, Games, Network and OpenRestream publish to it in production, and every consumer webhook requires signature v2. Media's completion events reach Live through Events (`/internal/media-events`; Live keeps the older `/internal/media-webhook` during the transition), and the shared notification bell can follow `network.notification.created` over the realtime stream with a Network ticket.  
-**Domain:** `openvibe.events` is the API and product origin (plan T7): the JSON API, the realtime gateway (ADR-005 put Realtime inside Events; `realtime.openvibe.network` has no runtime of its own), the home page and its `robots.txt`/`sitemap.xml`/`llms.txt`. `events.openvibe.network` answers 308 to the same path on openvibe.events.  
+**Domain:** `openvibe.events` is the API and product origin (plan T7): the JSON API, the realtime gateway (ADR-005 put Realtime inside Events; `realtime.openvibe.network` has no runtime of its own), the home page and its `robots.txt`/`sitemap.xml`/`llms.txt`. The old `events.openvibe.network` address was retired on 2026-10-10.  
 **Plan:** OpenVibe End-to-End Realignment & Implementation Plan, revision 3 (20 Sep 2026), §6 and §6.3.  
 **License:** AGPL-3.0 (same as every OpenVibe service).
 
@@ -357,8 +357,8 @@ fast-forward `/opt/openvibe.events`, install on a lockfile change, restart, wait
 The unit is `openvibe-events.service` on `127.0.0.1:4300`, the env file `/etc/openvibe/events.env`. The database is
 `ov_events` on the host's data role (`sudo /opt/openvibe.host/roles/data/add-service.sh events` writes its settings); the
 release migrates it at boot. nginx serves `openvibe.events`, the API and product origin, from
-[deploy/nginx/openvibe.events.conf](deploy/nginx/openvibe.events.conf); `events.openvibe.network` answers 308 to the
-same path there ([deploy/nginx/events.openvibe.network.conf](deploy/nginx/events.openvibe.network.conf)). ovhost treats open
+[deploy/nginx/openvibe.events.conf](deploy/nginx/openvibe.events.conf) (the old `events.openvibe.network` address was retired
+on 2026-10-10). ovhost treats open
 realtime connections as a report-only drain, so `--wait-idle` waits for them.
 Rollback: ovhost puts the previous sha back by itself when `/api/ready` does not answer 2xx after the
 restart; afterwards `sudo ovhost rollback events --to <sha>`. Migrations only add tables and columns.

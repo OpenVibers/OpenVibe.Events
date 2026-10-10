@@ -81,8 +81,8 @@ function load(env = process.env) {
     const port = int(env.PORT, 4300);
     const maxInflight = int(env.EVENTS_MAX_INFLIGHT, 20);
     const prefixes = sourcePrefixes(env);
-    // openvibe.events is the API origin and the product origin (plan T7); events.openvibe.network answers
-    // until every client moves, then redirects (308). Everything Events names about itself uses this.
+    // openvibe.events is the API origin and the product origin (plan T7; the old events.openvibe.network address was
+    // retired on 2026-10-10). Everything Events names about itself uses this.
     const baseUrl = (env.BASE_URL || (isProduction ? 'https://openvibe.events' : `http://localhost:${port}`)).replace(/\/$/, '');
     return {
         port,
