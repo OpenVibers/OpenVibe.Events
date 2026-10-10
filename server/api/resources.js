@@ -2,7 +2,7 @@
 /**
  * The authority resource index (ADR-048 section 3; capability events.resource.read):
  *
- *   GET /api/v1/resources[?project=&kind=&cursor=&limit=]  -> common.resource-list-result@1
+ *   GET /api/v1/resources[?project=&kind=&owner=&cursor=&limit=] -> common.resource-list-result@1
  *   GET /api/v1/resources/:ovrn                            -> common.resource-summary@1
  *
  * It pages the resources OpenVibe.Events owns — today its subscriptions (sub_), the kind
@@ -15,7 +15,8 @@
  * answer — the project-less ones are not its rows and are never mixed in. Without it the first-party caller
  * (the capability is first-party, resourceConstraints none) sees every subscription, which is what an
  * authority-wide fan-out needs; a subscription without a project (a service consumer's, first-party) is
- * exactly the row only that caller sees.
+ * exactly the row only that caller sees. `?owner=usr_…` narrows the result to subscriptions whose consumer
+ * is that raw user subject; this index does not emit agent owners.
  *
  * OVRN: a summary's ovrn is computed with openvibe-contracts' contracts.resources.nameOf, the one
  * formatter, so it is present exactly when the subscription is a nameable resource — a project-scoped one is
@@ -34,6 +35,7 @@ const SERVICE = 'events';
 const SUBSCRIPTION_KIND = 'events.subscription';
 const KINDS = [SUBSCRIPTION_KIND];
 const PROJECT_ID_RE = /^prj_[0-9A-HJKMNP-TV-Z]{26}$/;
+const SUBJECT_ID_RE = /^(usr|agt)_[0-9A-HJKMNP-TV-Z]{26}$/;
 const USER_SUBJECT_RE = /^usr_[0-9A-HJKMNP-TV-Z]{26}$/;
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 1000;
@@ -73,16 +75,17 @@ function named(summary) {
 const order = (x, y) => (x.kind < y.kind ? -1 : x.kind > y.kind ? 1 : x.id < y.id ? -1 : x.id > y.id ? 1 : 0);
 
 /**
- * The summaries matching the filters: `project` scopes tenancy, `kind` picks one kind. Sorted by (kind, id).
+ * The summaries matching the filters: `project` scopes tenancy, `kind` picks one kind, `owner` picks a
+ * person whose subject is stored as the subscription consumer. Sorted by (kind, id).
  *
  * Scope: events.resource.read is first-party (resourceConstraints none), so its holder sees every project and
  * ?project= only narrows. If it is ever granted to a non-first-party principal, derive the scope from that
  * principal's grants here instead of trusting the query.
  */
-async function collect(store, { project = null, kind = null } = {}) {
+async function collect(store, { project = null, kind = null, owner = null } = {}) {
     const out = [];
-    if (!kind || kind === SUBSCRIPTION_KIND) {
-        const rows = project ? await store.listProjectSubscriptions(project) : await store.listSubscriptions();
+    if ((!kind || kind === SUBSCRIPTION_KIND) && (!owner || USER_SUBJECT_RE.test(owner))) {
+        const rows = project ? await store.listProjectSubscriptions(project, owner) : await store.listSubscriptions(owner);
         for (const s of rows) out.push(named(subscriptionSummary(s)));
     }
     return out.sort(order);
@@ -101,6 +104,8 @@ const afterCursor = (s, [kind, id]) => s.kind > kind || (s.kind === kind && s.id
 function filtersOf(query) {
     const project = typeof query.project === 'string' && query.project !== '' ? query.project : null;
     if (project && !PROJECT_ID_RE.test(project)) return { error: 'project must be a prj_ id' };
+    const owner = query.owner === undefined || query.owner === '' ? null : query.owner;
+    if (owner !== null && (typeof owner !== 'string' || !SUBJECT_ID_RE.test(owner))) return { error: 'owner must be a usr_ or agt_ id' };
     const kind = typeof query.kind === 'string' && query.kind !== '' ? query.kind : null;
     let limit = DEFAULT_LIMIT;
     if (typeof query.limit === 'string' && query.limit !== '') {
@@ -112,7 +117,7 @@ function filtersOf(query) {
         cursor = decodeCursor(query.cursor);
         if (!cursor) return { error: 'cursor is not one this index issued' };
     }
-    return { project, kind, limit, cursor };
+    return { project, kind, owner, limit, cursor };
 }
 
 function resourcesRouter({ store, auth }) {

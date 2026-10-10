@@ -499,9 +499,12 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
     /**
      * Every subscription of one project, for the authority resource index (server/api/resources.js): `?project=prj_…`
      * is its tenancy boundary, so a row of another project — or a project-less first-party one — is never returned.
+     * The optional consumer is the raw user subject used as the resource summary's owner id.
      */
-    async function listProjectSubscriptions(projectId) {
-        return await db.prepare('SELECT * FROM subscriptions WHERE project_id = ? ORDER BY id').all(projectId);
+    async function listProjectSubscriptions(projectId, consumer = null) {
+        return consumer
+            ? await db.prepare('SELECT * FROM subscriptions WHERE project_id = ? AND consumer = ? ORDER BY id').all(projectId, consumer)
+            : await db.prepare('SELECT * FROM subscriptions WHERE project_id = ? ORDER BY id').all(projectId);
     }
     /** Rotate a subscription's secret: the old one keeps signing (next to the new) until overlapMs from now. */
     async function rotateSubscriptionSecret(id, secret, overlapMs) {
