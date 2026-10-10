@@ -3,7 +3,9 @@
  * Pull consumers (service token with events.event.read):
  *
  *   GET /api/v1/events?topic=media.vod.*[,…]&after_seq=0&limit=100
- *       -> { events: [{ seq, cursor, event }], next_after_seq, next_cursor, latest_seq, gap? }
+ *       -> { events: [{ seq, cursor, event }], next_after_seq, next_cursor, latest_seq, latest_cursor, gap? }
+ *       `latest_cursor` is the head as an opaque cursor: a consumer that starts at "now" (skipping history)
+ *       stores it, so it never needs the numeric latest_seq.
  *       `after=` takes an opaque cursor beside after_seq (ADR-042 decision 7); a cursor from another
  *       retention epoch answers `gap` — never a silent restart. `gap` ({ from_seq, to_seq }) means
  *       events after the position were already pruned by retention (or the epoch changed). The pull
@@ -105,6 +107,7 @@ function readRouter({ store, auth, worker, limits }) {
         out.next_after_seq = scanned;
         out.next_cursor = cursor.encode(scanned, epoch);
         out.latest_seq = await store.lastSeq();
+        out.latest_cursor = cursor.encode(out.latest_seq, epoch);
         res.json(out);
     });
 
