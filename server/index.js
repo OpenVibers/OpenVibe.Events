@@ -12,7 +12,7 @@ const { openDb, createStore } = require('./store');
 const { createPolicyLibrary } = require('./fabric/policy');
 const { createCarriers } = require('./fabric/carriers');
 const { createPlanner } = require('./fabric/planner');
-const { createKeyStore, createAuth } = require('./auth');
+const { createKeys, createAuth } = require('./auth');
 const { createWorker } = require('./worker');
 const { createRealtime } = require('./realtime');
 const { createApp } = require('./app');
@@ -38,7 +38,7 @@ async function start({
     const carriers = createCarriers({ config, clock, log, valkey });
     const planner = createPlanner({ registry: carriers, db, clock, log });
     const store = createStore(db, { clock, maxHops: config.maxHops, usage: config.usage, policies, planner });
-    const keys = createKeyStore({ urls: [config.networkInternalUrl, config.networkUrl], pem: config.networkPublicKey, fetchImpl, log });
+    const keys = createKeys({ url: config.networkInternalUrl, pem: config.networkPublicKey, fetchImpl, log });
     const auth = createAuth({ config, keys, store });
     const metrics = createMetrics({ store });
     // appPost / dnsLookup: developer-app delivery and the subscribe-time DNS check (server/egress.js);

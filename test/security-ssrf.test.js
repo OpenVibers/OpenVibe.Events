@@ -215,7 +215,6 @@ const PATTERNS = {
     'net.connect': /\b(?:net|tls)\.(?:connect|createConnection)\s*\(/g,
 };
 const REVIEWED = {
-    'server/auth.js fetch': [1, 'the Network signing key: OV_NETWORK_INTERNAL_URL / OV_NETWORK_URL /api/.well-known/jwks (operator config)'],
     'server/worker.js fetch': [1, 'first-party deliveries: endpoints on the host allow-list (server/endpoints.js), checked again at delivery, redirect: manual'],
     'server/worker.js appPost': [1, 'developer-app deliveries: the guarded poster (server/egress.js), covered above'],
     'server/egress.js http.request': [1, 'the guarded poster\'s https.request (default requestImpl): its own lookup pins the checked address'],

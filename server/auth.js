@@ -3,8 +3,10 @@
  * Authentication and capability checks.
  *
  *   - Service principals: RS256 client-credentials tokens from OpenVibe.Network (audience
- *     openvibe.events), verified with openvibe-contracts serviceAuth.verifyServiceToken.
- *   - Browsers: Network user JWTs (RS256, same key), cookie `ov_token` or Bearer; or, on
+ *     openvibe.events), verified with openvibe-sdk/auth verifyServiceToken, which applies the pinned
+ *     openvibe-contracts serviceAuth rules with the key the token's kid names.
+ *   - Browsers: Network user JWTs (RS256, same key; openvibe-sdk/auth verifyUserToken, which refuses
+ *     service principals and typed tokens), cookie `ov_token` or Bearer; or, on
  *     /realtime/stream only, a realtime ticket (?ticket=): a two-minute, single-use RS256 JWT Network
  *     signs for the signed-in person (identity.realtime-ticket-claims@1, ADR-005 amendment 2), so a
  *     page on any OpenVibe site can open an EventSource without a third-party cookie. A ticket is
@@ -16,13 +18,19 @@
  *     (appOrService guard). Only there is a sandbox token (env=sandbox) accepted; every other route
  *     refuses it with token.sandbox_refused.
  *
+ * The key: Network's JWKS through openvibe-sdk/auth's process-wide client (the last good keys through a
+ * Network outage, a rotation honoured on an unknown kid), or a pinned PEM (OV_NETWORK_PUBLIC_KEY).
+ *
  * The service capabilities are in openvibe-contracts since v0.7; events.app.* arrive in v0.28.
  * capabilities.check() answers capability.unknown for an id the installed release does not know;
  * until then hasCap() decides with the same grant rule (exact id, or a `family.*` grant).
  */
 const crypto = require('crypto');
-const { serviceAuth, capabilities, http } = require('openvibe-contracts');
+const contracts = require('openvibe-contracts');
+const sdkAuth = require('openvibe-sdk/auth');
 const apps = require('./apps');
+
+const { capabilities, http } = contracts;
 
 /** The capability ids this service enforces. */
 const CAPS = Object.freeze({
@@ -41,62 +49,61 @@ const CAPS = Object.freeze({
 
 // ── Network public key ─────────────────────────────────────
 
+const JWKS_RETRY_MS = 30 * 1000;
+const JWKS_REFRESH_MS = 15 * 60 * 1000;
+
 /**
- * Loads the Network signing key from GET /api/.well-known/jwks ({ keys: [jwk] } or the older
- * { public_key: PEM }), retrying every 30 s until it loads and refreshing every 6 h after that.
- * A PEM given in config (OV_NETWORK_PUBLIC_KEY) is used as is and never fetched.
+ * Network's signing keys. With a PEM in config (OV_NETWORK_PUBLIC_KEY) that one key, never fetched. Otherwise
+ * <networkInternalUrl>/api/.well-known/jwks through openvibe-sdk/auth's process-wide JWKS client (the verifiers read
+ * the same client): start() retries every 30 s until the first load (Network may still be booting), then refreshes
+ * every 15 minutes; a token naming an unknown kid refetches at once (a rotation).
+ *
+ *   keys.verifyOptions   what the SDK verifiers take: { publicKey } or { jwks: url, fetch, log }
+ *   keys.keysFor(kid)    [{ kid, key }] to verify a realtime ticket with; throws when none has loaded
  */
-function createKeyStore({ urls = [], pem = null, fetchImpl = globalThis.fetch, log = console } = {}) {
-    let key = pem ? toPem(pem) : null;
+function createKeys({ url = null, pem = null, fetchImpl = globalThis.fetch, log = console } = {}) {
+    const pinned = pem ? crypto.createPublicKey(pem) : null;
+    const jwksUrl = pinned || !url ? null : `${url.replace(/\/+$/, '')}/api/.well-known/jwks`;
+    const client = jwksUrl ? sdkAuth.jwksClient(jwksUrl, { fetch: fetchImpl, log }) : null;
     let retryTimer = null;
-    let refreshTimer = null;
 
-    function toPem(value) {
-        return crypto.createPublicKey(value).export({ type: 'spki', format: 'pem' });
-    }
+    const loaded = () => Boolean(pinned) || Boolean(client && client.status().ready);
 
-    async function fetchOnce() {
-        for (const base of urls) {
-            if (!base) continue;
-            const url = `${base}/api/.well-known/jwks`;
-            try {
-                const res = await fetchImpl(url, { signal: AbortSignal.timeout(8000) });
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                const body = await res.json();
-                const jwk = (body.keys || []).find(k => k.kty === 'RSA');
-                if (jwk) key = toPem({ key: jwk, format: 'jwk' });
-                else if (typeof body.public_key === 'string' && body.public_key.includes('BEGIN')) key = toPem(body.public_key);
-                else throw new Error('no RSA key in response');
-                log.log(`[auth] Network public key loaded from ${base}`);
-                return key;
-            } catch (err) {
-                log.warn(`[auth] key fetch from ${url} failed: ${err.message}`);
-            }
-        }
-        return null;
+    /** One fetch now; the keys, or null (the client logged why). */
+    async function refresh() {
+        if (!client) return null;
+        try { return await client.refresh(); } catch { return null; }
     }
 
     async function start() {
-        if (pem) return Promise.resolve(key);
+        if (!client) return pinned;
+        client.start({ intervalMs: JWKS_REFRESH_MS });
         const attempt = async () => {
-            const k = await fetchOnce();
-            if (!k && !key) {
-                retryTimer = setTimeout(attempt, 30 * 1000);
+            retryTimer = null;
+            const got = await refresh();
+            if (!loaded()) {
+                retryTimer = setTimeout(attempt, JWKS_RETRY_MS);
                 retryTimer.unref?.();
             }
-            return k;
+            return got;
         };
-        refreshTimer = setInterval(() => { fetchOnce().catch(() => {}); }, 6 * 60 * 60 * 1000);
-        refreshTimer.unref?.();
         return await attempt();
     }
 
     function stop() {
         clearTimeout(retryTimer);
-        clearInterval(refreshTimer);
+        retryTimer = null;
+        if (client) client.stop();
     }
 
-    return { get: () => key, loaded: () => Boolean(key), start, stop, fetchOnce };
+    async function keysFor(kid) {
+        if (pinned) return [{ kid: null, key: pinned }];
+        if (!client) return [];
+        return await client.keysForKid(kid || null);
+    }
+
+    const verifyOptions = pinned ? { publicKey: pinned } : { jwks: jwksUrl, fetch: fetchImpl, log };
+    return { url: jwksUrl, loaded, start, stop, refresh, keysFor, verifyOptions };
 }
 
 // ── Capabilities ───────────────────────────────────────────
@@ -119,31 +126,6 @@ function allows(claims, id) {
 
 const b64json = (s) => JSON.parse(Buffer.from(String(s), 'base64url').toString('utf8'));
 
-/** Network user JWT (RS256). Returns claims or null. Service tokens are never accepted as users. */
-function verifyUserJwt(token, { publicKey, issuer, audiences, now = Date.now() }) {
-    if (!publicKey || typeof token !== 'string') return null;
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    try {
-        const header = b64json(parts[0]);
-        if (header.alg !== 'RS256') return null;
-        const ok = crypto.verify('RSA-SHA256', Buffer.from(`${parts[0]}.${parts[1]}`), publicKey, Buffer.from(parts[2], 'base64url'));
-        if (!ok) return null;
-        const claims = b64json(parts[1]);
-        const t = Math.floor(now / 1000);
-        if (typeof claims.exp !== 'number' || claims.exp + 30 < t) return null;
-        if (issuer && claims.iss !== issuer) return null;
-        const aud = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-        if (!aud.some(a => audiences.includes(a))) return null;
-        if (claims.actor_type || /^(svc|app|mod):/.test(String(claims.sub))) return null;
-        // A typed token (a realtime ticket, a FedCM assertion) is never a session.
-        if (claims.typ !== undefined || claims.purpose !== undefined) return null;
-        return claims;
-    } catch {
-        return null;
-    }
-}
-
 const TICKET_LIFETIME_MAX_S = 300;
 const TICKET_SKEW_S = 30;
 const SUBJECT_RE = /^usr_[0-9A-HJKMNP-TV-Z]{26}$/;
@@ -151,13 +133,14 @@ const TICKET_JTI_RE = /^rtk_[0-9a-f]{24}$/;
 
 /**
  * A realtime ticket (identity.realtime-ticket-claims@1). Returns { ok: true, claims } or
- * { ok: false, code, reason }. Checks the signature, iss (<issuer>/realtime), aud (openvibe.events),
- * typ and purpose (realtime), sub (a usr_ subject), jti, expiry and a lifetime of at most 300 s.
- * Single use is the caller's (createAuth keeps the jtis it accepted).
+ * { ok: false, code, reason }. Checks the signature (against `keys`, [{ kid, key }]: the one the ticket's kid
+ * names, else each), iss (<issuer>/realtime), aud (openvibe.events), typ and purpose (realtime), sub (a usr_
+ * subject), jti, expiry and a lifetime of at most 300 s. Single use is the caller's (createAuth keeps the jtis it
+ * accepted). Events is the one service that accepts these, so the check stays here rather than in the SDK.
  */
-function verifyRealtimeTicket(token, { publicKey, issuer, now = Date.now() }) {
+function verifyRealtimeTicket(token, { keys = [], issuer, now = Date.now() }) {
     const bad = (reason) => ({ ok: false, code: 'ticket.invalid', reason });
-    if (!publicKey) return { ok: false, code: 'token.unavailable', reason: 'signing key not loaded yet' };
+    if (!keys.length) return { ok: false, code: 'token.unavailable', reason: 'signing key not loaded yet' };
     if (typeof token !== 'string' || token.length > 4096) return bad('not a ticket');
     const parts = token.split('.');
     if (parts.length !== 3) return bad('not a ticket');
@@ -169,8 +152,12 @@ function verifyRealtimeTicket(token, { publicKey, issuer, now = Date.now() }) {
         return bad('not a ticket');
     }
     if (!header || header.alg !== 'RS256' || !claims || typeof claims !== 'object') return bad('not a ticket');
-    let signed = false;
-    try { signed = crypto.verify('RSA-SHA256', Buffer.from(`${parts[0]}.${parts[1]}`), publicKey, Buffer.from(parts[2], 'base64url')); } catch { signed = false; }
+    const byKid = header.kid ? keys.filter((k) => k.kid === header.kid) : [];
+    const input = Buffer.from(`${parts[0]}.${parts[1]}`);
+    const sig = Buffer.from(parts[2], 'base64url');
+    const signed = (byKid.length ? byKid : keys).some(({ key }) => {
+        try { return crypto.verify('RSA-SHA256', input, key, sig); } catch { return false; }
+    });
     if (!signed) return bad('signature does not verify');
     if (claims.iss !== `${issuer}/realtime`) return bad('not a realtime ticket (issuer)');
     if (claims.typ !== 'realtime' || claims.purpose !== 'realtime') return bad('not a realtime ticket (purpose)');
@@ -183,6 +170,11 @@ function verifyRealtimeTicket(token, { publicKey, issuer, now = Date.now() }) {
     if (claims.iat > t + TICKET_SKEW_S) return bad('issued in the future');
     if (claims.exp <= t) return { ok: false, code: 'ticket.expired', reason: 'the ticket expired; ask Network for a new one' };
     return { ok: true, claims };
+}
+
+/** The kid a JWT's header names, or null (never throws: an unreadable token simply has none). */
+function headerKid(token) {
+    try { return JSON.parse(Buffer.from(String(token).split('.')[0], 'base64url').toString('utf8')).kid || null; } catch { return null; }
 }
 
 function bearer(req) {
@@ -219,17 +211,18 @@ function createAuth({ config, keys, store = null }) {
     }
 
     // Token lifetimes are judged on wall-clock time, never on the worker's (injectable) clock.
-    function verifyService(token, { acceptSandbox = false } = {}) {
-        const publicKey = keys.get();
-        if (!publicKey) return { ok: false, code: 'token.unavailable', reason: 'signing key not loaded yet' };
-        const r = serviceAuth.verifyServiceToken(token, { publicKey, issuer: config.issuer, audience: config.audience, acceptSandbox });
-        // Belt and braces for a contracts release that does not know `env` yet.
-        if (r.ok && r.claims.env === 'sandbox' && !acceptSandbox) return { ok: false, code: 'token.sandbox_refused', reason: 'sandbox tokens are not accepted here' };
-        return r;
+    // → { ok: true, claims } | { ok: false, code, reason }; token.unavailable when no key has loaded (a 503).
+    async function verifyService(token, { acceptSandbox = false } = {}) {
+        return await sdkAuth.verifyServiceToken(token, { ...keys.verifyOptions, issuer: config.issuer, audience: config.audience, contracts, acceptSandbox });
     }
 
-    function verifyUser(token) {
-        return verifyUserJwt(token, { publicKey: keys.get(), issuer: config.issuer, audiences: config.userAudiences });
+    /** A person's session token → its claims, or null (service principals and typed tokens never are one). */
+    async function verifyUser(token) {
+        try {
+            return await sdkAuth.verifyUserToken(token, { ...keys.verifyOptions, issuer: config.issuer, audience: config.userAudiences });
+        } catch {
+            return null;
+        }
     }
 
     /**
@@ -238,10 +231,13 @@ function createAuth({ config, keys, store = null }) {
      */
     function requireCap(id, { requireService = false } = {}) {
         return function capGuard(req, res, next) {
+            capCheck(req, res, next).catch(next);
+        };
+        async function capCheck(req, res, next) {
             const ctx = req.ov;
             const token = bearer(req);
             if (!token) return http.sendProblem(res, 401, 'token.missing', { detail: 'a service token is required', ctx });
-            const r = verifyService(token);
+            const r = await verifyService(token);
             if (!r.ok) return http.sendProblem(res, r.code === 'token.unavailable' ? 503 : 401, r.code, { detail: r.reason, ctx });
             // Developer apps only ever act through events.app.* (appOrService); a first-party
             // capability in an app token is never honoured.
@@ -252,7 +248,7 @@ function createAuth({ config, keys, store = null }) {
             if (requireService && !service) return http.sendProblem(res, 403, 'capability.denied', { detail: 'only service principals may do this', ctx });
             req.principal = { kind: 'service', sub: r.claims.sub, service, cap: r.claims.cap, ns: r.claims.ns || [], jti: r.claims.jti };
             return next();
-        };
+        }
     }
 
     /**
@@ -263,11 +259,14 @@ function createAuth({ config, keys, store = null }) {
      */
     function appOrService(serviceCap, appCap, { requireService = false } = {}) {
         const serviceGuard = requireCap(serviceCap, { requireService });
-        return async function appOrServiceGuard(req, res, next) {
+        return function appOrServiceGuard(req, res, next) {
+            appCheck(req, res, next).catch(next);
+        };
+        async function appCheck(req, res, next) {
             const ctx = req.ov;
             const token = bearer(req);
             if (!token || !config.apps.enabled) return serviceGuard(req, res, next);
-            const r = verifyService(token, { acceptSandbox: true });
+            const r = await verifyService(token, { acceptSandbox: true });
             if (!r.ok || !/^app:/.test(String(r.claims.sub))) return serviceGuard(req, res, next);
             const principal = apps.appPrincipal(r.claims);
             if (principal.error) return http.sendProblem(res, 401, 'token.invalid_claims', { detail: principal.error, ctx });
@@ -278,7 +277,7 @@ function createAuth({ config, keys, store = null }) {
             if (!c.allowed) return http.sendProblem(res, 403, c.code, { detail: c.reason, ctx });
             req.principal = { ...principal, cap: r.claims.cap, jti: r.claims.jti, iat: r.claims.iat };
             return next();
-        };
+        }
     }
 
     /**
@@ -288,17 +287,20 @@ function createAuth({ config, keys, store = null }) {
      * then nothing else is looked at. A Bearer token must verify; an unverifiable cookie (expired
      * session) degrades to anonymous so the browser still gets public events. The ticket is never logged.
      */
-    function realtimeViewer(req) {
+    async function realtimeViewer(req) {
         const q = req.query || {};
         if (q.ticket !== undefined) {
-            const r = verifyRealtimeTicket(Array.isArray(q.ticket) ? null : q.ticket, { publicKey: keys.get(), issuer: config.issuer });
+            const ticket = Array.isArray(q.ticket) ? null : q.ticket;
+            let ticketKeys = [];
+            try { ticketKeys = await keys.keysFor(headerKid(ticket)); } catch { ticketKeys = []; }
+            const r = verifyRealtimeTicket(ticket, { keys: ticketKeys, issuer: config.issuer });
             if (!r.ok) return { error: { status: r.code === 'token.unavailable' ? 503 : 401, code: r.code, detail: r.reason } };
             if (!spendTicket(r.claims.jti, r.claims.exp)) return { error: { status: 401, code: 'ticket.used', detail: 'a ticket opens one stream; ask Network for a new one' } };
             return { kind: 'user', subjectId: r.claims.sub, sub: r.claims.sub, via: 'ticket' };
         }
         const token = bearer(req);
         if (token) {
-            const svc = verifyService(token);
+            const svc = await verifyService(token);
             if (svc.ok) {
                 // Only a first-party service principal is a service viewer: a developer app (or any
                 // non-svc principal) never is, whatever capabilities its token carries (as in requireCap).
@@ -308,12 +310,12 @@ function createAuth({ config, keys, store = null }) {
                 return { kind: 'service', sub: svc.claims.sub };
             }
             if (svc.code === 'token.unavailable') return { error: { status: 503, code: svc.code, detail: svc.reason } };
-            const user = verifyUser(token);
+            const user = await verifyUser(token);
             if (user) return userViewer(user);
             return { error: { status: 401, code: 'token.invalid', detail: 'token does not verify' } };
         }
         const fromCookie = cookie(req, 'ov_token');
-        const user = fromCookie ? verifyUser(fromCookie) : null;
+        const user = fromCookie ? await verifyUser(fromCookie) : null;
         if (user) return userViewer(user);
         return { kind: 'anonymous' };
     }
@@ -326,4 +328,4 @@ function createAuth({ config, keys, store = null }) {
     return { verifyService, verifyUser, requireCap, appOrService, realtimeViewer };
 }
 
-module.exports = { CAPS, createKeyStore, createAuth, hasCap, allows, verifyUserJwt, verifyRealtimeTicket, serviceSlug, bearer, cookie };
+module.exports = { CAPS, createKeys, createAuth, hasCap, allows, verifyRealtimeTicket, serviceSlug, bearer, cookie };
