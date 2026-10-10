@@ -158,7 +158,7 @@ t('deploy/nginx/openvibe.events.conf is the API and product origin, with no redi
     assert.ok(conf.includes('location /api/ {'), 'the /api/ refusal block');
     assert.ok(conf.includes('proxy_buffering off;'), 'SSE is not buffered');
     assert.ok(conf.includes('proxy_read_timeout 1h;'), 'SSE keeps its long read timeout');
-    const refusals = [conf.indexOf('location = /metrics { return 404; }'), conf.indexOf('location /internal/ { return 404; }')];
+    const refusals = [conf.indexOf('location ~* ^/metrics(/|$) { return 404; }'), conf.indexOf('location ~* ^/internal(/|$) { return 404; }')];
     assert.ok(refusals.every((i) => i >= 0), 'metrics and /internal/ are refused');
     assert.ok(!conf.includes('events.openvibe.network$request_uri'), 'no catch-all redirect to the old API host');
     const old = fs.readFileSync(path.join(__dirname, '..', 'deploy', 'nginx', 'events.openvibe.network.conf'), 'utf8')
