@@ -119,7 +119,7 @@ function createRealtime({ store, auth, config, clock = { now: () => Date.now() }
         const bad = wanted.find(t => !topics.isValidPattern(t));
         if (bad) return http.sendProblem(res, 400, 'realtime.bad_topic', { detail: `invalid topic pattern ${bad}`, ctx });
 
-        const viewer = auth.realtimeViewer(req);
+        const viewer = await auth.realtimeViewer(req);
         if (viewer.error) return http.sendProblem(res, viewer.error.status, viewer.error.code, { detail: viewer.error.detail, ctx });
         if (viewer.kind === 'anonymous' && !opts.allowAnonymous) {
             return http.sendProblem(res, 401, 'token.missing', { detail: 'sign in to open a realtime stream', ctx });

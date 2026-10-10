@@ -149,14 +149,16 @@ t('stop', async () => { await h.stop(); });
 t('key loader: JWKS {keys:[jwk]} and legacy {public_key}; ready is 503 until it loads', async () => {
     const jwk = crypto.createPublicKey(publicKey).export({ format: 'jwk' });
     let shape = 'none';
-    const net = nodeHttp.createServer((req, res) => {
-        if (req.url !== '/api/.well-known/jwks' || shape === 'none') { res.statusCode = 503; return res.end(); }
-        res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify(shape === 'jwks' ? { keys: [{ ...jwk, alg: 'RS256', kid: 'k1' }] } : { public_key: publicKey, algorithm: 'RS256' }));
-    });
-    await new Promise(r => net.listen(0, '127.0.0.1', r));
-    const url = `http://127.0.0.1:${net.address().port}`;
+    // One Network per shape: openvibe-sdk/auth keeps one JWKS client per URL for the process, so a second boot on
+    // the same URL would start with the first one's keys (as a restarted verifier in one process should).
     for (const s of ['jwks', 'pem']) {
+        const net = nodeHttp.createServer((req, res) => {
+            if (req.url !== '/api/.well-known/jwks' || shape === 'none') { res.statusCode = 503; return res.end(); }
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify(shape === 'jwks' ? { keys: [{ ...jwk, alg: 'RS256', kid: 'k1' }] } : { public_key: publicKey, algorithm: 'RS256' }));
+        });
+        await new Promise(r => net.listen(0, '127.0.0.1', r));
+        const url = `http://127.0.0.1:${net.address().port}`;
         shape = 'none';
         const x = await boot({ env: { OV_NETWORK_PUBLIC_KEY: '', OV_NETWORK_INTERNAL_URL: url, OV_NETWORK_URL: url, OV_NETWORK_ISSUER: 'https://openvibe.network' }, worker: 'on' });
         await x.keyLoaded;
@@ -167,14 +169,62 @@ t('key loader: JWKS {keys:[jwk]} and legacy {public_key}; ready is 503 until it 
         r = await request(x.base, 'POST', '/api/v1/events', { token: live, body: envelope() });
         assert.strictEqual(r.status, 503, 'no key yet: service unavailable, not unauthorized');
         shape = s;
-        await x.keys.fetchOnce();
+        await x.keys.refresh();
         r = await request(x.base, 'GET', '/api/ready');
         assert.strictEqual(r.status, 200, s);
         r = await request(x.base, 'POST', '/api/v1/events', { token: live, body: envelope() });
         assert.strictEqual(r.status, 201, s);
         await x.stop();
+        net.close();
     }
-    net.close();
+    await sleep(10);
+});
+
+t('key rotation: a token naming a new kid verifies after one refetch; an unpublished key never does', async () => {
+    const pair = () => crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const k1 = pair(); const k2 = pair(); const rogue = pair();
+    const jwkOf = (k, kid) => ({ ...k.publicKey.export({ format: 'jwk' }), alg: 'RS256', use: 'sig', kid });
+    // Network's tokens carry the kid of the key that signed them.
+    const sign = (k, kid) => {
+        const now = Math.floor(Date.now() / 1000);
+        const enc = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+        const input = `${enc({ alg: 'RS256', typ: 'JWT', kid })}.${enc({
+            iss: 'https://openvibe.network', sub: 'svc:live', actor_type: 'service', aud: ['openvibe.events'], cap: ['events.event.publish'], ns: [],
+            iat: now, exp: now + 300, jti: `tok_${crypto.randomBytes(8).toString('hex')}`,
+        })}`;
+        return `${input}.${crypto.sign('RSA-SHA256', Buffer.from(input), k.privateKey).toString('base64url')}`;
+    };
+    let published = [jwkOf(k1, 'k1')];
+    let fetches = 0;
+    const net = nodeHttp.createServer((req, res) => {
+        if (req.url !== '/api/.well-known/jwks') { res.statusCode = 404; return res.end(); }
+        fetches++;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ keys: published }));
+    });
+    await new Promise(r => net.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${net.address().port}`;
+    const x = await boot({ env: { OV_NETWORK_PUBLIC_KEY: '', OV_NETWORK_INTERNAL_URL: url, OV_NETWORK_URL: url, OV_NETWORK_ISSUER: 'https://openvibe.network' } });
+    await x.keyLoaded;
+    try {
+        let r = await request(x.base, 'POST', '/api/v1/events', { token: sign(k1, 'k1'), body: envelope() });
+        assert.strictEqual(r.status, 201, JSON.stringify(r.body));
+        const before = fetches;
+        published = [jwkOf(k2, 'k2'), jwkOf(k1, 'k1')];
+        r = await request(x.base, 'POST', '/api/v1/events', { token: sign(k2, 'k2'), body: envelope() });
+        assert.strictEqual(r.status, 201, `the rotated key verifies: ${JSON.stringify(r.body)}`);
+        assert.strictEqual(fetches, before + 1, 'one refetch for the unknown kid');
+        r = await request(x.base, 'POST', '/api/v1/events', { token: sign(k1, 'k1'), body: envelope() });
+        assert.strictEqual(r.status, 201, 'the old key still verifies while Network publishes it');
+        r = await request(x.base, 'POST', '/api/v1/events', { token: sign(rogue, 'k9'), body: envelope() });
+        assert.strictEqual(r.status, 401, 'a key Network never published');
+        assert.strictEqual(r.body.code, 'token.bad_signature');
+        r = await request(x.base, 'POST', '/api/v1/events', { token: sign(rogue, 'k1'), body: envelope() });
+        assert.strictEqual(r.status, 401, 'a published kid with another key behind it');
+    } finally {
+        await x.stop();
+        net.close();
+    }
     await sleep(10);
 });
 
