@@ -31,7 +31,10 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
     // Inventory (OpenVibe.Inventory, ADR-054): inventory.item.granted|equipped|consumed|revoked, inventory.definition.published
     'inventory',
     // Services (OpenVibe.Services, the developer console): its services.* events
-    'services'];
+    'services',
+    // Record products that put their pages in OpenVibe.Search (openvibe-publishing/search-feed):
+    // work.index_document.*, rent.index_document.*, help.index_document.*, quest.index_document.*
+    'work', 'rent', 'help', 'quest'];
 
 /**
  * Namespaces that belong to the network rather than to one service. `provider.*` carries storage
