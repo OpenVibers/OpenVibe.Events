@@ -57,7 +57,7 @@ t('deliveries feed the latency histogram and attempt counter; a dead one degrade
 t('/metrics: loopback only, templates not ids, Events gauges', async () => {
     const id = (await h.db.prepare('SELECT id FROM events ORDER BY seq LIMIT 1').get()).id;
     await request(h.base, 'GET', `/api/v1/events/${id}`, { token: reader });
-    await request(h.base, 'GET', '/api/v1/events?topic=live.*&after_seq=0', { token: reader });
+    await request(h.base, 'GET', '/api/v1/events?topic=live.*', { token: reader });
     await request(h.base, 'GET', '/no/such/12345');
     let m = await get(h.base, '/metrics', { 'X-Forwarded-For': '203.0.113.7' });
     assert.strictEqual(m.status, 404, 'through a proxy: not found');

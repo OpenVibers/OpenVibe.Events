@@ -12,7 +12,7 @@ const { limitsOf } = require('../server/limits');
 const { createStore } = require('../server/store');
 const { exportMonth, restoreMonth, objectKey, manifestKey } = require('../scripts/events-archive');
 const { localStorage, s3Storage, fromEnv, signV4 } = require('../scripts/archive-storage');
-const { boot, request, serviceToken, appToken, envelope, sse, suite, tmpDir } = require('./helpers');
+const { boot, request, serviceToken, appToken, envelope, sse, suite, tmpDir, cursorAt } = require('./helpers');
 
 const t = suite('archive');
 const DAY = 86400000;
@@ -44,7 +44,7 @@ t('a hot-pruned event is readable through replay: by id and by pull, unchanged',
     const after = await request(h.base, 'GET', `/api/v1/events/${e.event_id}`, { token: reader });
     assert.strictEqual(after.status, 200, after.text);
     assert.deepStrictEqual(after.body, before.body, 'the same seq, cursor and envelope from the replay tier');
-    const p = await pull('topic=live.tier.one&after_seq=0');
+    const p = await pull('topic=live.tier.one');
     assert.deepStrictEqual(p.body.events.map(x => x.event), [before.body.event]);
     assert.strictEqual(p.body.gap, undefined);
     // A publish of the same id is a duplicate with its position, never a second row.
@@ -65,7 +65,7 @@ t('a cursor across the hot/replay boundary reports no false gap (pull and SSE)',
     assert.strictEqual(r.body.events[0].cursor, b.cursor);
     r = await pull(`topic=live.tier.cross&after=${r.body.next_cursor}&limit=1`);
     assert.deepStrictEqual([r.body.events.map(x => x.seq), r.body.gap], [[c.seq], undefined], 'then hot, no gap between');
-    r = await pull(`topic=*&after_seq=${a.seq - 1}`);
+    r = await pull(`topic=*&after=${await cursorAt(h, a.seq - 1)}`);
     assert.deepStrictEqual(r.body.events.map(x => x.seq), [a.seq, b.seq, c.seq]);
     assert.strictEqual(r.body.gap, undefined);
 
@@ -92,7 +92,7 @@ t('redaction reaches replay rows (by id and by subject); the owner rule holds th
         assert.deepStrictEqual(r.body.event.actor, { type: 'service', id: 'live' });
         assert.strictEqual(r.body.seq, e.seq);
     }
-    const p = await pull('topic=live.tier.secret&after_seq=0');
+    const p = await pull('topic=live.tier.secret');
     assert.ok(p.body.events.every(e => e.event.payload.redacted === true && !('secret' in e.event.payload)));
 });
 
@@ -108,11 +108,11 @@ t('sandbox and environment rules apply to replay rows exactly as to hot ones', a
     await h.store.prune(tiered(31, { sandboxRetentionDays: 7 }));
     assert.deepStrictEqual([await count('events_archive', pe.event_id), await count('events_archive', se.event_id), await count('events', se.event_id)], [1, 0, 0],
         'a production event moves; a sandbox event is deleted, never kept in replay');
-    const topic = `topic=app.${apps.projectKey(prj)}.*&after_seq=0`;
+    const topic = `topic=app.${apps.projectKey(prj)}.*`;
     assert.deepStrictEqual((await pull(topic, prod)).body.events.map(e => e.seq), [pe.seq], 'the app reads its own replay rows');
     assert.deepStrictEqual((await pull(topic, sand)).body.events, [], 'never across environments');
     assert.deepStrictEqual((await pull(topic)).body.events.map(e => e.seq), [pe.seq], 'first-party: production app events through app.*');
-    assert.deepStrictEqual((await pull('topic=*&after_seq=0')).body.events.filter(e => e.event.event_id === pe.event_id), [], '…and only through app.*');
+    assert.deepStrictEqual((await pull('topic=*')).body.events.filter(e => e.event.event_id === pe.event_id), [], '…and only through app.*');
     assert.strictEqual((await request(h.base, 'GET', `/api/v1/events/${pe.event_id}`, { token: sand })).status, 404);
     assert.strictEqual((await request(h.base, 'GET', `/api/v1/events/${pe.event_id}`, { token: prod })).status, 200);
 });
@@ -148,7 +148,7 @@ t('export → restore round-trips byte-identical rows; the rows leave replay onl
     assert.strictEqual(lines.length, inMonth.length);
     assert.strictEqual(JSON.parse(await storage.get(manifestKey(month))).count, inMonth.length);
     assert.strictEqual((await request(h.base, 'GET', `/api/v1/events/${inMonth[0].id}`, { token: reader })).status, 404, 'the archive tier is offline');
-    const gapped = await pull(`topic=*&after_seq=0`);
+    const gapped = await pull(`topic=*&after=${await cursorAt(h, 0)}`);
     assert.ok(gapped.body.gap, 'a cursor into what went to the archive tier is a gap');
 
     // A rerun is idempotent: the object keeps its rows, nothing is deleted twice.

@@ -94,6 +94,9 @@ async function boot({ env = {}, clock = manualClock(), worker = 'manual', fetchI
     };
 }
 
+/** Events' opaque cursor for a position in this boot's store (tests build positions the way Events hands them out). */
+async function cursorAt(h, seq) { return require('../server/cursor').encode(seq, await h.store.epoch()); }
+
 async function request(base, method, p, { token, body, headers = {}, raw } = {}) {
     const h = { ...headers };
     if (token) h.Authorization = `Bearer ${token}`;
@@ -216,5 +219,5 @@ function suite(name) {
 
 module.exports = {
     ISSUER, privateKey, publicKey, silent, serviceToken, appToken, userToken, realtimeTicket, manualClock, tmpDir, boot, request,
-    envelope, subscriber, sse, sleep, suite,
+    envelope, subscriber, sse, sleep, suite, cursorAt,
 };

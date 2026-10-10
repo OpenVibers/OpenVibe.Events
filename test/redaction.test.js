@@ -14,7 +14,7 @@ const path = require('path');
 const { ids } = require('openvibe-contracts');
 const apps = require('../server/apps');
 const { parseDirective } = require('../server/redaction');
-const { boot, request, serviceToken, userToken, appToken, envelope, subscriber, sse, sleep, suite } = require('./helpers');
+const { boot, request, serviceToken, userToken, appToken, envelope, subscriber, sse, sleep, suite, cursorAt } = require('./helpers');
 
 const t = suite('redaction');
 let h;
@@ -97,7 +97,7 @@ t('before deletion the message is replayable (the leak as it was)', async () => 
     const env = created(101);
     msgEventId = env.event_id;
     msgSeq = (await publish(chat, env)).seq;
-    const anon = await stream('topics=chat.message.*', { 'Last-Event-ID': String(msgSeq - 1) });
+    const anon = await stream('topics=chat.message.*', { 'Last-Event-ID': await cursorAt(h, msgSeq - 1) });
     await anon.waitFor(c => c.events().length === 1);
     assert.strictEqual(anon.events()[0].event.payload.text, SECRET_TEXT);
     anon.close();
@@ -119,7 +119,7 @@ t('chat.message.deleted turns the stored event into a tombstone at the same seq'
 });
 
 t('anonymous SSE replay: the tombstone, never the text', async () => {
-    const anon = await stream('topics=chat.message.*', { 'Last-Event-ID': String(msgSeq - 1) });
+    const anon = await stream('topics=chat.message.*', { 'Last-Event-ID': await cursorAt(h, msgSeq - 1) });
     await anon.waitFor(c => c.events().length === 2);
     const [a, b] = anon.events();
     assert.deepStrictEqual([a.seq, b.seq], [msgSeq, delSeq], 'sequence intact');
@@ -130,9 +130,9 @@ t('anonymous SSE replay: the tombstone, never the text', async () => {
 });
 
 t('signed-in SSE replay (cookie and Bearer) and service replay: the tombstone too', async () => {
-    const byCookie = await stream('topics=chat.message.*', { Cookie: `ov_token=${userToken({ subjectId: alice })}`, 'Last-Event-ID': String(msgSeq - 1) });
-    const byBearer = await stream('topics=chat.*', { Authorization: `Bearer ${userToken()}`, 'Last-Event-ID': String(msgSeq - 1) });
-    const svc = await stream('topics=chat.message.*', { Authorization: `Bearer ${serviceToken('search', ['events.event.read'])}`, 'Last-Event-ID': String(msgSeq - 1) });
+    const byCookie = await stream('topics=chat.message.*', { Cookie: `ov_token=${userToken({ subjectId: alice })}`, 'Last-Event-ID': await cursorAt(h, msgSeq - 1) });
+    const byBearer = await stream('topics=chat.*', { Authorization: `Bearer ${userToken()}`, 'Last-Event-ID': await cursorAt(h, msgSeq - 1) });
+    const svc = await stream('topics=chat.message.*', { Authorization: `Bearer ${serviceToken('search', ['events.event.read'])}`, 'Last-Event-ID': await cursorAt(h, msgSeq - 1) });
     for (const c of [byCookie, byBearer, svc]) {
         await c.waitFor(x => x.events().length === 2);
         assert.deepStrictEqual(c.events().map(e => e.seq), [msgSeq, delSeq]);
@@ -143,7 +143,7 @@ t('signed-in SSE replay (cookie and Bearer) and service replay: the tombstone to
 });
 
 t('pull (/api/v1/events), by id, and developer-app reads: the tombstone', async () => {
-    let r = await request(h.base, 'GET', `/api/v1/events?topic=chat.message.*&after_seq=${msgSeq - 1}`, { token: reader });
+    let r = await request(h.base, 'GET', `/api/v1/events?topic=chat.message.*&after=${await cursorAt(h, msgSeq - 1)}`, { token: reader });
     assert.strictEqual(r.status, 200);
     assert.deepStrictEqual(r.body.events.map(e => e.seq), [msgSeq, delSeq], 'no hole in the sequence');
     assertTombstone(r.body.events[0].event, delEventId);
@@ -151,7 +151,7 @@ t('pull (/api/v1/events), by id, and developer-app reads: the tombstone', async 
     assertTombstone(r.body.event, delEventId);
     assert.strictEqual(r.body.seq, msgSeq);
     const app = appToken({ env: 'production', cap: ['events.app.read'] });
-    r = await request(h.base, 'GET', `/api/v1/events?topic=chat.*&after_seq=${msgSeq - 1}`, { token: app });
+    r = await request(h.base, 'GET', `/api/v1/events?topic=chat.*&after=${await cursorAt(h, msgSeq - 1)}`, { token: app });
     assert.strictEqual(r.status, 200, r.text);
     assert.deepStrictEqual(r.body.events.map(e => e.seq), [msgSeq, delSeq]);
     assertTombstone(r.body.events[0].event, delEventId);
@@ -272,7 +272,7 @@ t('public replay window: browsers get a gap for public events older than 5 minut
         const recent = await post(chat, created(2));
         const topics = 'topics=chat.message.*,network.notification.*';
 
-        const anon = await sse(w.base, `/realtime/stream?${topics}`, { headers: { 'Last-Event-ID': String(oldPublic - 1) } });
+        const anon = await sse(w.base, `/realtime/stream?${topics}`, { headers: { 'Last-Event-ID': await cursorAt(w, oldPublic - 1) } });
         await anon.waitFor(c => c.events().length === 1);
         assert.deepStrictEqual(anon.events().map(e => e.seq), [recent]);
         const gap = anon.gaps()[0];
@@ -280,16 +280,16 @@ t('public replay window: browsers get a gap for public events older than 5 minut
         assert.deepStrictEqual([gap.from_seq, gap.to_seq, gap.window_seconds], [oldPublic, recent - 1, 300]);
         assert.ok(anon.messages.findIndex(m => m.event === 'gap') < anon.messages.findIndex(m => !m.event), 'gap first');
 
-        const user = await sse(w.base, `/realtime/stream?${topics}`, { headers: { Cookie: `ov_token=${userToken({ subjectId: alice })}`, 'Last-Event-ID': String(oldPublic - 1) } });
+        const user = await sse(w.base, `/realtime/stream?${topics}`, { headers: { Cookie: `ov_token=${userToken({ subjectId: alice })}`, 'Last-Event-ID': await cursorAt(w, oldPublic - 1) } });
         await user.waitFor(c => c.events().length === 2);
         assert.deepStrictEqual(user.events().map(e => e.seq), [oldMine, recent], 'own subject events keep the whole retention; old public ones do not');
         assert.strictEqual(user.gaps()[0].reason, 'public_window');
 
-        const svc = await sse(w.base, `/realtime/stream?${topics}`, { headers: { Authorization: `Bearer ${serviceToken('search', ['events.event.read'])}`, 'Last-Event-ID': String(oldPublic - 1) } });
+        const svc = await sse(w.base, `/realtime/stream?${topics}`, { headers: { Authorization: `Bearer ${serviceToken('search', ['events.event.read'])}`, 'Last-Event-ID': await cursorAt(w, oldPublic - 1) } });
         await svc.waitFor(c => c.events().length === 3);
         assert.deepStrictEqual(svc.gaps(), [], 'services are not windowed');
 
-        const fresh = await sse(w.base, `/realtime/stream?${topics}`, { headers: { 'Last-Event-ID': String(recent - 1) } });
+        const fresh = await sse(w.base, `/realtime/stream?${topics}`, { headers: { 'Last-Event-ID': await cursorAt(w, recent - 1) } });
         await fresh.waitFor(c => c.events().length === 1);
         assert.deepStrictEqual(fresh.gaps(), [], 'a reconnect inside the window is seamless');
         for (const c of [anon, user, svc, fresh]) c.close();
@@ -297,7 +297,7 @@ t('public replay window: browsers get a gap for public events older than 5 minut
         const none = await boot({ env: { REALTIME_PUBLIC_REPLAY_SECONDS: '0' } });
         try {
             const s = await (async () => (await request(none.base, 'POST', '/api/v1/events', { token: chat, body: created(3) })).body.seq)();
-            const c = await sse(none.base, '/realtime/stream?topics=chat.message.*', { headers: { 'Last-Event-ID': String(s - 1) } });
+            const c = await sse(none.base, '/realtime/stream?topics=chat.message.*', { headers: { 'Last-Event-ID': await cursorAt(none, s - 1) } });
             await c.waitFor(x => x.gaps().length === 1);
             await sleep(50);
             assert.deepStrictEqual(c.events(), [], 'window 0: no public replay at all');

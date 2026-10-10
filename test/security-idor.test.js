@@ -13,7 +13,7 @@
 // positive controls show each route works for its owner.
 //   node test/security-idor.test.js
 const assert = require('assert');
-const { suite, appToken, envelope, request } = require('./helpers');
+const { suite, appToken, envelope, request, cursorAt } = require('./helpers');
 const { buildWorld, ALL } = require('./security-world');
 const apps = require('../server/apps');
 
@@ -116,7 +116,7 @@ t('deliveries, replay and checkpoints across consumers', async () => {
     }
     // Checkpoints of another project's pattern.
     for (const [token, topic] of [[tok.appA, `app.${ids.keyB}.*`], [tok.appB, `app.${ids.keyA}.*`], [tok.appA, '*']]) {
-        const r = await request(w.base, 'PUT', '/api/v1/checkpoints', { token, body: { topic, cursor: 99 } });
+        const r = await request(w.base, 'PUT', '/api/v1/checkpoints', { token, body: { topic, cursor: await cursorAt(w.h, 99) } });
         if (r.status !== 403) bad.push(`checkpoint ${topic} → ${r.status}`);
     }
     assert.deepStrictEqual(bad, [], bad.join('\n'));

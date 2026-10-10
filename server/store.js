@@ -724,13 +724,14 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
 
     /**
      * A checkpoint is a cursor in parts: `cursor` is the numeric position, `epoch` the retention epoch it belongs to
-     * and `carrier` the carrier that position is on (ADR-042 decision 7). `cursor` stays numeric on the wire.
+     * and `carrier` the carrier that position is on (ADR-042 decision 7). The wire only ever carries the opaque cursor
+     * these parts make (server/api/read.js).
      */
     async function getCheckpoint(consumer, topicPattern) {
         const r = await db.prepare('SELECT cursor, epoch, carrier, updated_at FROM consumer_checkpoints WHERE consumer = ? AND topic_pattern = ?').get(consumer, topicPattern);
         return r ? { cursor: r.cursor, epoch: r.epoch, carrier: r.carrier || null, updated_at: new Date(r.updated_at).toISOString() } : null;
     }
-    /** Store a position. `epoch` defaults to the current retention epoch (a legacy numeric cursor). */
+    /** Store a position (decoded from a cursor). `epoch` defaults to the current retention epoch. */
     async function setCheckpoint(consumer, topicPattern, position, { epoch: atEpoch = null, carrier = null } = {}) {
         const at = atEpoch == null ? await epoch() : atEpoch;
         await db.prepare(`INSERT INTO consumer_checkpoints (consumer, topic_pattern, cursor, epoch, carrier, updated_at) VALUES (?, ?, ?, ?, ?, ?)

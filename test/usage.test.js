@@ -102,7 +102,7 @@ t('after the hour: one events.usage.recorded per rollup, valid, internal, delive
 });
 
 t('apps never see the rollups', async () => {
-    const r = await request(h.base, 'GET', '/api/v1/events?topic=events.*&after_seq=0', { token });
+    const r = await request(h.base, 'GET', '/api/v1/events?topic=events.*', { token });
     assert.strictEqual(r.status, 200);
     assert.strictEqual(r.body.events.length, 0);
 });
