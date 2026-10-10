@@ -161,6 +161,11 @@ t('deploy/nginx/openvibe.events.conf is the API and product origin, with no redi
     const refusals = [conf.indexOf('location ~* ^/metrics(/|$) { return 404; }'), conf.indexOf('location ~* ^/internal(/|$) { return 404; }')];
     assert.ok(refusals.every((i) => i >= 0), 'metrics and /internal/ are refused');
     assert.ok(!conf.includes('events.openvibe.network$request_uri'), 'no catch-all redirect to the old API host');
+    // The catch-all hands GET/HEAD to the app (its /favicon.ico and its own 404 page with lang), never other methods.
+    const catchAll = conf.slice(conf.lastIndexOf('    location / {'));
+    assert.match(catchAll, /limit_except GET HEAD \{ deny all; \}/, 'the catch-all only passes GET and HEAD');
+    assert.match(catchAll, /proxy_pass http:\/\/127\.0\.0\.1:4300;/, 'and lets the app answer (favicon, 404 page)');
+    assert.ok(!/location \/ \{ return 404; \}/.test(conf), 'nginx\'s bare 404 page (no lang) is gone');
     const old = fs.readFileSync(path.join(__dirname, '..', 'deploy', 'nginx', 'events.openvibe.network.conf'), 'utf8')
         .split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     assert.ok(!old.includes('proxy_pass'), 'events.openvibe.network serves nothing itself');
