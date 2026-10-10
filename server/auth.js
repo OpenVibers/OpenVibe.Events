@@ -18,8 +18,9 @@
  *     (appOrService guard). Only there is a sandbox token (env=sandbox) accepted; every other route
  *     refuses it with token.sandbox_refused.
  *
- * The key: Network's JWKS through openvibe-sdk/auth's process-wide client (the last good keys through a
- * Network outage, a rotation honoured on an unknown kid), or a pinned PEM (OV_NETWORK_PUBLIC_KEY).
+ * The keys: openvibe-sdk/auth createNetworkKeys (server/index.js): Network's JWKS (the last good keys through a
+ * Network outage, a rotation honoured on an unknown kid, retried every 30 s until the first load), or a pinned
+ * PEM (OV_NETWORK_PUBLIC_KEY).
  *
  * The service capabilities are in openvibe-contracts since v0.7; events.app.* arrive in v0.28.
  * capabilities.check() answers capability.unknown for an id the installed release does not know;
@@ -46,65 +47,6 @@ const CAPS = Object.freeze({
     // below only covers an id the installed contracts do not know yet.
     resourceRead: 'events.resource.read',
 });
-
-// ── Network public key ─────────────────────────────────────
-
-const JWKS_RETRY_MS = 30 * 1000;
-const JWKS_REFRESH_MS = 15 * 60 * 1000;
-
-/**
- * Network's signing keys. With a PEM in config (OV_NETWORK_PUBLIC_KEY) that one key, never fetched. Otherwise
- * <networkInternalUrl>/api/.well-known/jwks through openvibe-sdk/auth's process-wide JWKS client (the verifiers read
- * the same client): start() retries every 30 s until the first load (Network may still be booting), then refreshes
- * every 15 minutes; a token naming an unknown kid refetches at once (a rotation).
- *
- *   keys.verifyOptions   what the SDK verifiers take: { publicKey } or { jwks: url, fetch, log }
- *   keys.keysFor(kid)    [{ kid, key }] to verify a realtime ticket with; throws when none has loaded
- */
-function createKeys({ url = null, pem = null, fetchImpl = globalThis.fetch, log = console } = {}) {
-    const pinned = pem ? crypto.createPublicKey(pem) : null;
-    const jwksUrl = pinned || !url ? null : `${url.replace(/\/+$/, '')}/api/.well-known/jwks`;
-    const client = jwksUrl ? sdkAuth.jwksClient(jwksUrl, { fetch: fetchImpl, log }) : null;
-    let retryTimer = null;
-
-    const loaded = () => Boolean(pinned) || Boolean(client && client.status().ready);
-
-    /** One fetch now; the keys, or null (the client logged why). */
-    async function refresh() {
-        if (!client) return null;
-        try { return await client.refresh(); } catch { return null; }
-    }
-
-    async function start() {
-        if (!client) return pinned;
-        client.start({ intervalMs: JWKS_REFRESH_MS });
-        const attempt = async () => {
-            retryTimer = null;
-            const got = await refresh();
-            if (!loaded()) {
-                retryTimer = setTimeout(attempt, JWKS_RETRY_MS);
-                retryTimer.unref?.();
-            }
-            return got;
-        };
-        return await attempt();
-    }
-
-    function stop() {
-        clearTimeout(retryTimer);
-        retryTimer = null;
-        if (client) client.stop();
-    }
-
-    async function keysFor(kid) {
-        if (pinned) return [{ kid: null, key: pinned }];
-        if (!client) return [];
-        return await client.keysForKid(kid || null);
-    }
-
-    const verifyOptions = pinned ? { publicKey: pinned } : { jwks: jwksUrl, fetch: fetchImpl, log };
-    return { url: jwksUrl, loaded, start, stop, refresh, keysFor, verifyOptions };
-}
 
 // ── Capabilities ───────────────────────────────────────────
 
@@ -328,4 +270,4 @@ function createAuth({ config, keys, store = null }) {
     return { verifyService, verifyUser, requireCap, appOrService, realtimeViewer };
 }
 
-module.exports = { CAPS, createKeys, createAuth, hasCap, allows, verifyRealtimeTicket, serviceSlug, bearer, cookie };
+module.exports = { CAPS, createAuth, hasCap, allows, verifyRealtimeTicket, serviceSlug, bearer, cookie };
