@@ -166,10 +166,7 @@ t('deploy/nginx/openvibe.events.conf is the API and product origin, with no redi
     assert.match(catchAll, /limit_except GET HEAD \{ deny all; \}/, 'the catch-all only passes GET and HEAD');
     assert.match(catchAll, /proxy_pass http:\/\/127\.0\.0\.1:4300;/, 'and lets the app answer (favicon, 404 page)');
     assert.ok(!/location \/ \{ return 404; \}/.test(conf), 'nginx\'s bare 404 page (no lang) is gone');
-    const old = fs.readFileSync(path.join(__dirname, '..', 'deploy', 'nginx', 'events.openvibe.network.conf'), 'utf8')
-        .split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
-    assert.ok(!old.includes('proxy_pass'), 'events.openvibe.network serves nothing itself');
-    assert.strictEqual((old.match(/return 308 https:\/\/openvibe\.events\$request_uri;/g) || []).length, 2, 'HTTP and HTTPS answer 308 to openvibe.events');
+    assert.ok(!fs.existsSync(path.join(__dirname, '..', 'deploy', 'nginx', 'events.openvibe.network.conf')), 'the retired events.openvibe.network vhost is gone (plan T7)');
     assert.ok(conf.includes('return 301 https://openvibe.events$request_uri;'), ':80 and www reach the apex');
 });
 
