@@ -9,7 +9,7 @@
   "domain": "openvibe.events",
   "contracts": "openvibe-contracts v0.128.0",
   "sdk": "openvibe-sdk v0.37.2",
-  "shared": "openvibe-shared v2.21.1",
+  "shared": "openvibe-shared v2.21.2",
   "capabilities": [
     "events.event.publish",
     "events.subscription.manage",
