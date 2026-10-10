@@ -8,7 +8,7 @@ const { verifyDeliveryV2 } = require('../lib/client');
 const apps = require('../server/apps');
 const { createGuardedPost, isPublicAddress } = require('../server/egress');
 const { load } = require('../server/config');
-const { boot, request, serviceToken, appToken, envelope, subscriber, suite, sleep } = require('./helpers');
+const { boot, request, serviceToken, appToken, envelope, subscriber, suite, sleep, cursorAt } = require('./helpers');
 
 const t = suite('apps');
 const ALL = ['events.app.publish', 'events.app.read', 'events.app.subscribe'];
@@ -72,7 +72,7 @@ function appEvent(appId, projectId, name = 'order.created', over = {}) {
     });
 }
 const publish = async (token, body) => await request(h.base, 'POST', '/api/v1/events', { token, body });
-const pull = async (token, topic, after = 0) => await request(h.base, 'GET', `/api/v1/events?topic=${encodeURIComponent(topic)}&after_seq=${after}`, { token });
+const pull = async (token, topic, after = null) => await request(h.base, 'GET', `/api/v1/events?topic=${encodeURIComponent(topic)}${after === null || after === 0 ? '' : `&after=${after}`}`, { token });
 
 t('boot', async () => {
     await new Promise(r => receiver.listen(0, '127.0.0.1', r));
@@ -177,9 +177,9 @@ t('read: own project in the same environment, plus public first-party events', a
     assert.strictEqual(r.status, 404, 'sandbox events are invisible to first-party readers');
 
     // Checkpoints are per app and follow the same scope.
-    r = await request(h.base, 'PUT', '/api/v1/checkpoints', { token: tokA(), body: { topic: `app.${keyA}.*`, cursor: 3 } });
+    r = await request(h.base, 'PUT', '/api/v1/checkpoints', { token: tokA(), body: { topic: `app.${keyA}.*`, cursor: await cursorAt(h, 3) } });
     assert.strictEqual(r.status, 200); assert.strictEqual(r.body.consumer, `app:${appA}`);
-    r = await request(h.base, 'PUT', '/api/v1/checkpoints', { token: tokA(), body: { topic: `app.${keyB}.*`, cursor: 3 } });
+    r = await request(h.base, 'PUT', '/api/v1/checkpoints', { token: tokA(), body: { topic: `app.${keyB}.*`, cursor: await cursorAt(h, 3) } });
     assert.strictEqual(r.status, 403);
     r = await request(h.base, 'GET', `/api/v1/checkpoints?topic=app.${keyA}.*`, { token: tokB() });
     assert.strictEqual(r.status, 403);

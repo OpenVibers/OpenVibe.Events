@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('assert');
 const { ids } = require('openvibe-contracts');
-const { boot, request, serviceToken, userToken, envelope, sse, sleep, suite } = require('./helpers');
+const { boot, request, serviceToken, userToken, envelope, sse, sleep, suite, cursorAt } = require('./helpers');
 
 const t = suite('realtime');
 let h;
@@ -72,7 +72,7 @@ t('Last-Event-ID resume replays what was missed, in order, then goes live', asyn
     await publish(live, envelope('live', { visibility: 'public', event_type: 'live.chat.not_subscribed' }));
     await publish(live, envelope('live', { visibility: 'internal', event_type: 'live.stream.c' }));
     const missed2 = await publish(live, envelope('live', { visibility: 'public', event_type: 'live.stream.d' }));
-    const c = await stream('topics=live.stream.*', { 'Last-Event-ID': String(first) });
+    const c = await stream('topics=live.stream.*', { 'Last-Event-ID': await cursorAt(h, first) });
     await c.waitFor(x => x.events().length === 2);
     assert.deepStrictEqual(c.events().map(e => e.seq), [missed1, missed2]);
     assert.deepStrictEqual(c.gaps(), []);
@@ -81,17 +81,32 @@ t('Last-Event-ID resume replays what was missed, in order, then goes live', asyn
     assert.strictEqual(c.events()[2].seq, liveSeq);
     c.close();
     // Query-string form for clients that cannot set headers.
-    const q = await stream(`topics=live.stream.*&last_event_id=${missed2}`);
+    const q = await stream(`topics=live.stream.*&last_event_id=${await cursorAt(h, missed2)}`);
     await q.waitFor(x => x.events().length === 1);
     assert.strictEqual(q.events()[0].seq, liveSeq);
     q.close();
+});
+
+t('a bare-number Last-Event-ID starts at the head without replay or gap', async () => {
+    const first = await publish(live, envelope('live', { visibility: 'public' }));
+    const missed = await publish(live, envelope('live', { visibility: 'public' }));
+    const bare = await stream('topics=live.stream.*', { 'Last-Event-ID': String(first) });
+    await quiet();
+    assert.deepStrictEqual(bare.events(), []);
+    assert.deepStrictEqual(bare.gaps(), []);
+    bare.close();
+    const resumed = await stream('topics=live.stream.*', { 'Last-Event-ID': await cursorAt(h, first) });
+    await resumed.waitFor(x => x.events().some(e => e.seq === missed));
+    assert.deepStrictEqual(resumed.events().map(e => e.seq), [missed]);
+    assert.deepStrictEqual(resumed.gaps(), []);
+    resumed.close();
 });
 
 t('a cursor older than retention gets `event: gap` first', async () => {
     const old = await publish(live, envelope('live', { visibility: 'public' }));
     await h.store.prune({ retentionDays: 30, now: Date.now() + 31 * 86400000 });
     const kept = await publish(live, envelope('live', { visibility: 'public' }));
-    const c = await stream('topics=live.stream.*', { 'Last-Event-ID': String(old - 1) });
+    const c = await stream('topics=live.stream.*', { 'Last-Event-ID': await cursorAt(h, old - 1) });
     await c.waitFor(x => x.events().length === 1);
     const gaps = c.gaps();
     assert.strictEqual(gaps.length, 1);
@@ -101,7 +116,7 @@ t('a cursor older than retention gets `event: gap` first', async () => {
     assert.ok(c.messages.findIndex(m => m.event === 'gap') < c.messages.findIndex(m => !m.event), 'gap comes before events');
     assert.strictEqual(c.events()[0].seq, kept);
     c.close();
-    const ahead = await stream('topics=live.stream.*', { 'Last-Event-ID': String(kept + 1000) });
+    const ahead = await stream('topics=live.stream.*', { 'Last-Event-ID': await cursorAt(h, kept + 1000) });
     await ahead.waitFor(x => x.gaps().length === 1);
     assert.strictEqual(ahead.gaps()[0].reason, 'cursor_ahead');
     ahead.close();

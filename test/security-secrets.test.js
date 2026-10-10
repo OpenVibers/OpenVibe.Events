@@ -18,7 +18,7 @@ const assert = require('assert');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { suite, serviceToken, appToken, userToken, ISSUER } = require('./helpers');
+const { suite, serviceToken, appToken, userToken, ISSUER, cursorAt } = require('./helpers');
 const { buildWorld } = require('./security-world');
 const crawler = require('./security-crawl');
 
@@ -89,8 +89,8 @@ t('crawl: no GET, refusal or error carries a secret, a token or the key', async 
         return n;
     };
     const values = (name) => ({ id: [subs.live.id, subs.media.id, subs.appA.id, subs.appB.id, ev.public, ev.internal, ev.appA, 'sub_00000000000000000000000000', 'x', '..%2f'] }[name] || ['x']);
-    const queries = ['topic=*', 'topic=live.*', `topic=app.${ids.keyA}.*`, `topic=app.${ids.keyB}.*,live.*`, 'status=dead', `subscription_id=${subs.appB.id}`, 'after_seq=0&limit=1000',
-        'topics=live.*,network.notification.*&last_event_id=0', 'debug=1&include=secret'];
+    const queries = ['topic=*', 'topic=live.*', `topic=app.${ids.keyA}.*`, `topic=app.${ids.keyB}.*,live.*`, 'status=dead', `subscription_id=${subs.appB.id}`, 'limit=1000',
+        `topics=live.*,network.notification.*&last_event_id=${await cursorAt(w.h, 0)}`, 'debug=1&include=secret'];
     const paths = crawler.pathsFor(w.routes, values, { method: 'get', queries, extra: ['/nope', '/api/nope', '/.env', '/data/pglite/PG_VERSION', '/package.json', '/api/v1/subscriptions/../../package.json'] });
     const gets = await crawler.crawl(w.base, paths, people, needlesFor);
     const found = [...gets.found];

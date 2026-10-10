@@ -18,7 +18,8 @@
  *   internal  service principals (token with events.event.read) only, never a browser
  * Developer-app events (app.<project_key>.*, events.app.publish) are never streamed here, to anyone.
  *
- * Resume: `Last-Event-ID` (or ?last_event_id=) is a cursor, or a bare seq for one release. Missed
+ * Resume: `Last-Event-ID` (or ?last_event_id=) is an opaque cursor; anything else (a bare number included) is not a
+ * position and is ignored, so the stream starts at the head. Missed
  * events are replayed first, from the replay tier and then the hot store (ADR-042 decision 8); when the
  * cursor is older than both — or belongs to another retention epoch — an `event: gap` message comes
  * first, so the client knows to refetch state.
@@ -131,16 +132,12 @@ function createRealtime({ store, auth, config, clock = { now: () => Date.now() }
 
         const epoch = await store.epoch();
         const rawLast = req.headers['last-event-id'] ?? req.query.last_event_id;
-        // A cursor, or — for one release — a bare seq. Anything else is ignored, as before.
+        // Only a cursor is a position (ADR-042 decision 7); anything else is ignored and the stream starts at the head.
         let lastId = null;
         let epochMismatch = false;
         if (rawLast != null) {
-            const raw = String(rawLast).trim();
-            if (/^\d{1,15}$/.test(raw)) lastId = Number(raw);
-            else {
-                const decoded = cursor.decode(raw);
-                if (decoded) { lastId = decoded.seq; epochMismatch = decoded.epoch !== epoch; }
-            }
+            const decoded = cursor.decode(String(rawLast).trim());
+            if (decoded) { lastId = decoded.seq; epochMismatch = decoded.epoch !== epoch; }
         }
 
         res.status(200);

@@ -8,7 +8,7 @@
 const assert = require('assert');
 const crypto = require('crypto');
 const { ids } = require('openvibe-contracts');
-const { boot, request, serviceToken, userToken, realtimeTicket, envelope, sse, sleep, suite, ISSUER } = require('./helpers');
+const { boot, request, serviceToken, userToken, realtimeTicket, envelope, sse, sleep, suite, ISSUER, cursorAt } = require('./helpers');
 
 const t = suite('realtime-tickets');
 let h;
@@ -77,7 +77,7 @@ t('a guessed user:<other> topic yields nothing: refused as a pattern, and no pat
     assert.deepStrictEqual(guess.events(), [], 'Alice\'s ticket sees none of Bob\'s events and no internal one');
     assert.deepStrictEqual(anon.events(), []);
     // Replay too: from before those events, Alice's ticket still gets none of them.
-    const replay = await stream(`topics=*&ticket=${realtimeTicket({ subjectId: alice })}&last_event_id=0`);
+    const replay = await stream(`topics=*&ticket=${realtimeTicket({ subjectId: alice })}&last_event_id=${await cursorAt(h, 0)}`);
     await quiet();
     assert.ok(replay.events().every(e => e.event.subject.id !== bob && e.event.visibility !== 'internal'), 'replay never includes Bob\'s or internal events');
     guess.close(); anon.close(); replay.close();
@@ -139,7 +139,7 @@ t('disconnect and resume from the cursor with a fresh ticket: the missed events,
     const missed1 = await publish(network, notified(alice, 2));
     await publish(network, notified(bob, 9));
     const missed2 = await publish(network, notified(alice, 3));
-    const a2 = await stream(`topics=${TOPIC}&ticket=${realtimeTicket({ subjectId: alice })}&last_event_id=${cursor}`);
+    const a2 = await stream(`topics=${TOPIC}&ticket=${realtimeTicket({ subjectId: alice })}&last_event_id=${await cursorAt(h, cursor)}`);
     await a2.waitFor(c => c.events().length === 2);
     assert.deepStrictEqual(a2.events().map(e => e.seq), [missed1, missed2]);
     assert.deepStrictEqual(a2.events().map(e => e.event.payload.unread_count), [2, 3]);
@@ -154,7 +154,7 @@ t('a cursor older than retention is reported as a gap before the events kept', a
     const old = await publish(network, notified(alice, 5));
     await h.store.prune({ retentionDays: 30, now: Date.now() + 31 * 86400000 });
     const kept = await publish(network, notified(alice, 6));
-    const c = await stream(`topics=${TOPIC}&ticket=${realtimeTicket({ subjectId: alice })}&last_event_id=${old - 1}`);
+    const c = await stream(`topics=${TOPIC}&ticket=${realtimeTicket({ subjectId: alice })}&last_event_id=${await cursorAt(h, old - 1)}`);
     await c.waitFor(x => x.events().length === 1);
     assert.strictEqual(c.gaps().length, 1);
     assert.strictEqual(c.gaps()[0].reason, 'retention');

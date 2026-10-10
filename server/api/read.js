@@ -2,20 +2,21 @@
 /**
  * Pull consumers (service token with events.event.read):
  *
- *   GET /api/v1/events?topic=media.vod.*[,…]&after_seq=0&limit=100
- *       -> { events: [{ seq, cursor, event }], next_after_seq, next_cursor, latest_seq, latest_cursor, gap? }
- *       `latest_cursor` is the head as an opaque cursor: a consumer that starts at "now" (skipping history)
- *       stores it, so it never needs the numeric latest_seq.
- *       `after=` takes an opaque cursor beside after_seq (ADR-042 decision 7); a cursor from another
- *       retention epoch answers `gap` — never a silent restart. `gap` ({ from_seq, to_seq }) means
+ *   GET /api/v1/events?topic=media.vod.*[,…][&after=<cursor>]&limit=100
+ *       -> { events: [{ seq, cursor, event }], next_cursor, latest_cursor, gap? }
+ *       A position is only ever an opaque cursor (ADR-042 decision 7): `after=` takes one, and without it the
+ *       page starts at the oldest retained event. `after_seq` is refused (400), never read as "from the start".
+ *       `latest_cursor` is the head: a consumer that starts at "now" (skipping history) stores it. The per-event
+ *       `seq` is informational. A cursor from another retention epoch answers `gap` — never a silent restart.
+ *       `gap` ({ from_seq, to_seq }) means
  *       events after the position were already pruned by retention (or the epoch changed). The pull
  *       spans the hot store and the replay tier (decision 8) with the one cursor: `gap` only outside both.
  *       Keep next_cursor as the cursor; it moves past events that did not match.
  *   GET /api/v1/events/:event_id -> { seq, cursor, event }   (hot or replay)
- *   GET /api/v1/checkpoints?topic=…  /  PUT /api/v1/checkpoints { topic, cursor }
- *       a consumer's own stored cursor per topic pattern (consumer = calling principal). `cursor` is
- *       the numeric position; PUT also accepts an opaque cursor string, and both answers carry the
- *       position's epoch and carrier so the cursor can be rebuilt.
+ *   GET /api/v1/checkpoints?topic=…  /  PUT /api/v1/checkpoints { topic, cursor, carrier? }
+ *       a consumer's own stored cursor per topic pattern (consumer = calling principal): `cursor` is an
+ *       opaque cursor string (a number is refused), and both answers return it as stored, with its carrier
+ *       ({ consumer, topic, cursor, carrier, updated_at }; cursor null when none is stored).
  *
  * Developer apps (events.app.read) use the same routes with an app token: only their project's
  * events in the token's environment plus public first-party events (server/apps.js); every topic
@@ -79,18 +80,19 @@ function readRouter({ store, auth, worker, limits }) {
         if (Number.isNaN(limit)) {
             return http.sendProblem(res, 400, 'events.bad_request', { detail: 'limit must be 1..1000', ctx });
         }
+        // A position is an opaque cursor and nothing else: a number would silently restart a consumer that still sends one.
+        if (req.query.after_seq !== undefined) {
+            return http.sendProblem(res, 400, 'events.bad_request', { detail: "after_seq is retired: pass after=<cursor> (a page's next_cursor, or latest_cursor for the head)", ctx });
+        }
         const epoch = await store.epoch();
-        // `after=` is an opaque cursor; `after_seq` stays for one release. A cursor from another epoch cannot be
-        // mapped onto this store, so it is answered with a gap (never treated as a position here).
-        let after = intParam(req.query.after_seq, 0, 0, Number.MAX_SAFE_INTEGER);
+        // A cursor from another epoch cannot be mapped onto this store, so it is answered with a gap.
+        let after = 0;
         let epochMismatch = false;
         if (req.query.after !== undefined && String(req.query.after) !== '') {
             const decoded = cursor.decode(String(req.query.after));
             if (!decoded) return http.sendProblem(res, 400, 'events.bad_request', { detail: 'after must be an opaque cursor', ctx });
             after = decoded.seq;
             epochMismatch = decoded.epoch !== epoch;
-        } else if (Number.isNaN(after)) {
-            return http.sendProblem(res, 400, 'events.bad_request', { detail: 'after_seq must be >= 0', ctx });
         }
         const oldest = await store.oldestSeq();
         const out = {};
@@ -104,10 +106,8 @@ function readRouter({ store, auth, worker, limits }) {
         }
         const { rows, cursor: scanned } = await store.scan(from, { patterns, limit, accept: acceptFor(req.principal, patterns) });
         out.events = rows.map(r => ({ seq: r.seq, cursor: cursor.encode(r.seq, epoch), event: rowToEnvelope(r) }));
-        out.next_after_seq = scanned;
         out.next_cursor = cursor.encode(scanned, epoch);
-        out.latest_seq = await store.lastSeq();
-        out.latest_cursor = cursor.encode(out.latest_seq, epoch);
+        out.latest_cursor = cursor.encode(await store.lastSeq(), epoch);
         res.json(out);
     });
 
@@ -120,6 +120,10 @@ function readRouter({ store, auth, worker, limits }) {
     });
 
     const consumerOf = (req) => req.principal.service || req.principal.sub;
+    // The stored position and epoch, handed back as the opaque cursor they make (null when nothing is stored).
+    const checkpointView = (consumer, topic, cp) => ({
+        consumer, topic, cursor: cp ? cursor.encode(Number(cp.cursor), Number(cp.epoch)) : null, carrier: cp ? cp.carrier || null : null, updated_at: cp ? cp.updated_at : null,
+    });
 
     router.get('/api/v1/checkpoints', canRead, limits('events.checkpoint.read'), async (req, res) => {
         const topic = String(req.query.topic || '');
@@ -127,36 +131,21 @@ function readRouter({ store, auth, worker, limits }) {
         const scopeErr = scopeError(req.principal, [topic]);
         if (scopeErr) return http.sendProblem(res, 403, 'events.topic_not_allowed', { detail: scopeErr, ctx: req.ov });
         const cp = await store.getCheckpoint(consumerOf(req), topic);
-        const epoch = cp ? cp.epoch : await store.epoch();
-        const position = cp ? cp.cursor : 0;
-        res.json({
-            consumer: consumerOf(req), topic, cursor: position, epoch, carrier: cp ? cp.carrier : null,
-            next_cursor: cursor.encode(position, epoch), updated_at: cp ? cp.updated_at : null,
-        });
+        res.json(checkpointView(consumerOf(req), topic, cp));
     });
 
     router.put('/api/v1/checkpoints', canRead, limits('events.checkpoint.write', { minute: 600, hour: 20000 }), async (req, res) => {
         const b = req.body || {};
-        // `cursor` stays the numeric position; an opaque cursor string is accepted in its place and decoded to the
-        // position and epoch it names (ADR-042 decision 7). `carrier` records the carrier the position is on.
-        let position = null;
-        let atEpoch = null;
-        if (typeof b.cursor === 'string') {
-            const decoded = cursor.decode(b.cursor);
-            if (!decoded) return http.sendProblem(res, 400, 'events.bad_request', { detail: 'cursor must be an opaque cursor or an integer >= 0', ctx: req.ov });
-            position = decoded.seq;
-            atEpoch = decoded.epoch;
-        } else if (Number.isInteger(b.cursor) && b.cursor >= 0) {
-            position = b.cursor;
-            if (Number.isInteger(b.epoch) && b.epoch >= 0) atEpoch = b.epoch;
-        }
-        if (!topics.isValidPattern(b.topic) || position === null) {
-            return http.sendProblem(res, 400, 'events.bad_request', { detail: 'topic (pattern) and cursor (integer >= 0 or an opaque cursor) are required', ctx: req.ov });
+        // `cursor` is an opaque cursor, decoded to the position and epoch it names (ADR-042 decision 7); a number is
+        // refused. `carrier` records the carrier the position is on.
+        const decoded = typeof b.cursor === 'string' ? cursor.decode(b.cursor) : null;
+        if (!topics.isValidPattern(b.topic) || !decoded) {
+            return http.sendProblem(res, 400, 'events.bad_request', { detail: "topic (pattern) and cursor (an opaque cursor: a page's next_cursor) are required", ctx: req.ov });
         }
         const scopeErr = scopeError(req.principal, [b.topic]);
         if (scopeErr) return http.sendProblem(res, 403, 'events.topic_not_allowed', { detail: scopeErr, ctx: req.ov });
-        const cp = await store.setCheckpoint(consumerOf(req), b.topic, position, { epoch: atEpoch, carrier: typeof b.carrier === 'string' && b.carrier ? b.carrier : null });
-        res.json({ consumer: consumerOf(req), topic: b.topic, ...cp, next_cursor: cursor.encode(cp.cursor, cp.epoch) });
+        const cp = await store.setCheckpoint(consumerOf(req), b.topic, decoded.seq, { epoch: decoded.epoch, carrier: typeof b.carrier === 'string' && b.carrier ? b.carrier : null });
+        res.json(checkpointView(consumerOf(req), b.topic, cp));
     });
 
     router.get('/api/v1/deliveries', isAdmin, limits('events.delivery.list'), async (req, res) => {

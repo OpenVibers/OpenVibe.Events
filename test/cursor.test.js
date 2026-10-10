@@ -1,10 +1,9 @@
 'use strict';
 /**
- * ADR-042 decision 7: opaque cursors beside the global seq. A cursor is `c1.<epoch>.<base64url(seq)>`;
- * every answer that carries a seq also carries its cursor, pull accepts `after=<cursor>` beside
- * `after_seq`, the SSE `id` is the cursor (a bare seq is accepted for one release), and checkpoints
- * store and return the position's epoch. The contract answers are validated against the pinned
- * openvibe-contracts (0.81.0, the release that added the cursor fields).
+ * ADR-042 decision 7: consumer positions are cursors only. A cursor is `c1.<epoch>.<base64url(seq)>`;
+ * event answers retain seq and carry a cursor, pull accepts `after=<cursor>`, SSE resumes from
+ * cursor IDs, and checkpoints store and return opaque cursor strings. Unchanged publish and single
+ * event answers are validated against the pinned openvibe-contracts.
  */
 const assert = require('assert');
 const { validate } = require('openvibe-contracts');
@@ -39,7 +38,7 @@ t('encode/decode round trip (never throws on malformed input)', () => {
     }
 });
 
-t('publish and read answers carry cursors, validated against events.publish-result@1 / read-result@1', async () => {
+t('publish and read answers carry cursors', async () => {
     const epoch = await h.store.epoch();
     const one = await publish();
     const pv = validate('events.publish-result@1', one);
@@ -51,28 +50,30 @@ t('publish and read answers carry cursors, validated against events.publish-resu
     for (const r of batch.body.results) assert.deepStrictEqual(cursor.decode(r.cursor), { seq: r.seq, epoch });
 
     const page = await request(h.base, 'GET', '/api/v1/events?topic=live.vod.*', { token: reader });
-    const rv = validate('events.read-result@1', page.body);
-    assert.ok(rv.valid, JSON.stringify(rv.errors));
+    assert.ok(typeof page.body.next_cursor === 'string' && typeof page.body.latest_cursor === 'string');
     assert.ok(page.body.events.length >= 3);
     for (const e of page.body.events) assert.deepStrictEqual(cursor.decode(e.cursor), { seq: e.seq, epoch });
-    assert.deepStrictEqual(cursor.decode(page.body.next_cursor), { seq: page.body.next_after_seq, epoch });
+    assert.deepStrictEqual(cursor.decode(page.body.next_cursor), { seq: page.body.events.at(-1).seq, epoch });
+    assert.ok(!('next_after_seq' in page.body) && !('latest_seq' in page.body));
 
     const single = await request(h.base, 'GET', `/api/v1/events/${one.event_id}`, { token: reader });
     assert.ok(validate('events.read-result@1', single.body).valid);
     assert.deepStrictEqual(cursor.decode(single.body.cursor), { seq: single.body.seq, epoch });
 });
 
-t('pull accepts after=<cursor> beside after_seq; next_cursor round-trips a page', async () => {
+t('pull accepts after=<cursor>; next_cursor round-trips a page and after_seq is refused', async () => {
     let r = await request(h.base, 'GET', '/api/v1/events?topic=live.vod.*&limit=1', { token: reader });
     assert.strictEqual(r.body.events.length, 1);
     const first = r.body.events[0];
-    assert.strictEqual(r.body.next_after_seq, first.seq);
+    assert.strictEqual(r.body.next_cursor, first.cursor);
     r = await request(h.base, 'GET', `/api/v1/events?topic=live.vod.*&after=${encodeURIComponent(r.body.next_cursor)}`, { token: reader });
     assert.strictEqual(r.status, 200, r.text);
     assert.ok(r.body.events.length >= 1 && r.body.events.every(e => e.seq > first.seq));
-    // after_seq still works, unchanged.
-    r = await request(h.base, 'GET', `/api/v1/events?topic=live.vod.*&after_seq=${first.seq}`, { token: reader });
-    assert.ok(r.body.events.every(e => e.seq > first.seq));
+    for (const value of ['0', String(first.seq)]) {
+        r = await request(h.base, 'GET', `/api/v1/events?topic=live.vod.*&after_seq=${value}`, { token: reader });
+        assert.strictEqual(r.status, 400);
+        assert.strictEqual(r.body.code, 'events.bad_request');
+    }
 });
 
 t('a malformed after= is refused, not treated as a position', async () => {
@@ -97,7 +98,7 @@ t('a cursor from another epoch answers the gap shape, never a silent restart', a
     assert.strictEqual(cursor.decode(r.body.next_cursor).epoch, olderEpoch + 1, 'position moves in the new epoch');
 });
 
-t('SSE id is the cursor; Last-Event-ID resumes from a cursor, and a bare seq still works', async () => {
+t('SSE id is the cursor; Last-Event-ID resumes from a cursor, and a bare seq starts at the head', async () => {
     const epoch = await h.store.epoch();
     const c1 = await sse(h.base, '/realtime/stream?topics=live.stream.*', { headers: { Authorization: `Bearer ${readerSvc}` } });
     const s1 = await publish({ visibility: 'public', event_type: 'live.stream.a' });
@@ -113,8 +114,9 @@ t('SSE id is the cursor; Last-Event-ID resumes from a cursor, and a bare seq sti
     assert.deepStrictEqual(byCursor.gaps(), []);
     byCursor.close();
 
-    // A bare seq is still accepted for this release.
-    const bySeq = await sse(h.base, `/realtime/stream?topics=live.stream.*&last_event_id=${s2.seq}`, { headers: { Authorization: `Bearer ${readerSvc}` } });
+    const bySeq = await sse(h.base, `/realtime/stream?topics=live.stream.*&last_event_id=${s1.seq}`, { headers: { Authorization: `Bearer ${readerSvc}` } });
+    assert.deepStrictEqual(bySeq.events(), [], 'a bare number does not replay missed events');
+    assert.deepStrictEqual(bySeq.gaps(), []);
     const s3 = await publish({ visibility: 'public', event_type: 'live.stream.c' });
     await bySeq.waitFor(x => x.events().length === 1);
     assert.deepStrictEqual(bySeq.events().map(e => e.seq), [s3.seq]);
@@ -136,27 +138,22 @@ t('SSE reports a gap when the cursor belongs to another epoch', async () => {
     again.close();
 });
 
-t('checkpoint round trip: an opaque cursor in, the position and epoch out', async () => {
+t('checkpoint round trip: an opaque cursor in and out', async () => {
     const pub = await publish();
-    const epoch = cursor.decode(pub.cursor).epoch;
     let r = await request(h.base, 'PUT', '/api/v1/checkpoints', { token: reader, body: { topic: 'live.vod.*', cursor: pub.cursor } });
     assert.strictEqual(r.status, 200, r.text);
-    assert.ok(validate('events.read-result@1', r.body).valid, JSON.stringify(r.body));
-    assert.strictEqual(r.body.cursor, pub.seq, 'cursor stays the numeric position');
-    assert.strictEqual(r.body.epoch, epoch);
-    assert.strictEqual(r.body.next_cursor, pub.cursor, 'the opaque cursor comes back, ready for after=');
+    assert.strictEqual(r.body.topic, 'live.vod.*');
+    assert.strictEqual(r.body.cursor, pub.cursor);
+    assert.ok(!('epoch' in r.body) && !('next_cursor' in r.body));
 
     r = await request(h.base, 'GET', '/api/v1/checkpoints?topic=live.vod.*', { token: reader });
-    assert.strictEqual(r.body.cursor, pub.seq);
-    assert.strictEqual(r.body.epoch, epoch);
-    assert.strictEqual(r.body.next_cursor, pub.cursor);
-    assert.strictEqual(cursor.encode(r.body.cursor, r.body.epoch), pub.cursor);
+    assert.strictEqual(r.body.cursor, pub.cursor);
+    assert.ok(!('epoch' in r.body) && !('next_cursor' in r.body));
 
-    // A plain integer still works and takes the current epoch.
+    // A plain integer is no longer a consumer position.
     r = await request(h.base, 'PUT', '/api/v1/checkpoints', { token: reader, body: { topic: 'live.vod.*', cursor: 5 } });
-    assert.strictEqual(r.body.cursor, 5);
-    assert.strictEqual(r.body.epoch, await h.store.epoch());
-    assert.deepStrictEqual(cursor.decode(r.body.next_cursor), { seq: 5, epoch: await h.store.epoch() });
+    assert.strictEqual(r.status, 400);
+    assert.strictEqual(r.body.code, 'events.bad_request');
 
     // A malformed cursor string is refused.
     r = await request(h.base, 'PUT', '/api/v1/checkpoints', { token: reader, body: { topic: 'live.vod.*', cursor: 'nope' } });

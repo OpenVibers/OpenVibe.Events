@@ -28,7 +28,7 @@ function exportToken(env, { project = P, cap = ['events.app.read'] } = {}) {
 
 let h;
 const seqs = { production: [], sandbox: [] };
-const pull = async (token, after = 0, limit = 100, topic = `app.${key}.*`) => await request(h.base, 'GET', `/api/v1/events?topic=${encodeURIComponent(topic)}&after_seq=${after}&limit=${limit}`, { token });
+const pull = async (token, after = null, limit = 100, topic = `app.${key}.*`) => await request(h.base, 'GET', `/api/v1/events?topic=${encodeURIComponent(topic)}${after === null || after === 0 ? '' : `&after=${after}`}&limit=${limit}`, { token });
 
 t('boot and publish as the project\'s app, in both environments (and another project)', async () => {
     h = await boot();
@@ -47,15 +47,13 @@ t('boot and publish as the project\'s app, in both environments (and another pro
 
 t('an export token pulls the project\'s events of its environment, page by page to the end', async () => {
     const got = [];
-    let after = 0;
-    let latest = null;
+    let after = null;
     for (let page = 0; page < 10; page++) {
         const r = await pull(exportToken('production'), after, 2);
         assert.strictEqual(r.status, 200, r.text);
-        latest = latest === null ? r.body.latest_seq : latest;
         got.push(...r.body.events.map(e => e.seq));
-        if (r.body.next_after_seq <= after || r.body.next_after_seq >= latest) break;
-        after = r.body.next_after_seq;
+        if (r.body.next_cursor === r.body.latest_cursor || r.body.next_cursor === after) break;
+        after = r.body.next_cursor;
     }
     assert.deepStrictEqual(got, seqs.production);
     const s = await pull(exportToken('sandbox'));

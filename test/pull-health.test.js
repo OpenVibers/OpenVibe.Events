@@ -2,12 +2,12 @@
 const assert = require('assert');
 const crypto = require('crypto');
 const nodeHttp = require('http');
-const { validate } = require('openvibe-contracts');
 const cursor = require('../server/cursor');
 const topics = require('../server/topics');
 const { hasCap, allows } = require('../server/auth');
 const { load } = require('../server/config');
-const { boot, request, serviceToken, envelope, publicKey, suite, sleep } = require('./helpers');
+const { validate } = require('openvibe-contracts');
+const { boot, request, serviceToken, envelope, publicKey, suite, sleep, cursorAt } = require('./helpers');
 
 const t = suite('pull-health');
 let h;
@@ -58,19 +58,20 @@ t('pull: cursor, topic filter, internal events included for services', async () 
     await request(h.base, 'POST', '/api/v1/events', { token: live, body: envelope('live', { event_type: 'live.chat.sent' }) });
     const s3 = (await request(h.base, 'POST', '/api/v1/events', { token: live, body: envelope('live', { event_type: 'live.vod.deleted' }) })).body.seq;
 
-    let r = await request(h.base, 'GET', '/api/v1/events?topic=live.vod.*&after_seq=0&limit=1', { token: reader });
+    let r = await request(h.base, 'GET', '/api/v1/events?topic=live.vod.*&limit=1', { token: reader });
     assert.strictEqual(r.status, 200, r.text);
     assert.ok(validate('events.read-result@1', r.body).valid, JSON.stringify(validate('events.read-result@1', r.body).errors));
     for (const e of r.body.events) assert.deepStrictEqual(cursor.decode(e.cursor), { seq: e.seq, epoch: await h.store.epoch() });
-    assert.strictEqual(cursor.decode(r.body.next_cursor).seq, r.body.next_after_seq);
+    assert.strictEqual(r.body.next_cursor, await cursorAt(h, s1));
+    assert.ok(!('next_after_seq' in r.body) && !('latest_seq' in r.body));
     assert.deepStrictEqual(r.body.events.map(e => e.seq), [s1]);
     assert.strictEqual(r.body.events[0].event.visibility, 'internal');
-    r = await request(h.base, 'GET', `/api/v1/events?topic=live.vod.*&after_seq=${r.body.next_after_seq}`, { token: reader });
+    r = await request(h.base, 'GET', `/api/v1/events?topic=live.vod.*&after=${r.body.next_cursor}`, { token: reader });
     assert.deepStrictEqual(r.body.events.map(e => e.seq), [s3]);
-    assert.strictEqual(r.body.next_after_seq, s3);
-    r = await request(h.base, 'GET', `/api/v1/events?topic=live.vod.*&after_seq=${r.body.next_after_seq}`, { token: reader });
+    assert.strictEqual(r.body.next_cursor, await cursorAt(h, s3));
+    r = await request(h.base, 'GET', `/api/v1/events?topic=live.vod.*&after=${r.body.next_cursor}`, { token: reader });
     assert.deepStrictEqual(r.body.events, []);
-    assert.strictEqual(r.body.latest_seq, s3);
+    assert.strictEqual(r.body.latest_cursor, await cursorAt(h, s3));
     assert.match(r.body.latest_cursor, /^c1\./, 'the head as an opaque cursor');
     {
         // Starting at the head with latest_cursor reads nothing old, and the next event after it arrives.
@@ -94,21 +95,35 @@ t('pull: a cursor older than retention reports the gap', async () => {
     const before = await h.store.lastSeq();
     await h.store.prune({ retentionDays: 30, now: Date.now() + 31 * 86400000 });
     const s = (await request(h.base, 'POST', '/api/v1/events', { token: live, body: envelope() })).body.seq;
-    const r = await request(h.base, 'GET', '/api/v1/events?after_seq=1', { token: reader });
+    const r = await request(h.base, 'GET', `/api/v1/events?after=${await cursorAt(h, 1)}`, { token: reader });
     assert.deepStrictEqual(r.body.gap, { from_seq: 2, to_seq: before });
     assert.deepStrictEqual(r.body.events.map(e => e.seq), [s]);
 });
 
+t('pull: after_seq is refused even at zero', async () => {
+    const r = await request(h.base, 'GET', '/api/v1/events?topic=live.vod.*&after_seq=0', { token: reader });
+    assert.strictEqual(r.status, 400);
+    assert.strictEqual(r.body.code, 'events.bad_request');
+});
+
 t('checkpoints: per consumer and topic', async () => {
     let r = await request(h.base, 'GET', '/api/v1/checkpoints?topic=live.vod.*', { token: reader });
-    assert.strictEqual(r.body.cursor, 0);
+    assert.strictEqual(r.body.cursor, null);
+    assert.strictEqual(r.body.carrier, null);
+    assert.strictEqual(r.body.updated_at, null);
     r = await request(h.base, 'PUT', '/api/v1/checkpoints', { token: reader, body: { topic: 'live.vod.*', cursor: 42 } });
-    assert.strictEqual(r.body.cursor, 42);
+    assert.strictEqual(r.status, 400);
+    assert.strictEqual(r.body.code, 'events.bad_request');
+    const position = await cursorAt(h, 42);
+    r = await request(h.base, 'PUT', '/api/v1/checkpoints', { token: reader, body: { topic: 'live.vod.*', cursor: position } });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.cursor, position);
+    assert.ok(validate('events.read-result@1', r.body).valid, 'the checkpoint answer is a contract checkpoint');
     r = await request(h.base, 'GET', '/api/v1/checkpoints?topic=live.vod.*', { token: reader });
-    assert.strictEqual(r.body.cursor, 42);
+    assert.strictEqual(r.body.cursor, position);
     assert.strictEqual(r.body.consumer, 'games');
     r = await request(h.base, 'GET', '/api/v1/checkpoints?topic=live.vod.*', { token: serviceToken('tools', ['events.event.read']) });
-    assert.strictEqual(r.body.cursor, 0, 'another consumer has its own');
+    assert.strictEqual(r.body.cursor, null, 'another consumer has its own');
 });
 
 t('health and ready', async () => {

@@ -15,7 +15,7 @@
 //   - subscription listings, single reads and checkpoints are the caller's own
 //   node test/security-private.test.js
 const assert = require('assert');
-const { suite, appToken, request } = require('./helpers');
+const { suite, appToken, request, cursorAt } = require('./helpers');
 const { buildWorld } = require('./security-world');
 const crawler = require('./security-crawl');
 
@@ -38,7 +38,7 @@ t('pull reads: each caller gets exactly its scope, by every topic pattern and ev
         const token = who === 'anonymous' ? undefined : tok[who] || tok.userX;
         let got = [];
         for (const topic of topicsList) {
-            const r = await request(w.base, 'GET', `/api/v1/events?topic=${encodeURIComponent(topic)}&after_seq=0&limit=1000`, { token });
+            const r = await request(w.base, 'GET', `/api/v1/events?topic=${encodeURIComponent(topic)}&limit=1000`, { token });
             got = got.concat(seenIn(r.text));
         }
         for (const [name, id] of Object.entries(ev)) {
@@ -57,7 +57,7 @@ t('pull reads: each caller gets exactly its scope, by every topic pattern and ev
 t('realtime: visibility by viewer, replayed from the start, app events never streamed', async () => {
     const { tok, ids } = w;
     const topics = encodeURIComponent('live.*,network.notification.*,app.*');
-    const open = async (headers = {}, extra = '') => crawler.hit(w.base, 'GET', `/realtime/stream?topics=${topics}&last_event_id=0${extra}`, { headers, streamMs: 400 });
+    const open = async (headers = {}, extra = '') => crawler.hit(w.base, 'GET', `/realtime/stream?topics=${topics}&last_event_id=${await cursorAt(w.h, 0)}${extra}`, { headers, streamMs: 400 });
     const cases = [
         ['anonymous', {}, '', ['public']],
         ['x by ticket', {}, `&ticket=${w.realtimeTicket({ subjectId: ids.x })}`, ['public', 'subjectX']],
@@ -131,18 +131,18 @@ t('subscriptions and checkpoints are the caller\'s own', async () => {
         if (r.status < 400) bad.push(`${who} reads live's subscription (${r.status})`);
     }
     // Checkpoints are keyed by the calling principal.
-    let r = await request(w.base, 'PUT', '/api/v1/checkpoints', { token: tok.live, body: { topic: 'live.*', cursor: 5 } });
+    let r = await request(w.base, 'PUT', '/api/v1/checkpoints', { token: tok.live, body: { topic: 'live.*', cursor: await cursorAt(w.h, 5) } });
     assert.strictEqual(r.status, 200);
-    r = await request(w.base, 'PUT', '/api/v1/checkpoints', { token: tok.appA, body: { topic: `app.${ids.keyA}.*`, cursor: 3 } });
+    r = await request(w.base, 'PUT', '/api/v1/checkpoints', { token: tok.appA, body: { topic: `app.${ids.keyA}.*`, cursor: await cursorAt(w.h, 3) } });
     assert.strictEqual(r.status, 200);
     for (const [who, topic] of [['media', 'live.*'], ['reader', 'live.*'], ['appA2', `app.${ids.keyA}.*`]]) {
         r = await request(w.base, 'GET', `/api/v1/checkpoints?topic=${encodeURIComponent(topic)}`, { token: tok[who] });
-        if (r.status === 200 && r.body.cursor !== 0) bad.push(`${who} reads another consumer's checkpoint (${r.body.cursor})`);
+        if (r.status === 200 && r.body.cursor !== null) bad.push(`${who} reads another consumer's checkpoint (${r.body.cursor})`);
     }
     r = await request(w.base, 'GET', `/api/v1/checkpoints?topic=${encodeURIComponent(`app.${ids.keyA}.*`)}`, { token: tok.appB });
     assert.strictEqual(r.status, 403, 'another project\'s pattern is refused');
     r = await request(w.base, 'GET', '/api/v1/checkpoints?topic=live.*', { token: tok.live });
-    assert.strictEqual(r.body.cursor, 5, 'positive control');
+    assert.strictEqual(r.body.cursor, await cursorAt(w.h, 5), 'positive control');
     assert.deepStrictEqual(bad, [], bad.join('\n'));
 });
 
