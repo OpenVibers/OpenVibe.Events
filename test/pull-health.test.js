@@ -71,6 +71,15 @@ t('pull: cursor, topic filter, internal events included for services', async () 
     r = await request(h.base, 'GET', `/api/v1/events?topic=live.vod.*&after_seq=${r.body.next_after_seq}`, { token: reader });
     assert.deepStrictEqual(r.body.events, []);
     assert.strictEqual(r.body.latest_seq, s3);
+    assert.match(r.body.latest_cursor, /^c1\./, 'the head as an opaque cursor');
+    {
+        // Starting at the head with latest_cursor reads nothing old, and the next event after it arrives.
+        const head = r.body.latest_cursor;
+        const fromHead = await request(h.base, "GET", `/api/v1/events?topic=live.vod.*&after=${encodeURIComponent(head)}`, { token: reader });
+        assert.strictEqual(fromHead.status, 200);
+        assert.deepStrictEqual(fromHead.body.events, []);
+        assert.strictEqual(fromHead.body.next_cursor, head);
+    }
 
     const id3 = (await h.db.prepare('SELECT id FROM events WHERE seq = ?').get(s3)).id;
     r = await request(h.base, 'GET', `/api/v1/events/${id3}`, { token: reader });
