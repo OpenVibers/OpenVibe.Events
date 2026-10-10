@@ -387,7 +387,7 @@ implemented service.
 Part of the [OpenVibe network](https://openvibe.network). Built in the open by [OpenVibers](https://github.com/OpenVibers).
 
 <!-- versions:start -->
-- openvibe-contracts: v0.129.0
+- openvibe-contracts: v0.132.0
 - openvibe-sdk: v0.40.0
 - openvibe-shared: v3.0.0
 <!-- versions:end -->
