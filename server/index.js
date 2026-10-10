@@ -12,7 +12,8 @@ const { openDb, createStore } = require('./store');
 const { createPolicyLibrary } = require('./fabric/policy');
 const { createCarriers } = require('./fabric/carriers');
 const { createPlanner } = require('./fabric/planner');
-const { createKeys, createAuth } = require('./auth');
+const { createNetworkKeys } = require('openvibe-sdk/auth');
+const { createAuth } = require('./auth');
 const { createWorker } = require('./worker');
 const { createRealtime } = require('./realtime');
 const { createApp } = require('./app');
@@ -38,7 +39,7 @@ async function start({
     const carriers = createCarriers({ config, clock, log, valkey });
     const planner = createPlanner({ registry: carriers, db, clock, log });
     const store = createStore(db, { clock, maxHops: config.maxHops, usage: config.usage, policies, planner });
-    const keys = createKeys({ url: config.networkInternalUrl, pem: config.networkPublicKey, fetchImpl, log });
+    const keys = createNetworkKeys({ network: config.networkInternalUrl, publicKey: config.networkPublicKey, fetch: fetchImpl, log });
     const auth = createAuth({ config, keys, store });
     const metrics = createMetrics({ store });
     // appPost / dnsLookup: developer-app delivery and the subscribe-time DNS check (server/egress.js);
