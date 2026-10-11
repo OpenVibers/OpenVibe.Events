@@ -3,16 +3,17 @@
  * Pull consumers (service token with events.event.read):
  *
  *   GET /api/v1/events?topic=media.vod.*[,…][&after=<cursor>]&limit=100
- *       -> { events: [{ seq, cursor, event }], next_cursor, latest_cursor, gap? }
+ *       -> { events: [{ cursor, event }], next_cursor, latest_cursor, gap? }
  *       A position is only ever an opaque cursor (ADR-042 decision 7): `after=` takes one, and without it the
  *       page starts at the oldest retained event. `after_seq` is refused (400), never read as "from the start".
- *       `latest_cursor` is the head: a consumer that starts at "now" (skipping history) stores it. The per-event
- *       `seq` is informational. A cursor from another retention epoch answers `gap` — never a silent restart.
+ *       `latest_cursor` is the head: a consumer that starts at "now" (skipping history) stores it. There is no
+ *       per-event sequence number (dedupe on event.event_id). A cursor from another retention epoch answers `gap`
+ *       — never a silent restart.
  *       `gap` ({ from_seq, to_seq }) means
  *       events after the position were already pruned by retention (or the epoch changed). The pull
  *       spans the hot store and the replay tier (decision 8) with the one cursor: `gap` only outside both.
  *       Keep next_cursor as the cursor; it moves past events that did not match.
- *   GET /api/v1/events/:event_id -> { seq, cursor, event }   (hot or replay)
+ *   GET /api/v1/events/:event_id -> { cursor, event }   (hot or replay)
  *   GET /api/v1/checkpoints?topic=…  /  PUT /api/v1/checkpoints { topic, cursor, carrier? }
  *       a consumer's own stored cursor per topic pattern (consumer = calling principal): `cursor` is an
  *       opaque cursor string (a number is refused), and both answers return it as stored, with its carrier
@@ -105,7 +106,7 @@ function readRouter({ store, auth, worker, limits }) {
             from = oldest - 1;
         }
         const { rows, cursor: scanned } = await store.scan(from, { patterns, limit, accept: acceptFor(req.principal, patterns) });
-        out.events = rows.map(r => ({ seq: r.seq, cursor: cursor.encode(r.seq, epoch), event: rowToEnvelope(r) }));
+        out.events = rows.map(r => ({ cursor: cursor.encode(r.seq, epoch), event: rowToEnvelope(r) }));
         out.next_cursor = cursor.encode(scanned, epoch);
         out.latest_cursor = cursor.encode(await store.lastSeq(), epoch);
         res.json(out);
@@ -116,7 +117,7 @@ function readRouter({ store, auth, worker, limits }) {
         const visible = row && (req.principal.kind === 'app' ? apps.visibleToApp(row, req.principal) : (row.env || 'production') === 'production');
         if (!visible) return http.sendProblem(res, 404, 'events.not_found', { detail: 'no such event (or pruned by retention)', ctx: req.ov });
         // A replay-tier row names the epoch its position belongs to; a hot row is in the current one.
-        return res.json({ seq: row.seq, cursor: cursor.encode(row.seq, row.epoch ?? await store.epoch()), event: rowToEnvelope(row) });
+        return res.json({ cursor: cursor.encode(row.seq, row.epoch ?? await store.epoch()), event: rowToEnvelope(row) });
     });
 
     const consumerOf = (req) => req.principal.service || req.principal.sub;

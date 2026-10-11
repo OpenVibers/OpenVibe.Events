@@ -8,8 +8,8 @@
  * minted by Network for the signed-in person: how pages on every OpenVibe site open a stream without a
  * third-party cookie), a Bearer user or service token, the ov_token cookie, or nobody.
  *
- * Every message is `id: <cursor>` (ADR-042 decision 7; a bare seq is still accepted for one release) +
- * `data: {"seq":n,"event":<envelope>}`. Visibility decides who sees an event:
+ * Every message is `id: <cursor>` (ADR-042 decision 7) + `data: {"event":<envelope>}`; there is no sequence
+ * number (a client dedupes on event.event_id). Visibility decides who sees an event:
  *   public    anyone subscribed to a matching topic (signed-out visitors too, unless disabled)
  *   subject   only the user whose subject id is the event's actor.id or its subject.id (subject
  *             type user); a guessed topic yields nothing for anyone else. A person's topic is an
@@ -91,7 +91,7 @@ function createRealtime({ store, auth, config, clock = { now: () => Date.now() }
 
     function sendEvent(conn, row) {
         conn.lastSeq = row.seq;
-        write(conn, `id: ${cursor.encode(row.seq, conn.epoch)}\ndata: ${JSON.stringify({ seq: row.seq, event: rowToEnvelope(row) })}\n\n`);
+        write(conn, `id: ${cursor.encode(row.seq, conn.epoch)}\ndata: ${JSON.stringify({ event: rowToEnvelope(row) })}\n\n`);
     }
 
     function sendGap(conn, gap) {

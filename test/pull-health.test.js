@@ -54,24 +54,27 @@ t('config: network-wide prefixes are shared, source namespaces stay owned', () =
 t('boot', async () => { h = await boot(); });
 
 t('pull: cursor, topic filter, internal events included for services', async () => {
-    const s1 = (await request(h.base, 'POST', '/api/v1/events', { token: live, body: envelope('live', { event_type: 'live.vod.ready' }) })).body.seq;
+    const c1 = (await request(h.base, 'POST', '/api/v1/events', { token: live, body: envelope('live', { event_type: 'live.vod.ready' }) })).body.cursor;
     await request(h.base, 'POST', '/api/v1/events', { token: live, body: envelope('live', { event_type: 'live.chat.sent' }) });
-    const s3 = (await request(h.base, 'POST', '/api/v1/events', { token: live, body: envelope('live', { event_type: 'live.vod.deleted' }) })).body.seq;
+    const c3 = (await request(h.base, 'POST', '/api/v1/events', { token: live, body: envelope('live', { event_type: 'live.vod.deleted' }) })).body.cursor;
 
     let r = await request(h.base, 'GET', '/api/v1/events?topic=live.vod.*&limit=1', { token: reader });
     assert.strictEqual(r.status, 200, r.text);
     assert.ok(validate('events.read-result@1', r.body).valid, JSON.stringify(validate('events.read-result@1', r.body).errors));
-    for (const e of r.body.events) assert.deepStrictEqual(cursor.decode(e.cursor), { seq: e.seq, epoch: await h.store.epoch() });
-    assert.strictEqual(r.body.next_cursor, await cursorAt(h, s1));
+    for (const e of r.body.events) {
+        assert.ok(!Object.hasOwn(e, 'seq'));
+        assert.deepStrictEqual(cursor.decode(e.cursor).epoch, await h.store.epoch());
+    }
+    assert.strictEqual(r.body.next_cursor, c1);
     assert.ok(!('next_after_seq' in r.body) && !('latest_seq' in r.body));
-    assert.deepStrictEqual(r.body.events.map(e => e.seq), [s1]);
+    assert.deepStrictEqual(r.body.events.map(e => e.cursor), [c1]);
     assert.strictEqual(r.body.events[0].event.visibility, 'internal');
     r = await request(h.base, 'GET', `/api/v1/events?topic=live.vod.*&after=${r.body.next_cursor}`, { token: reader });
-    assert.deepStrictEqual(r.body.events.map(e => e.seq), [s3]);
-    assert.strictEqual(r.body.next_cursor, await cursorAt(h, s3));
+    assert.deepStrictEqual(r.body.events.map(e => e.cursor), [c3]);
+    assert.strictEqual(r.body.next_cursor, c3);
     r = await request(h.base, 'GET', `/api/v1/events?topic=live.vod.*&after=${r.body.next_cursor}`, { token: reader });
     assert.deepStrictEqual(r.body.events, []);
-    assert.strictEqual(r.body.latest_cursor, await cursorAt(h, s3));
+    assert.strictEqual(r.body.latest_cursor, c3);
     assert.match(r.body.latest_cursor, /^c1\./, 'the head as an opaque cursor');
     {
         // Starting at the head with latest_cursor reads nothing old, and the next event after it arrives.
@@ -82,9 +85,9 @@ t('pull: cursor, topic filter, internal events included for services', async () 
         assert.strictEqual(fromHead.body.next_cursor, head);
     }
 
-    const id3 = (await h.db.prepare('SELECT id FROM events WHERE seq = ?').get(s3)).id;
+    const id3 = (await h.db.prepare('SELECT id FROM events WHERE seq = ?').get(cursor.decode(c3).seq)).id;
     r = await request(h.base, 'GET', `/api/v1/events/${id3}`, { token: reader });
-    assert.strictEqual(r.body.seq, s3);
+    assert.strictEqual(r.body.cursor, c3);
     r = await request(h.base, 'GET', '/api/v1/events?topic=live.*', { token: live });
     assert.strictEqual(r.status, 403, 'events.event.read is required');
     r = await request(h.base, 'GET', '/api/v1/events?limit=5000', { token: reader });
@@ -94,10 +97,10 @@ t('pull: cursor, topic filter, internal events included for services', async () 
 t('pull: a cursor older than retention reports the gap', async () => {
     const before = await h.store.lastSeq();
     await h.store.prune({ retentionDays: 30, now: Date.now() + 31 * 86400000 });
-    const s = (await request(h.base, 'POST', '/api/v1/events', { token: live, body: envelope() })).body.seq;
+    const c = (await request(h.base, 'POST', '/api/v1/events', { token: live, body: envelope() })).body.cursor;
     const r = await request(h.base, 'GET', `/api/v1/events?after=${await cursorAt(h, 1)}`, { token: reader });
     assert.deepStrictEqual(r.body.gap, { from_seq: 2, to_seq: before });
-    assert.deepStrictEqual(r.body.events.map(e => e.seq), [s]);
+    assert.deepStrictEqual(r.body.events.map(e => e.cursor), [c]);
 });
 
 t('pull: after_seq is refused even at zero', async () => {

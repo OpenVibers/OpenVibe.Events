@@ -148,7 +148,7 @@ async function subscriber(respond = () => 204) {
     };
 }
 
-/** Open an SSE stream and parse it. */
+/** Open an SSE stream and parse it; events() derives a test-only seq from each message id cursor. */
 function sse(base, pathAndQuery, { headers = {} } = {}) {
     return new Promise((resolve, reject) => {
         const messages = [];
@@ -161,7 +161,7 @@ function sse(base, pathAndQuery, { headers = {} } = {}) {
                 headers: res.headers,
                 messages,
                 body: '',
-                events: () => messages.filter(m => !m.event || m.event === 'message').map(m => JSON.parse(m.data)),
+                events: () => messages.filter(m => !m.event || m.event === 'message').map(m => ({ ...JSON.parse(m.data), seq: require('../server/cursor').decode(m.id).seq })),
                 gaps: () => messages.filter(m => m.event === 'gap').map(m => JSON.parse(m.data)),
                 comments: [],
                 waitFor(pred, ms = 2000) {

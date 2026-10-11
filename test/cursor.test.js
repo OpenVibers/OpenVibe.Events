@@ -1,9 +1,8 @@
 'use strict';
 /**
  * ADR-042 decision 7: consumer positions are cursors only. A cursor is `c1.<epoch>.<base64url(seq)>`;
- * event answers retain seq and carry a cursor, pull accepts `after=<cursor>`, SSE resumes from
- * cursor IDs, and checkpoints store and return opaque cursor strings. Unchanged publish and single
- * event answers are validated against the pinned openvibe-contracts.
+ * event answers carry a cursor without seq, pull accepts `after=<cursor>`, SSE resumes from
+ * cursor IDs, and checkpoints store and return opaque cursor strings.
  */
 const assert = require('assert');
 const { validate } = require('openvibe-contracts');
@@ -43,22 +42,23 @@ t('publish and read answers carry cursors', async () => {
     const one = await publish();
     const pv = validate('events.publish-result@1', one);
     assert.ok(pv.valid, JSON.stringify(pv.errors));
-    assert.deepStrictEqual(cursor.decode(one.cursor), { seq: one.seq, epoch });
+    assert.deepStrictEqual(cursor.decode(one.cursor), { seq: (await h.store.getEvent(one.event_id)).seq, epoch });
 
     const batch = await request(h.base, 'POST', '/api/v1/events', { token: live, body: { events: [envelope('live', { event_type: 'live.vod.ready' }), envelope('live', { event_type: 'live.vod.ready' })] } });
     assert.ok(validate('events.publish-result@1', batch.body).valid);
-    for (const r of batch.body.results) assert.deepStrictEqual(cursor.decode(r.cursor), { seq: r.seq, epoch });
+    for (const r of batch.body.results) assert.deepStrictEqual(cursor.decode(r.cursor), { seq: (await h.store.getEvent(r.event_id)).seq, epoch });
 
     const page = await request(h.base, 'GET', '/api/v1/events?topic=live.vod.*', { token: reader });
     assert.ok(typeof page.body.next_cursor === 'string' && typeof page.body.latest_cursor === 'string');
     assert.ok(page.body.events.length >= 3);
-    for (const e of page.body.events) assert.deepStrictEqual(cursor.decode(e.cursor), { seq: e.seq, epoch });
-    assert.deepStrictEqual(cursor.decode(page.body.next_cursor), { seq: page.body.events.at(-1).seq, epoch });
+    for (const e of page.body.events) assert.deepStrictEqual(cursor.decode(e.cursor), { seq: (await h.store.getEvent(e.event.event_id)).seq, epoch });
+    assert.strictEqual(page.body.next_cursor, page.body.events.at(-1).cursor);
     assert.ok(!('next_after_seq' in page.body) && !('latest_seq' in page.body));
 
     const single = await request(h.base, 'GET', `/api/v1/events/${one.event_id}`, { token: reader });
     assert.ok(validate('events.read-result@1', single.body).valid);
-    assert.deepStrictEqual(cursor.decode(single.body.cursor), { seq: single.body.seq, epoch });
+    assert.strictEqual(single.body.cursor, one.cursor);
+    assert.ok(!Object.hasOwn(single.body, 'seq'));
 });
 
 t('pull accepts after=<cursor>; next_cursor round-trips a page and after_seq is refused', async () => {
@@ -68,8 +68,8 @@ t('pull accepts after=<cursor>; next_cursor round-trips a page and after_seq is 
     assert.strictEqual(r.body.next_cursor, first.cursor);
     r = await request(h.base, 'GET', `/api/v1/events?topic=live.vod.*&after=${encodeURIComponent(r.body.next_cursor)}`, { token: reader });
     assert.strictEqual(r.status, 200, r.text);
-    assert.ok(r.body.events.length >= 1 && r.body.events.every(e => e.seq > first.seq));
-    for (const value of ['0', String(first.seq)]) {
+    assert.ok(r.body.events.length >= 1 && r.body.events.every(e => cursor.decode(e.cursor).seq > cursor.decode(first.cursor).seq));
+    for (const value of ['0', String(cursor.decode(first.cursor).seq)]) {
         r = await request(h.base, 'GET', `/api/v1/events?topic=live.vod.*&after_seq=${value}`, { token: reader });
         assert.strictEqual(r.status, 400);
         assert.strictEqual(r.body.code, 'events.bad_request');
@@ -104,22 +104,24 @@ t('SSE id is the cursor; Last-Event-ID resumes from a cursor, and a bare seq sta
     const s1 = await publish({ visibility: 'public', event_type: 'live.stream.a' });
     await c1.waitFor(x => x.events().length === 1);
     const msg = c1.messages.find(m => !m.event);
-    assert.deepStrictEqual(cursor.decode(msg.id), { seq: s1.seq, epoch });
+    assert.strictEqual(msg.id, s1.cursor);
+    assert.strictEqual(cursor.decode(msg.id).epoch, epoch);
+    assert.ok(!Object.hasOwn(JSON.parse(msg.data), 'seq'));
     c1.close();
 
     const s2 = await publish({ visibility: 'public', event_type: 'live.stream.b' });
     const byCursor = await sse(h.base, `/realtime/stream?topics=live.stream.*&last_event_id=${encodeURIComponent(msg.id)}`, { headers: { Authorization: `Bearer ${readerSvc}` } });
     await byCursor.waitFor(x => x.events().length === 1);
-    assert.deepStrictEqual(byCursor.events().map(e => e.seq), [s2.seq]);
+    assert.deepStrictEqual(byCursor.events().map(e => e.seq), [cursor.decode(s2.cursor).seq]);
     assert.deepStrictEqual(byCursor.gaps(), []);
     byCursor.close();
 
-    const bySeq = await sse(h.base, `/realtime/stream?topics=live.stream.*&last_event_id=${s1.seq}`, { headers: { Authorization: `Bearer ${readerSvc}` } });
+    const bySeq = await sse(h.base, `/realtime/stream?topics=live.stream.*&last_event_id=${cursor.decode(s1.cursor).seq}`, { headers: { Authorization: `Bearer ${readerSvc}` } });
     assert.deepStrictEqual(bySeq.events(), [], 'a bare number does not replay missed events');
     assert.deepStrictEqual(bySeq.gaps(), []);
     const s3 = await publish({ visibility: 'public', event_type: 'live.stream.c' });
     await bySeq.waitFor(x => x.events().length === 1);
-    assert.deepStrictEqual(bySeq.events().map(e => e.seq), [s3.seq]);
+    assert.deepStrictEqual(bySeq.events().map(e => e.seq), [cursor.decode(s3.cursor).seq]);
     bySeq.close();
 });
 
@@ -134,7 +136,7 @@ t('SSE reports a gap when the cursor belongs to another epoch', async () => {
     await again.waitFor(x => x.gaps().length >= 1);
     assert.strictEqual(again.gaps()[0].reason, 'epoch');
     // The retained matching event is replayed after the gap.
-    await again.waitFor(x => x.events().some(e => e.seq === s.seq));
+    await again.waitFor(x => x.events().some(e => e.seq === cursor.decode(s.cursor).seq));
     again.close();
 });
 

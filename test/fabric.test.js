@@ -220,7 +220,8 @@ t('valkey-v1 QUEUE: two instances, exactly once, per-key order, fast; a down car
         await putPolicy(a.base, 'live.q.*', keyed('subject'));
         const KEYS = ['K0', 'K1', 'K2', 'K3', 'K4'];
         const byId = new Map();
-        const firstSeq = new Map(KEYS.map((k) => [k, []]));
+        const firstIds = new Map(KEYS.map((k) => [k, []]));
+        const expectedIds = new Map(KEYS.map((k) => [k, []]));
         stub.calls.length = 0;
         const seen = new Map();
         // Publish 50 events over 5 keys, recording the publish time per event id.
@@ -229,6 +230,7 @@ t('valkey-v1 QUEUE: two instances, exactly once, per-key order, fast; a down car
             for (const k of KEYS) {
                 const env2 = envelope('live', { event_type: 'live.q.x', subject: { type: 'stream', id: k } });
                 publishedAt.set(env2.event_id, Date.now());
+                expectedIds.get(k).push(env2.event_id);
                 await publish(a.base, env2);
             }
         }
@@ -236,13 +238,13 @@ t('valkey-v1 QUEUE: two instances, exactly once, per-key order, fast; a down car
         await waitFor(() => {
             for (const c of stub.calls) {
                 const id = c.body.event.event_id;
-                if (!seen.has(id)) { seen.set(id, { at: Date.now(), seq: c.body.seq }); byId.set(id, (byId.get(id) || 0) + 1); const L = firstSeq.get(c.body.event.subject.id); if (L && !L.includes(c.body.seq)) L.push(c.body.seq); }
+                if (!seen.has(id)) { seen.set(id, { at: Date.now() }); byId.set(id, (byId.get(id) || 0) + 1); const L = firstIds.get(c.body.event.subject.id); if (L && !L.includes(id)) L.push(id); }
             }
             return seen.size >= 50;
         }, 9000);
         assert.strictEqual(byId.size, 50, 'every event of every key was delivered');
         assert.ok([...byId.values()].every((n) => n === 1), 'each delivery was sent exactly once');
-        for (const k of KEYS) { const L = firstSeq.get(k); assert.deepStrictEqual(L, [...L].sort((x, y) => x - y), `${k}: first delivery per seq is in order`); }
+        for (const k of KEYS) assert.deepStrictEqual(firstIds.get(k), expectedIds.get(k), `${k}: first deliveries follow publish order`);
         const lats = [...publishedAt.entries()].map(([id, at]) => seen.get(id).at - at).sort((x, y) => x - y);
         const median = lats[Math.floor(lats.length / 2)];
         assert.ok(median < 5000, `median publish->send latency ${median}ms is below the 5 s poll interval`);
@@ -252,7 +254,7 @@ t('valkey-v1 QUEUE: two instances, exactly once, per-key order, fast; a down car
         const before = seen.size;
         for (let i = 0; i < 5; i++) await publish(a.base, envelope('live', { event_type: 'live.q.x', subject: { type: 'stream', id: 'K9' } }));
         await waitFor(() => {
-            for (const c of stub.calls) { const id = c.body.event.event_id; if (!seen.has(id)) { seen.set(id, { at: Date.now(), seq: c.body.seq }); byId.set(id, (byId.get(id) || 0) + 1); } }
+            for (const c of stub.calls) { const id = c.body.event.event_id; if (!seen.has(id)) { seen.set(id, { at: Date.now() }); byId.set(id, (byId.get(id) || 0) + 1); } }
             return seen.size >= before + 5;
         }, 12000);
         assert.ok([...byId.values()].every((n) => n === 1), 'nothing was lost or doubled when the carrier went down');

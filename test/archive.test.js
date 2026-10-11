@@ -43,14 +43,14 @@ t('a hot-pruned event is readable through replay: by id and by pull, unchanged',
     assert.deepStrictEqual([await count('events', e.event_id), await count('events_archive', e.event_id)], [0, 1], 'moved, not copied');
     const after = await request(h.base, 'GET', `/api/v1/events/${e.event_id}`, { token: reader });
     assert.strictEqual(after.status, 200, after.text);
-    assert.deepStrictEqual(after.body, before.body, 'the same seq, cursor and envelope from the replay tier');
+    assert.deepStrictEqual(after.body, before.body, 'the same cursor and envelope from the replay tier');
     const p = await pull('topic=live.tier.one');
     assert.deepStrictEqual(p.body.events.map(x => x.event), [before.body.event]);
     assert.strictEqual(p.body.gap, undefined);
     // A publish of the same id is a duplicate with its position, never a second row.
     const again = await request(h.base, 'POST', '/api/v1/events', { token: live, body: envelope('live', { event_id: e.event_id, event_type: 'live.tier.one' }) });
     assert.strictEqual(again.status, 200, again.text);
-    assert.deepStrictEqual([again.body.duplicate, again.body.seq, again.body.cursor], [true, e.seq, e.cursor]);
+    assert.deepStrictEqual([again.body.duplicate, again.body.cursor], [true, e.cursor]);
 });
 
 t('a cursor across the hot/replay boundary reports no false gap (pull and SSE)', async () => {
@@ -61,18 +61,18 @@ t('a cursor across the hot/replay boundary reports no false gap (pull and SSE)',
     const c = await publish(live, envelope('live', { event_type: 'live.tier.cross' }));
 
     let r = await pull(`topic=live.tier.cross&after=${a.cursor}&limit=1`);
-    assert.deepStrictEqual([r.body.events.map(x => x.seq), r.body.gap], [[b.seq], undefined], 'replay');
+    assert.deepStrictEqual([r.body.events.map(x => x.cursor), r.body.gap], [[b.cursor], undefined], 'replay');
     assert.strictEqual(r.body.events[0].cursor, b.cursor);
     r = await pull(`topic=live.tier.cross&after=${r.body.next_cursor}&limit=1`);
-    assert.deepStrictEqual([r.body.events.map(x => x.seq), r.body.gap], [[c.seq], undefined], 'then hot, no gap between');
-    r = await pull(`topic=*&after=${await cursorAt(h, a.seq - 1)}`);
-    assert.deepStrictEqual(r.body.events.map(x => x.seq), [a.seq, b.seq, c.seq]);
+    assert.deepStrictEqual([r.body.events.map(x => x.cursor), r.body.gap], [[c.cursor], undefined], 'then hot, no gap between');
+    r = await pull(`topic=*&after=${await cursorAt(h, cursor.decode(a.cursor).seq - 1)}`);
+    assert.deepStrictEqual(r.body.events.map(x => x.cursor), [a.cursor, b.cursor, c.cursor]);
     assert.strictEqual(r.body.gap, undefined);
 
     const s = await sse(h.base, '/realtime/stream?topics=live.tier.cross', { headers: { Authorization: `Bearer ${serviceToken('live', ['events.event.read'])}`, 'Last-Event-ID': a.cursor } });
     open.push(s);
     await s.waitFor(x => x.events().length === 2);
-    assert.deepStrictEqual(s.events().map(x => x.seq), [b.seq, c.seq]);
+    assert.deepStrictEqual(s.events().map(x => x.event.event_id), [b.event_id, c.event_id]);
     assert.deepStrictEqual(s.gaps(), []);
     assert.ok(s.messages.some(m => m.id === b.cursor), 'the SSE id of a replayed event is its cursor');
     s.close();
@@ -90,7 +90,7 @@ t('redaction reaches replay rows (by id and by subject); the owner rule holds th
         const r = await request(h.base, 'GET', `/api/v1/events/${e.event_id}`, { token: reader });
         assert.strictEqual(r.body.event.payload.redacted, true, JSON.stringify(r.body));
         assert.deepStrictEqual(r.body.event.actor, { type: 'service', id: 'live' });
-        assert.strictEqual(r.body.seq, e.seq);
+        assert.strictEqual(r.body.cursor, e.cursor);
     }
     const p = await pull('topic=live.tier.secret');
     assert.ok(p.body.events.every(e => e.event.payload.redacted === true && !('secret' in e.event.payload)));
@@ -109,9 +109,9 @@ t('sandbox and environment rules apply to replay rows exactly as to hot ones', a
     assert.deepStrictEqual([await count('events_archive', pe.event_id), await count('events_archive', se.event_id), await count('events', se.event_id)], [1, 0, 0],
         'a production event moves; a sandbox event is deleted, never kept in replay');
     const topic = `topic=app.${apps.projectKey(prj)}.*`;
-    assert.deepStrictEqual((await pull(topic, prod)).body.events.map(e => e.seq), [pe.seq], 'the app reads its own replay rows');
+    assert.deepStrictEqual((await pull(topic, prod)).body.events.map(e => e.cursor), [pe.cursor], 'the app reads its own replay rows');
     assert.deepStrictEqual((await pull(topic, sand)).body.events, [], 'never across environments');
-    assert.deepStrictEqual((await pull(topic)).body.events.map(e => e.seq), [pe.seq], 'first-party: production app events through app.*');
+    assert.deepStrictEqual((await pull(topic)).body.events.map(e => e.cursor), [pe.cursor], 'first-party: production app events through app.*');
     assert.deepStrictEqual((await pull('topic=*')).body.events.filter(e => e.event.event_id === pe.event_id), [], '…and only through app.*');
     assert.strictEqual((await request(h.base, 'GET', `/api/v1/events/${pe.event_id}`, { token: sand })).status, 404);
     assert.strictEqual((await request(h.base, 'GET', `/api/v1/events/${pe.event_id}`, { token: prod })).status, 200);
@@ -189,12 +189,12 @@ t('replay pruning answers `gap` (the existing shape), pull and SSE', async () =>
     await h.store.prune(tiered(366));
     const kept = await publish(live, envelope('live', { event_type: 'live.tier.gone' }));
     const r = await pull(`topic=live.tier.gone&after=${a.cursor}`);
-    assert.deepStrictEqual(r.body.gap, { from_seq: a.seq + 1, to_seq: kept.seq - 1 });
-    assert.deepStrictEqual(r.body.events.map(e => e.seq), [kept.seq]);
+    assert.deepStrictEqual(r.body.gap, { from_seq: cursor.decode(a.cursor).seq + 1, to_seq: cursor.decode(kept.cursor).seq - 1 });
+    assert.deepStrictEqual(r.body.events.map(e => e.cursor), [kept.cursor]);
     const s = await sse(h.base, '/realtime/stream?topics=live.tier.gone', { headers: { Authorization: `Bearer ${serviceToken('live', ['events.event.read'])}`, 'Last-Event-ID': a.cursor } });
     open.push(s);
     await s.waitFor(x => x.events().length === 1);
-    assert.deepStrictEqual(s.gaps().map(g => [g.reason, g.from_seq, g.to_seq]), [['retention', a.seq + 1, kept.seq - 1]]);
+    assert.deepStrictEqual(s.gaps().map(g => [g.reason, g.from_seq, g.to_seq]), [['retention', cursor.decode(a.cursor).seq + 1, cursor.decode(kept.cursor).seq - 1]]);
     s.close();
 });
 
@@ -216,7 +216,7 @@ t('EVENTS_REPLAY_RETENTION_DAYS=0 behaves exactly as before the tiers', async ()
         assert.strictEqual((await x.db.prepare('SELECT COUNT(*)::int AS n FROM events_archive').get()).n, 0);
         const kept = await pub();
         const p = await request(x.base, 'GET', `/api/v1/events?topic=live.tier.zero&after=${old.cursor}`, { token: reader });
-        assert.deepStrictEqual(p.body.gap, { from_seq: old.seq + 1, to_seq: kept.seq - 1 });
+        assert.deepStrictEqual(p.body.gap, { from_seq: cursor.decode(old.cursor).seq + 1, to_seq: cursor.decode(kept.cursor).seq - 1 });
         assert.strictEqual((await request(x.base, 'GET', `/api/v1/events/${old2.event_id}`, { token: reader })).status, 404);
         const lim = limitsOf(x.config).limits.find(l => l.id === 'replay_retention_days');
         assert.deepStrictEqual([lim.production, lim.sandbox], [0, 0]);
