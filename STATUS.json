@@ -7,7 +7,7 @@
   "runtime": "node 22, express, PostgreSQL 18 (openvibe-sdk/db, async) + Valkey 9",
   "port": 4300,
   "domain": "openvibe.events",
-  "contracts": "openvibe-contracts v0.132.0",
+  "contracts": "openvibe-contracts v0.136.1",
   "sdk": "openvibe-sdk v0.42.0",
   "shared": "openvibe-shared v3.0.1",
   "capabilities": [
@@ -37,5 +37,5 @@
     "carrier fabric (ADR-042): the pg-v1 poll beside a valkey-v1 push carrier for QUEUE (streams) and TOPIC (SSE fan-out) an optional nats-v1 NATS Core TOPIC carrier (NATS_URL) and an optional nats-js-v1 JetStream STREAM carrier (NATS_URL, NATS_JETSTREAM; deploy/nats) and an optional cloud-v1 SQS-compatible QUEUE carrier (CLOUD_QUEUE_URL; SigV4, no dependency), with a placement planner, per-key pinning, delivery_placements history and a GET /api/v1/placement explain API; EVENTS_CARRIERS[_DISABLED] switches it",
     "at_most_once delivery semantics (a failed attempt is final)"
   ],
-  "updated": "2026-10-10"
+  "updated": "2026-10-11"
 }
