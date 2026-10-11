@@ -147,34 +147,39 @@ t('per-key order under retries: a successor waits for its head, another key goes
     await h.store.setSubscriptionEnabled(sub.id, false);
 });
 
-t('per-key order across two workers with a lease expiry, and never two distinct seqs of one key in flight', async () => {
+t('per-key order across two workers with a lease expiry, and never two distinct events of one key in flight', async () => {
     const stub = await subscriber(() => 204);
     const sub = await subscribe('ord3', 'live.ord3.*', stub.url);
     await putPolicy('live.ord3.*', keyed('subject'));
 
     const keys = ['K0', 'K1', 'K2'];
     const byId = new Map();               // event_id -> deliveries
-    const firstSeqs = new Map(keys.map((k) => [k, []]));   // key -> seqs in first-delivery order
-    const inflight = new Map();           // key -> Set(seq)
-    let distinctPeak = 0;                 // the most distinct seqs of one key ever in flight at once
+    const firstIds = new Map(keys.map((k) => [k, []]));   // key -> event ids in first-delivery order
+    const inflight = new Map();           // key -> Set(event_id)
+    let distinctPeak = 0;                 // the most distinct events of one key ever in flight at once
     const fetchImpl = async (url, init) => {
-        const { event, seq } = JSON.parse(init.body);
+        const { event } = JSON.parse(init.body);
         const k = event.subject.id;
         byId.set(event.event_id, (byId.get(event.event_id) || 0) + 1);
         const set = inflight.get(k) || new Set();
         inflight.set(k, set);
-        set.add(seq);
+        set.add(event.event_id);
         distinctPeak = Math.max(distinctPeak, set.size);
         await sleep(2);
-        set.delete(seq);
-        const list = firstSeqs.get(k);
-        if (!list.includes(seq)) list.push(seq);
+        set.delete(event.event_id);
+        const list = firstIds.get(k);
+        if (!list.includes(event.event_id)) list.push(event.event_id);
         return new Response(null, { status: 204 });
     };
 
-    // 30 events over 3 keys, interleaved so the global seq order is not the per-key order.
+    // 30 events over 3 keys, interleaved across keys.
+    const expectedIds = new Map(keys.map((k) => [k, []]));
     for (let i = 0; i < 10; i++) {
-        for (const k of keys) await publish(envelope('live', { event_type: 'live.ord3.x', subject: { type: 'stream', id: k } }));
+        for (const k of keys) {
+            const env = envelope('live', { event_type: 'live.ord3.x', subject: { type: 'stream', id: k } });
+            expectedIds.get(k).push(env.event_id);
+            await publish(env);
+        }
     }
 
     const a = createWorker({ store: h.store, config: h.config, clock: h.clock, fetchImpl, log: silent });
@@ -189,10 +194,10 @@ t('per-key order across two workers with a lease expiry, and never two distinct 
     assert.strictEqual(byId.size, 30, 'every event of every key was delivered');
     assert.ok([...byId.values()].every((n) => n >= 1), 'every event delivered at least once');
     for (const k of keys) {
-        const list = firstSeqs.get(k);
-        assert.deepStrictEqual(list, [...list].sort((x, y) => x - y), `${k}: the first delivery of each seq is in seq order (${list})`);
+        const list = firstIds.get(k);
+        assert.deepStrictEqual(list, expectedIds.get(k), `${k}: first deliveries follow publish order`);
     }
-    assert.strictEqual(distinctPeak, 1, 'never two distinct seqs of one key in flight at once');
+    assert.strictEqual(distinctPeak, 1, 'never two distinct events of one key in flight at once');
 
     await deletePolicy('live.ord3.*');
     await stub.close();
@@ -205,17 +210,17 @@ t('max_inflight = 2: two keys run together, never two of one key, never three at
     await putPolicy('live.ord4.*', keyed('subject'));
     await h.store.db.prepare('UPDATE subscriptions SET max_inflight = 2 WHERE id = ?').run(sub.id);
 
-    const inflight = [];   // { key, seq } currently being sent
+    const inflight = [];   // { key, event id } currently being sent
     let totalPeak = 0;
     let keyPeak = 0;
     const fetchImpl = async (url, init) => {
-        const { event, seq } = JSON.parse(init.body);
+        const { event } = JSON.parse(init.body);
         const k = event.subject.id;
-        inflight.push({ k, seq });
+        inflight.push({ k, id: event.event_id });
         totalPeak = Math.max(totalPeak, inflight.length);
         keyPeak = Math.max(keyPeak, inflight.filter((x) => x.k === k).length);
         await sleep(4);
-        inflight.splice(inflight.findIndex((x) => x.k === k && x.seq === seq), 1);
+        inflight.splice(inflight.findIndex((x) => x.k === k && x.id === event.event_id), 1);
         return new Response(null, { status: 204 });
     };
 

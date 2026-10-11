@@ -5,7 +5,7 @@
  * The leak this closes: a chat message deleted in OpenVibe.Chat stayed replayable here, text and
  * anon id included, for the whole retention, to anyone (public visibility, anonymous SSE replay).
  * Now Chat's chat.message.deleted carries payload.redacts, the stored chat.message.created becomes
- * a tombstone at the same seq on every read path, and browsers are replayed public events of the
+ * a tombstone at the same stored position on every read path, and browsers are replayed public events of the
  * last few minutes only.
  */
 const assert = require('assert');
@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const { ids } = require('openvibe-contracts');
 const apps = require('../server/apps');
+const cursor = require('../server/cursor');
 const { parseDirective } = require('../server/redaction');
 const { boot, request, serviceToken, userToken, appToken, envelope, subscriber, sse, sleep, suite, cursorAt } = require('./helpers');
 
@@ -96,7 +97,7 @@ t('a first-party subscriber is queued the original before the deletion', async (
 t('before deletion the message is replayable (the leak as it was)', async () => {
     const env = created(101);
     msgEventId = env.event_id;
-    msgSeq = (await publish(chat, env)).seq;
+    msgSeq = cursor.decode((await publish(chat, env)).cursor).seq;
     const anon = await stream('topics=chat.message.*', { 'Last-Event-ID': await cursorAt(h, msgSeq - 1) });
     await anon.waitFor(c => c.events().length === 1);
     assert.strictEqual(anon.events()[0].event.payload.text, SECRET_TEXT);
@@ -107,7 +108,7 @@ t('chat.message.deleted turns the stored event into a tombstone at the same seq'
     const env = deleted([101]);
     delEventId = env.event_id;
     const r = await publish(chat, env);
-    delSeq = r.seq;
+    delSeq = cursor.decode(r.cursor).seq;
     assert.strictEqual(delSeq, msgSeq + 1);
     const row = await h.store.getEvent(msgEventId);
     assert.strictEqual(row.seq, msgSeq, 'seq unchanged');
@@ -145,15 +146,15 @@ t('signed-in SSE replay (cookie and Bearer) and service replay: the tombstone to
 t('pull (/api/v1/events), by id, and developer-app reads: the tombstone', async () => {
     let r = await request(h.base, 'GET', `/api/v1/events?topic=chat.message.*&after=${await cursorAt(h, msgSeq - 1)}`, { token: reader });
     assert.strictEqual(r.status, 200);
-    assert.deepStrictEqual(r.body.events.map(e => e.seq), [msgSeq, delSeq], 'no hole in the sequence');
+    assert.deepStrictEqual(r.body.events.map(e => cursor.decode(e.cursor).seq), [msgSeq, delSeq], 'no hole in the sequence');
     assertTombstone(r.body.events[0].event, delEventId);
     r = await request(h.base, 'GET', `/api/v1/events/${msgEventId}`, { token: reader });
     assertTombstone(r.body.event, delEventId);
-    assert.strictEqual(r.body.seq, msgSeq);
+    assert.strictEqual(cursor.decode(r.body.cursor).seq, msgSeq);
     const app = appToken({ env: 'production', cap: ['events.app.read'] });
     r = await request(h.base, 'GET', `/api/v1/events?topic=chat.*&after=${await cursorAt(h, msgSeq - 1)}`, { token: app });
     assert.strictEqual(r.status, 200, r.text);
-    assert.deepStrictEqual(r.body.events.map(e => e.seq), [msgSeq, delSeq]);
+    assert.deepStrictEqual(r.body.events.map(e => cursor.decode(e.cursor).seq), [msgSeq, delSeq]);
     assertTombstone(r.body.events[0].event, delEventId);
     assert.ok(!leaks(r.body));
 });
@@ -161,7 +162,7 @@ t('pull (/api/v1/events), by id, and developer-app reads: the tombstone', async 
 t('durable delivery: the consumer gets the tombstone and then the deletion, in order', async () => {
     await h.worker.drain();
     const got = stub.calls.map(c => c.body);
-    assert.deepStrictEqual(got.map(b => b.seq), [msgSeq, delSeq]);
+    assert.deepStrictEqual(got.map(b => b.event.event_id), [msgEventId, delEventId]);
     assertTombstone(got[0].event, delEventId);
     assert.strictEqual(got[1].event.event_type, 'chat.message.deleted');
     assert.ok(!leaks(stub.calls.map(c => c.rawBody.toString())));
@@ -200,7 +201,7 @@ t('re-publishing a deletion is a duplicate; a second deletion leaves tombstones 
 
 t('only the owning service can redact', async () => {
     const env = created(201);
-    const seq = (await publish(chat, env)).seq;
+    const seq = cursor.decode((await publish(chat, env)).cursor).seq;
     // Live names Chat's event by id: refused, and nothing of the batch is stored.
     const liveEvent = envelope('live', { payload: { redacts: { event_ids: [env.event_id] } } });
     let r = await request(h.base, 'POST', '/api/v1/events', { token: live, body: { events: [envelope('live'), liveEvent] } });
@@ -264,7 +265,7 @@ t('operator redaction (backfill): same owner rule, idempotent', async () => {
 t('public replay window: browsers get a gap for public events older than 5 minutes', async () => {
     const w = await boot({ env: { REALTIME_PUBLIC_REPLAY_SECONDS: '300' } });
     try {
-        const post = async (token, body) => (await request(w.base, 'POST', '/api/v1/events', { token, body })).body.seq;
+        const post = async (token, body) => cursor.decode((await request(w.base, 'POST', '/api/v1/events', { token, body })).body.cursor).seq;
         const net = serviceToken('network', ['events.event.publish']);
         const oldPublic = await post(chat, created(1));
         const oldMine = await post(net, envelope('network', { event_type: 'network.notification.created', visibility: 'subject', subject: { type: 'user', id: alice } }));
@@ -296,7 +297,7 @@ t('public replay window: browsers get a gap for public events older than 5 minut
 
         const none = await boot({ env: { REALTIME_PUBLIC_REPLAY_SECONDS: '0' } });
         try {
-            const s = await (async () => (await request(none.base, 'POST', '/api/v1/events', { token: chat, body: created(3) })).body.seq)();
+            const s = await (async () => cursor.decode((await request(none.base, 'POST', '/api/v1/events', { token: chat, body: created(3) })).body.cursor).seq)();
             const c = await sse(none.base, '/realtime/stream?topics=chat.message.*', { headers: { 'Last-Event-ID': await cursorAt(none, s - 1) } });
             await c.waitFor(x => x.gaps().length === 1);
             await sleep(50);

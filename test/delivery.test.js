@@ -2,6 +2,7 @@
 const assert = require('assert');
 const crypto = require('crypto');
 const { verifyDelivery, verifyDeliveryV2, signV2, sign } = require('../lib/client');
+const cursor = require('../server/cursor');
 const { boot, request, serviceToken, envelope, subscriber, suite, sleep } = require('./helpers');
 
 const t = suite('delivery');
@@ -21,7 +22,7 @@ async function publish(env) {
 
 t('signV2 / verifyDeliveryV2: HMAC of "<t>.<raw body>", ±300 s, constant-time', async () => {
     const secret = `whsec_${'cd'.repeat(32)}`;
-    const raw = Buffer.from(JSON.stringify({ event: { event_id: 'evt_1' }, seq: 3 }));
+    const raw = Buffer.from(JSON.stringify({ event: { event_id: 'evt_1' } }));
     const now = 1790000000000;
     const t = Math.floor(now / 1000);
     const v2 = signV2(raw, secret, t);
@@ -36,7 +37,7 @@ t('signV2 / verifyDeliveryV2: HMAC of "<t>.<raw body>", ±300 s, constant-time',
     assert.ok(!verifyDeliveryV2(raw, headers, secret, { now: now - 301000 }), 'too far in the future');
     assert.ok(verifyDeliveryV2(raw, headers, secret, { now: now + 3600000, toleranceSec: 3601 }));
     assert.ok(!verifyDeliveryV2(raw, headers, 'whsec_other', { now }));
-    assert.ok(!verifyDeliveryV2(Buffer.from(raw.toString().replace('3', '4')), headers, secret, { now }), 'body changed');
+    assert.ok(!verifyDeliveryV2(Buffer.from(raw.toString().replace('evt_1', 'evt_2')), headers, secret, { now }), 'body changed');
     assert.ok(!verifyDeliveryV2(raw, { ...headers, 'x-openvibe-signature-v2': v2.replace(`t=${t}`, `t=${t + 1}`) }, secret, { now }), 'timestamp changed');
     assert.ok(!verifyDeliveryV2(raw, { ...headers, 'x-openvibe-timestamp': String(t + 1) }, secret, { now }), 'X-OpenVibe-Timestamp must match t');
     assert.ok(verifyDeliveryV2(raw, { 'x-openvibe-signature-v2': `${v2},v2=${'0'.repeat(64)}` }, secret, { now }), 'one of several v2 values');
@@ -136,7 +137,7 @@ t('success: signed POST (v2 only), verified by verifyDeliveryV2; trace propagate
     const stub = await subscriber();
     const sub = (await subscribe(media, { topic_pattern: 'live.stream.*', endpoint: stub.url })).body;
     const env = envelope('live', { trace_id: '4bf92f3577b34da6a3ce929d0e0e4736' });
-    const { seq } = await publish(env);
+    await publish(env);
     assert.strictEqual((await h.store.getDelivery(env.event_id, sub.id)).status, 'pending', 'persisted before delivery');
     await h.worker.drain();
     assert.strictEqual(stub.calls.length, 1);
@@ -154,7 +155,8 @@ t('success: signed POST (v2 only), verified by verifyDeliveryV2; trace propagate
     assert.strictEqual(call.headers['x-openvibe-event-id'], env.event_id);
     assert.match(call.headers.traceparent, /^00-4bf92f3577b34da6a3ce929d0e0e4736-[0-9a-f]{16}-01$/);
     assert.deepStrictEqual(call.body.event.payload, env.payload);
-    assert.strictEqual(call.body.seq, seq);
+    assert.strictEqual(call.body.seq, undefined);
+    assert.strictEqual(call.headers['x-openvibe-seq'], undefined);
     const d = await h.store.getDelivery(env.event_id, sub.id);
     assert.strictEqual(d.status, 'delivered');
     assert.strictEqual(d.attempt, 1);
@@ -216,14 +218,14 @@ t('replay from_seq re-sends retained matching events (new subscription catches u
     const e1 = envelope('live', { event_type: 'live.history.a' });
     const e2 = envelope('live', { event_type: 'live.history.b' });
     const e3 = envelope('live', { event_type: 'live.other.c' });
-    const { seq } = await publish(e1);
+    const { cursor: firstCursor } = await publish(e1);
     await publish(e2);
     await publish(e3);
     const stub = await subscriber();
     const sub = (await subscribe(media, { topic_pattern: 'live.history.*', endpoint: stub.url })).body;
     await h.worker.drain();
     assert.strictEqual(stub.calls.length, 0, 'subscriptions only get events published after they exist');
-    const rp = await request(h.base, 'POST', '/api/v1/deliveries/replay', { token: admin, body: { subscription_id: sub.id, from_seq: seq } });
+    const rp = await request(h.base, 'POST', '/api/v1/deliveries/replay', { token: admin, body: { subscription_id: sub.id, from_seq: cursor.decode(firstCursor).seq } });
     assert.strictEqual(rp.body.queued, 2);
     await h.worker.drain();
     assert.deepStrictEqual(stub.calls.map(c => c.body.event.event_id), [e1.event_id, e2.event_id]);

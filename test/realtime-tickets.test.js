@@ -8,6 +8,7 @@
 const assert = require('assert');
 const crypto = require('crypto');
 const { ids } = require('openvibe-contracts');
+const cursorCodec = require('../server/cursor');
 const { boot, request, serviceToken, userToken, realtimeTicket, envelope, sse, sleep, suite, ISSUER, cursorAt } = require('./helpers');
 
 const t = suite('realtime-tickets');
@@ -27,7 +28,7 @@ async function stream(q, headers) {
 async function publish(token, env) {
     const r = await request(h.base, 'POST', '/api/v1/events', { token, body: env });
     assert.strictEqual(r.status, 201, r.text);
-    return r.body.seq;
+    return cursorCodec.decode(r.body.cursor).seq;
 }
 /** network.notification.created for `who`, as Network's outbox writes it. */
 const notified = (who, unread = 1) => envelope('network', {

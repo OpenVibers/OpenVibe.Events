@@ -97,7 +97,7 @@ t('outbox: enqueue inside a rolled-back transaction publishes nothing; committed
         r = await outbox.flush();
         assert.strictEqual(r.sent, 1);
         assert.strictEqual(await countIn(committed.event_id), 1, 'still exactly one event');
-        assert.ok(Number((await db.one('SELECT seq FROM event_outbox WHERE event_id = $1', [committed.event_id])).seq) > 0);
+        assert.strictEqual((await db.one('SELECT seq FROM event_outbox WHERE event_id = $1', [committed.event_id])).seq, null, 'Events hands out no sequence number (ADR-042): nothing is recorded');
     } finally { await db.close(); }
 });
 

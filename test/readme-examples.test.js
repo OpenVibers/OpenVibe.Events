@@ -41,7 +41,7 @@ t('realtime example gets a new ticket and resumes from the last cursor', async (
     assert.strictEqual(streams[0].url.searchParams.get('topics'), 'network.notification.*');
     assert.strictEqual(streams[0].url.searchParams.has('last_event_id'), false);
 
-    streams[0].onmessage({ lastEventId: 'opaque-cursor', data: '{"seq":1,"event":{}}' });
+    streams[0].onmessage({ lastEventId: 'opaque-cursor', data: '{"event":{}}' });
     streams[0].onerror();
     assert.strictEqual(streams[0].closed, true);
     retries.shift()();

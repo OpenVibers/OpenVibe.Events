@@ -2,9 +2,9 @@
 /**
  * Delivery worker. Pending deliveries are POSTed to their subscription endpoints as
  *
- *   { "event": <envelope>, "seq": <n> }
+ *   { "event": <envelope> }
  *
- * with X-OpenVibe-Event-Id, X-OpenVibe-Signature (sha256=<HMAC of the raw body with the
+ * (no sequence number: a receiver dedupes on event.event_id) with X-OpenVibe-Event-Id, X-OpenVibe-Signature (sha256=<HMAC of the raw body with the
  * subscription secret>), X-OpenVibe-Timestamp (unix seconds, new on every attempt) and
  * X-OpenVibe-Signature-V2 (t=<that timestamp>,v2=<HMAC of "<t>.<raw body>">; consumers reject it
  * outside ±300 s, so a captured delivery cannot be replayed later), traceparent (the event's trace). A 2xx is delivered; anything else
@@ -73,14 +73,13 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
         const { maxAttempts, backoffMs } = policy(sub);
         let outcome;
         try {
-            const body = JSON.stringify({ event: rowToEnvelope(row), seq: row.seq });
+            const body = JSON.stringify({ event: rowToEnvelope(row) });
             const timestamp = Math.floor(clock.now() / 1000);   // per attempt: a retry is signed afresh
             const headers = {
                 'Content-Type': 'application/json',
                 'User-Agent': 'OpenVibe.Events/0.1',
                 'X-OpenVibe-Event-Id': row.id,
                 'X-OpenVibe-Event-Type': row.event_type,
-                'X-OpenVibe-Seq': String(row.seq),
                 'X-OpenVibe-Subscription-Id': sub.id,
                 'X-OpenVibe-Delivery-Attempt': String(attempt),
                 'X-OpenVibe-Hops': String(row.hops),

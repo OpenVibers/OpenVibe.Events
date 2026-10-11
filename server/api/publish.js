@@ -3,15 +3,16 @@
  * POST /api/v1/events  (service token, audience openvibe.events, capability events.event.publish;
  *                       or a developer app token with events.app.publish)
  *
- *   body: <envelope>            -> 201 { event_id, seq, cursor, duplicate: false } | 200 on a repeat
- *   body: { events: [...] }     -> 201 { results: [{ event_id, seq, cursor, duplicate }] } (<= 100, atomic)
+ *   body: <envelope>            -> 201 { event_id, cursor, duplicate: false } | 200 on a repeat
+ *   body: { events: [...] }     -> 201 { results: [{ event_id, cursor, duplicate }] } (<= 100, atomic)
  *
- * `cursor` (ADR-042 decision 7) is the opaque position beside seq; `seq` and the global-order promise
- * stay for one release, then go.
+ * `cursor` (ADR-042 decision 7) is the event's opaque position; there is no sequence number on the wire and no
+ * global order. A repeat whose stored copy retention already removed answers { event_id, duplicate: true,
+ * pruned: true } with no cursor.
  *
  * Every envelope must validate against events.event-envelope@1; `source` must be the calling
  * service (svc:live -> 'live'); `event_type` must start with a prefix that source owns. A
- * re-published event_id is answered with the stored seq and never stored twice.
+ * re-published event_id is answered with its stored position and never stored twice.
  *
  * Developer apps (ADR-014, server/apps.js): `source` must be the app's `app-<lowercased ULID>`,
  * `event_type` must start with `app.<project_key>.`, and `actor` must be the app itself or the user

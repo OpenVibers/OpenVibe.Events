@@ -8,6 +8,7 @@ const assert = require('assert');
 const crypto = require('crypto');
 const { ids, serviceAuth } = require('openvibe-contracts');
 const apps = require('../server/apps');
+const cursor = require('../server/cursor');
 const { ISSUER, privateKey, boot, request, appToken, envelope, suite } = require('./helpers');
 
 const t = suite('export-tokens');
@@ -38,7 +39,7 @@ t('boot and publish as the project\'s app, in both environments (and another pro
             body: envelope('x', { source: apps.appSource(appId), event_type: `app.${apps.projectKey(project)}.order.n${n}`, actor: { type: 'app', id: appId }, visibility: 'internal' }),
         });
         assert.strictEqual(r.status, 201, r.text);
-        return r.body.seq;
+        return cursor.decode(r.body.cursor).seq;
     };
     for (let i = 0; i < 5; i++) seqs.production.push(await publish(P, 'production', i));
     for (let i = 0; i < 2; i++) seqs.sandbox.push(await publish(P, 'sandbox', i));
@@ -51,14 +52,14 @@ t('an export token pulls the project\'s events of its environment, page by page 
     for (let page = 0; page < 10; page++) {
         const r = await pull(exportToken('production'), after, 2);
         assert.strictEqual(r.status, 200, r.text);
-        got.push(...r.body.events.map(e => e.seq));
+        got.push(...r.body.events.map(e => cursor.decode(e.cursor).seq));
         if (r.body.next_cursor === r.body.latest_cursor || r.body.next_cursor === after) break;
         after = r.body.next_cursor;
     }
     assert.deepStrictEqual(got, seqs.production);
     const s = await pull(exportToken('sandbox'));
     assert.strictEqual(s.status, 200, s.text);
-    assert.deepStrictEqual(s.body.events.map(e => e.seq), seqs.sandbox, 'the sandbox token sees the sandbox only');
+    assert.deepStrictEqual(s.body.events.map(e => cursor.decode(e.cursor).seq), seqs.sandbox, 'the sandbox token sees the sandbox only');
 });
 
 t('it reads nothing else and writes nothing', async () => {

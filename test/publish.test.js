@@ -28,17 +28,18 @@ t('a family grant (events.*) covers events.event.publish', async () => {
     assert.strictEqual(r.status, 201);
 });
 
-t('valid envelope -> 201 with a seq; defaults filled', async () => {
+t('valid envelope -> 201 with a cursor; defaults filled', async () => {
     const env = envelope('live');
     delete env.priority; delete env.visibility;
     const r = await request(h.base, 'POST', '/api/v1/events', { token: live, body: env, headers: { traceparent: '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01' } });
     assert.strictEqual(r.status, 201, r.text);
     assert.strictEqual(r.body.event_id, env.event_id);
-    assert.ok(Number.isInteger(r.body.seq) && r.body.seq > 0);
+    assert.ok(typeof r.body.cursor === 'string');
+    assert.ok(!Object.hasOwn(r.body, 'seq'));
     assert.strictEqual(r.body.duplicate, false);
     assert.ok(validate('events.publish-result@1', r.body).valid, JSON.stringify(validate('events.publish-result@1', r.body).errors));
-    assert.deepStrictEqual(cursor.decode(r.body.cursor), { seq: r.body.seq, epoch: await h.store.epoch() });
     const row = await h.store.getEvent(env.event_id);
+    assert.deepStrictEqual(cursor.decode(r.body.cursor), { seq: row.seq, epoch: await h.store.epoch() });
     assert.strictEqual(row.priority, 'important');
     assert.strictEqual(row.visibility, 'internal');
     assert.strictEqual(row.trace_id, '0af7651916cd43dd8448eb211c80319c', 'trace taken from traceparent');
@@ -153,14 +154,14 @@ t('app principals cannot publish as a service', async () => {
     assert.strictEqual(r.body.code, 'token.invalid_claims');
 });
 
-t('idempotent repeat: same event_id -> 200, same seq, stored once', async () => {
+t('idempotent repeat: same event_id -> 200, same cursor, stored once', async () => {
     const env = envelope();
     const a = await request(h.base, 'POST', '/api/v1/events', { token: live, body: env });
     const b = await request(h.base, 'POST', '/api/v1/events', { token: live, body: env });
     assert.strictEqual(a.status, 201);
     assert.strictEqual(b.status, 200);
     assert.strictEqual(b.body.duplicate, true);
-    assert.strictEqual(b.body.seq, a.body.seq);
+    assert.strictEqual(b.body.cursor, a.body.cursor);
     assert.strictEqual((await h.db.prepare('SELECT COUNT(*) AS n FROM events WHERE id = ?').get(env.event_id)).n, 1);
     const c = await request(h.base, 'POST', '/api/v1/events', { token: live, body: { ...env, event_type: 'live.stream.ended' } });
     assert.strictEqual(c.status, 409);
@@ -172,7 +173,10 @@ t('batch: atomic, <= 100, results per event', async () => {
     let r = await request(h.base, 'POST', '/api/v1/events', { token: live, body: { events } });
     assert.strictEqual(r.status, 201);
     assert.strictEqual(r.body.results.length, 3);
-    assert.ok(r.body.results[0].seq < r.body.results[1].seq && r.body.results[1].seq < r.body.results[2].seq);
+    assert.ok(r.body.results.every(item => typeof item.cursor === 'string' && !Object.hasOwn(item, 'seq')));
+    assert.deepStrictEqual(r.body.results.map(item => item.event_id), events.map(event => event.event_id));
+    const positions = r.body.results.map(item => cursor.decode(item.cursor).seq);
+    assert.ok(positions[0] < positions[1] && positions[1] < positions[2]);
 
     const before = await h.store.lastSeq();
     r = await request(h.base, 'POST', '/api/v1/events', { token: live, body: { events: [envelope(), envelope('media')] } });
@@ -231,6 +235,7 @@ t('publish receipts outlive retention: a pruned id is still a duplicate', async 
     assert.strictEqual(r.status, 200);
     assert.strictEqual(r.body.duplicate, true);
     assert.strictEqual(r.body.pruned, true);
+    assert.ok(!Object.hasOwn(r.body, 'cursor') && !Object.hasOwn(r.body, 'seq'));
 });
 
 t('stop', async () => { await h.stop(); });

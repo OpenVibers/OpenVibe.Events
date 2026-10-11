@@ -1,6 +1,7 @@
 'use strict';
 const assert = require('assert');
 const { ids } = require('openvibe-contracts');
+const cursor = require('../server/cursor');
 const { boot, request, serviceToken, userToken, envelope, sse, sleep, suite, cursorAt } = require('./helpers');
 
 const t = suite('realtime');
@@ -19,7 +20,7 @@ async function stream(q, headers) {
 async function publish(token, env) {
     const r = await request(h.base, 'POST', '/api/v1/events', { token, body: env });
     assert.strictEqual(r.status, 201, r.text);
-    return r.body.seq;
+    return cursor.decode(r.body.cursor).seq;
 }
 const quiet = () => sleep(150);
 
@@ -50,6 +51,7 @@ t('visibility: public to everyone, subject only to that user, internal only to s
     assert.deepStrictEqual(seqs(a), [pub, toAliceAsSubject, byAliceAsActor]);
     assert.deepStrictEqual(seqs(b), [pub], 'bob sees nothing addressed to alice');
     assert.deepStrictEqual(seqs(svc), [pub, internal, toAliceAsSubject, byAliceAsActor]);
+    assert.ok(!Object.hasOwn(JSON.parse(anon.messages.find(m => !m.event).data), 'seq'));
     const { encode } = require('../server/cursor');
     assert.strictEqual(a.messages.find(m => m.data.includes('hi alice')).id, encode(toAliceAsSubject, await h.store.epoch()), 'SSE id is the cursor');
     for (const c of [anon, a, b, svc]) c.close();

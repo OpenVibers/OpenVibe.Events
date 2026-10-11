@@ -204,11 +204,11 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
                 if (existing.source !== env.source || existing.event_type !== env.event_type) {
                     throw new StoreError(409, 'events.id_conflict', `event ${env.event_id} already exists with different content`);
                 }
-                results.push({ event_id: env.event_id, seq: existing.seq, duplicate: true, cursor: cursor.encode(existing.seq, existing.epoch ?? epoch) });
+                results.push({ event_id: env.event_id, duplicate: true, cursor: cursor.encode(existing.seq, existing.epoch ?? epoch) });
                 continue;
             }
             if (await q.getReceipt.get(PUBLISH_RECEIPT, env.event_id)) {
-                results.push({ event_id: env.event_id, seq: null, duplicate: true, pruned: true });
+                results.push({ event_id: env.event_id, duplicate: true, pruned: true });
                 continue;
             }
             // Loop guard: depth of the cross-service chain in this trace, and how often this exact
@@ -293,7 +293,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
                 if (carrier) deliveries.push({ event_id: env.event_id, subscription_id: s.id, carrier, carrier_class: klass, ordering_key: key });
             }
             await revocationHook(row, now);
-            results.push({ event_id: env.event_id, seq, duplicate: false, cursor: cursor.encode(seq, epoch) });
+            results.push({ event_id: env.event_id, duplicate: false, cursor: cursor.encode(seq, epoch) });
             inserted.push(row);
             if (directive) {
                 const redacted = await applyRedaction(row, directive, now);
