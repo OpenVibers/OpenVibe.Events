@@ -366,9 +366,9 @@ restart; afterwards `sudo ovhost rollback events --to <sha>`. Migrations only ad
 
 ## Launch rule
 
-This repository does not make the product real, and the domain keeps its placeholder page on
+This repository does not make the product real, and the domain kept its placeholder page on
 [OpenVibers/OpenVibe.Sites](https://github.com/OpenVibers/OpenVibe.Sites) until all of the
-following exist here (plan §12.12):
+following existed here (plan §12.12):
 
 1. an owning runtime with health/readiness endpoints and observability;
 2. canonical identity/auth integration (OpenVibe.Network subjects, scoped service principals);
