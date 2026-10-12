@@ -97,7 +97,7 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     app.use(resourcesRouter({ store, auth }));
 
     // Discovery for the product domain (openvibe.events): robots.txt, sitemap.xml, llms.txt.
-    app.use(createDiscoveryRoutes({ config }));
+    app.use(createDiscoveryRoutes({ config, releaseLastmod: release.full().released_at === release.full().booted_at ? undefined : release.full().released_at }));
 
     // GET / on the product domain: the home page for a browser (server/home.js, openvibe.events), the
     // API index for curl and API clients (`*/*`, no Accept, or any non-HTML Accept). Vary: Accept so a

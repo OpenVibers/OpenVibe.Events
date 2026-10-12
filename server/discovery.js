@@ -36,7 +36,7 @@ function details({ siteUrl, apiUrl }) {
     ].join('\n');
 }
 
-function createDiscoveryRoutes({ config }) {
+function createDiscoveryRoutes({ config, releaseLastmod }) {
     const router = express.Router();
     const abs = (p) => seo.absolute(p, config.siteUrl);
 
@@ -44,7 +44,7 @@ function createDiscoveryRoutes({ config }) {
         .send(seo.robotsTxt({ sitemaps: [abs('/sitemap.xml')], disallow: ['/api/', '/realtime/'] })));
 
     router.get('/sitemap.xml', (_req, res) => res.type('application/xml').set('Cache-Control', cache.htmlHeaders())
-        .send(seo.sitemapXml([{ loc: abs('/') }])));
+        .send(seo.sitemapXml([{ loc: abs('/'), lastmod: releaseLastmod }])));
 
     router.get('/llms.txt', (_req, res) => res.type('text/plain').set('Cache-Control', cache.htmlHeaders())
         .send(seo.llmsTxt({
