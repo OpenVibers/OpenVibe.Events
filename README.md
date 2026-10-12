@@ -7,6 +7,8 @@
 **Plan:** OpenVibe End-to-End Realignment & Implementation Plan, revision 3 (20 Sep 2026), §6 and §6.3.  
 **License:** AGPL-3.0 (same as every OpenVibe service).
 
+The home page sitemap entry uses the release commit time as lastmod.
+
 ## Purpose
 
 The durable event backbone the network does not have yet: every authoritative service writes domain mutations and outbox events in one transaction, a relay publishes them here, consumers use inbox/idempotency receipts, and browsers get authorized, resumable projections through the Realtime delivery plane.

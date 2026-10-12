@@ -4,6 +4,17 @@
 // Frame at /shared, answers robots.txt, sitemap.xml and llms.txt, and names its own origin everywhere.
 // A parse-only check of the nginx vhost too.
 const assert = require('assert');
+
+function assertSitemapLastmods(xml, tag = 'url') {
+    const entries = [...xml.matchAll(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, 'g'))];
+    for (const [, body] of entries) {
+        const match = /<lastmod>(\d{4}-\d{2}-\d{2})<\/lastmod>/.exec(body);
+        assert.ok(match, body);
+        assert.strictEqual(new Date(match[1]).toISOString().slice(0, 10), match[1]);
+    }
+    return entries;
+}
+
 const fs = require('fs');
 const path = require('path');
 const nodeHttp = require('http');
@@ -130,6 +141,7 @@ t('sitemap.xml lists the product home only', async () => {
     assert.strictEqual(r.status, 200);
     assert.match(r.headers['content-type'], /xml/);
     assert.deepStrictEqual([...r.body.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]), [`${SITE}/`]);
+    assert.strictEqual(assertSitemapLastmods(r.body).length, 1);
 });
 
 t('llms.txt is a plain-text map that starts with the site name', async () => {
