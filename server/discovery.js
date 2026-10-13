@@ -8,6 +8,8 @@
  *   GET /sitemap.xml   the product home only (openvibe.events is the API origin too, plan T7)
  *   GET /llms.txt      what OpenVibe.Events does today, in plain language: the README's Purpose,
  *                      Publishing, Subscriptions and delivery, Developer apps and Realtime sections
+ *   GET /llms-full.txt the same public pages in full text (openvibe-shared/seo.llmsFull): the
+ *                      /llms.txt header, then every page's full text, capped at 512 KiB
  *
  * Read-only and viewer-independent: built from the config (the product site URL and the API origin).
  */
@@ -36,6 +38,28 @@ function details({ siteUrl, apiUrl }) {
     ].join('\n');
 }
 
+const FULL_MAX_BYTES = 512 * 1024;
+
+/**
+ * The public pages this domain publishes, grouped the way /llms.txt lists them. One entry is one
+ * /llms.txt link (title, url, optional note) and one /llms-full.txt page (title, url, full text).
+ */
+function catalog({ siteUrl, apiUrl }) {
+    const home = seo.absolute('/', siteUrl);
+    return [
+        { title: 'Start here', links: [
+            { title: 'OpenVibe.Events home', url: home, text: DESCRIPTION },
+            { title: 'Guide', url: GUIDE, note: 'the README: publishing, subscriptions, developer apps and realtime', text: details({ siteUrl, apiUrl }) },
+            { title: 'Source code', url: SOURCE, text: 'The OpenVibe.Events source on GitHub: the durable event store, the publish, read and subscription API, the delivery worker, the retention tiers and the realtime gateway.' },
+        ] },
+        { title: 'Machine-readable', links: [
+            { title: 'Sitemap', url: seo.absolute('/sitemap.xml', siteUrl), text: `The product home only: ${home}` },
+            { title: 'robots.txt', url: seo.absolute('/robots.txt', siteUrl), text: 'The crawler rules: the product home is welcome, the API and the realtime gateway are kept out of the index.' },
+            { title: 'API and realtime', url: apiUrl, note: 'the JSON API and the realtime gateway', text: `${apiUrl}/api/v1 is the token-guarded JSON API; ${apiUrl}/realtime/stream is the browser Server-Sent Events gateway.` },
+        ] },
+    ];
+}
+
 function createDiscoveryRoutes({ config, releaseLastmod }) {
     const router = express.Router();
     const abs = (p) => seo.absolute(p, config.siteUrl);
@@ -46,23 +70,24 @@ function createDiscoveryRoutes({ config, releaseLastmod }) {
     router.get('/sitemap.xml', (_req, res) => res.type('application/xml').set('Cache-Control', cache.htmlHeaders())
         .send(seo.sitemapXml([{ loc: abs('/'), lastmod: releaseLastmod }])));
 
+    const pages = catalog({ siteUrl: config.siteUrl, apiUrl: config.baseUrl });
+
     router.get('/llms.txt', (_req, res) => res.type('text/plain').set('Cache-Control', cache.htmlHeaders())
         .send(seo.llmsTxt({
             name: 'OpenVibe.Events',
             summary: DESCRIPTION,
             details: details({ siteUrl: config.siteUrl, apiUrl: config.baseUrl }),
-            sections: [
-                { title: 'Start here', links: [
-                    { title: 'OpenVibe.Events home', url: abs('/') },
-                    { title: 'Guide', url: GUIDE, note: 'the README: publishing, subscriptions, developer apps and realtime' },
-                    { title: 'Source code', url: SOURCE },
-                ] },
-                { title: 'Machine-readable', links: [
-                    { title: 'Sitemap', url: abs('/sitemap.xml') },
-                    { title: 'robots.txt', url: abs('/robots.txt') },
-                    { title: 'API and realtime', url: config.baseUrl, note: 'the JSON API and the realtime gateway' },
-                ] },
-            ],
+            sections: pages.map((s) => ({ title: s.title, links: s.links.map((l) => ({ title: l.title, url: l.url, ...(l.note ? { note: l.note } : {}) })) })),
+        })));
+
+    // /llms-full.txt: the same pages as /llms.txt, each with its full plain text (openvibe-shared/seo.llmsFull).
+    router.get('/llms-full.txt', (_req, res) => res.type('text/plain').set('Cache-Control', cache.htmlHeaders())
+        .send(seo.llmsFull({
+            site: 'OpenVibe.Events',
+            summary: DESCRIPTION,
+            base: config.siteUrl,
+            maxBytes: FULL_MAX_BYTES,
+            sections: pages.map((s) => ({ title: s.title, pages: s.links.map((l) => ({ title: l.title, url: l.url, text: l.text })) })),
         })));
 
     return router;

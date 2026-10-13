@@ -20,7 +20,7 @@ const { createDiscoveryRoutes } = require('./discovery');
 const ovServe = require('openvibe-shared/serve');
 const pkg = require('../package.json');
 
-function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log = console, valkey = null, policies = null, planner = null, carriers = null }) {
+function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log = console, valkey = null, policies = null, planner = null, carriers = null, indexnow = null }) {
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', 'loopback');
@@ -96,8 +96,12 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     // for OpenVibe.Services' fan-out. First-party like the routes above; no per-actor limit of its own.
     app.use(resourcesRouter({ store, auth }));
 
-    // Discovery for the product domain (openvibe.events): robots.txt, sitemap.xml, llms.txt.
+    // Discovery for the product domain (openvibe.events): robots.txt, sitemap.xml, llms.txt, llms-full.txt.
     app.use(createDiscoveryRoutes({ config, releaseLastmod: release.full().released_at === release.full().booted_at ? undefined : release.full().released_at }));
+
+    // GET /<key>.txt — the IndexNow key file, mounted only when a key is configured (openvibe-shared/indexnow,
+    // from INDEXNOW_KEY in server/index.js). It answers its own path and passes everything else on.
+    if (indexnow && indexnow.enabled) app.use(indexnow.keyFile);
 
     // GET / on the product domain: the home page for a browser (server/home.js, openvibe.events), the
     // API index for curl and API clients (`*/*`, no Accept, or any non-HTML Accept). Vary: Accept so a

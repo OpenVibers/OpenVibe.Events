@@ -96,6 +96,10 @@ function load(env = process.env) {
         // The product origin is the API origin (plan T7): the home page and its robots.txt/sitemap.xml/
         // llms.txt are served from baseUrl. EVENTS_SITE_URL overrides it for a deployment that serves them apart.
         siteUrl: (env.EVENTS_SITE_URL || baseUrl).replace(/\/$/, ''),
+        // IndexNow (openvibe-shared/indexnow): a key makes search engines recrawl the product home and
+        // its crawl files when they change. 8–128 hex/alphanumeric characters; the key file is served
+        // at /<key>.txt. Unset: IndexNow is off — no key file, nothing sent.
+        indexnow: { key: String(env.INDEXNOW_KEY || '').trim() },
 
         // Identity: OpenVibe.Network issues service tokens and user JWTs (RS256).
         networkUrl: (env.OV_NETWORK_URL || 'https://openvibe.network').replace(/\/$/, ''),
