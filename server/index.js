@@ -20,6 +20,8 @@ const { createApp } = require('./app');
 const { createMetrics } = require('./metrics');
 const { createGuardedPost } = require('./egress');
 const { createBillingReadings } = require('./billing');
+const { createIndexNow } = require('openvibe-shared/indexnow');
+const indexnowNotify = require('./indexnow-notify');
 const { gracefulStop } = require('openvibe-sdk/service');
 
 async function start({
@@ -47,7 +49,25 @@ async function start({
     const worker = createWorker({ store, config, clock, fetchImpl: deliveryFetch, appPost: appPost || createGuardedPost({ lookup: dnsLookup }), log, observe: metrics.observe });
     const realtime = createRealtime({ store, auth, config, clock, log });
     metrics.bind({ realtime });
-    const app = createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log, valkey, policies, planner, carriers });
+
+    // IndexNow (openvibe-shared/indexnow): created once at boot from INDEXNOW_KEY. Unset → off, the key
+    // file is not mounted and nothing is sent. When set, GET /<key>.txt is the key file engines fetch
+    // before they accept a ping; the module owns the batching and the POST. A malformed key (createIndexNow
+    // refuses anything but 8–128 alphanumerics) disables IndexNow instead of crashing the service at boot.
+    let indexnow;
+    try {
+        indexnow = createIndexNow({ host: config.siteUrl, key: config.indexnow.key, fetch: fetchImpl, log });
+    } catch (err) {
+        log.warn(`[IndexNow] disabled: ${err.message}`);
+        indexnow = createIndexNow({ host: config.siteUrl, key: '', log });
+    }
+
+    const app = createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log, valkey, policies, planner, carriers, indexnow });
+    app.locals.indexnow = indexnow;
+    // The pages crawlers see change only with a release, so this boot is the moment to announce them.
+    // A no-op without INDEXNOW_KEY.
+    indexnowNotify.use(indexnow, config.siteUrl);
+    indexnowNotify.pingRelease();
 
     // The key loads in the background (retrying while Network boots); /api/ready says when it has.
     const keyLoaded = keys.start().catch(() => null);

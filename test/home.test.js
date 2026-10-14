@@ -1,7 +1,7 @@
 'use strict';
 // The product home (plan T7: openvibe.events is the API and product origin): it renders server/home.js
 // for a browser and keeps the text/plain API index for curl and API clients, serves the pinned OpenVibe
-// Frame at /shared, answers robots.txt, sitemap.xml and llms.txt, and names its own origin everywhere.
+// Frame at /shared, answers robots.txt, sitemap.xml, llms.txt and llms-full.txt, and names its own origin everywhere.
 // A parse-only check of the nginx vhost too.
 const assert = require('assert');
 
@@ -154,6 +154,16 @@ t('llms.txt is a plain-text map that starts with the site name', async () => {
     assert.ok(r.body.includes(`The API and the realtime gateway are at ${SITE}`), 'the discovery names the API origin');
 });
 
+t('llms-full.txt is the same map in full text, starting with the site name', async () => {
+    const r = await raw(h.base, '/llms-full.txt');
+    assert.strictEqual(r.status, 200);
+    assert.match(r.headers['content-type'], /^text\/plain/);
+    assert.ok(r.body.startsWith('# OpenVibe.Events'), r.body.slice(0, 40));
+    assert.ok(r.body.includes('> Durable events for the OpenVibe network'), 'the home summary');
+    assert.ok(r.body.includes('## Start here'), 'the /llms.txt sections as pages');
+    assert.ok(r.body.includes('### Guide'), 'each page with its full text');
+});
+
 t('deploy/nginx/openvibe.events.conf is the API and product origin, with no redirect to the old host', () => {
     const conf = fs.readFileSync(path.join(__dirname, '..', 'deploy', 'nginx', 'openvibe.events.conf'), 'utf8');
     assert.match(conf, /server_name openvibe\.events;/);
@@ -162,7 +172,7 @@ t('deploy/nginx/openvibe.events.conf is the API and product origin, with no redi
     assert.ok(conf.includes('/etc/letsencrypt/live/openvibe.events/privkey.pem'));
     assert.ok(!conf.includes('$proxy_add_x_forwarded_for'), 'the client address is never appended to');
     // The product surface (plan expansion II) and everything the API host proxies (plan T7).
-    for (const loc of ['location = / {', 'location ^~ /shared/ {', 'location = /robots.txt {', 'location = /sitemap.xml {', 'location = /llms.txt {',
+    for (const loc of ['location = / {', 'location ^~ /shared/ {', 'location = /robots.txt {', 'location = /sitemap.xml {', 'location = /llms.txt {', 'location = /llms-full.txt {',
         'location = /realtime/stream {', 'location = /api/health', 'location = /api/ready', 'location = /release.json', 'location = /limits.json']) {
         assert.ok(conf.includes(loc), `${loc} is proxied`);
     }

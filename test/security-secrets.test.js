@@ -44,7 +44,8 @@ t('Events reads no secret from its environment but the planted ones', async () =
     };
     walk(path.join(__dirname, '..', 'server'));
     assert.ok(names.has('DATABASE_URL') && names.has('OV_NETWORK_PUBLIC_KEY'), 'the scan sees the config');
-    const secretish = [...names].filter((n) => /SECRET|PASSWORD|TOKEN|PRIVATE|CREDENTIAL|_KEY$/.test(n) && n !== 'OV_NETWORK_PUBLIC_KEY' && !PLANTED[n]);
+    // OV_NETWORK_PUBLIC_KEY and INDEXNOW_KEY are public by design (the IndexNow key is served at /<key>.txt).
+    const secretish = [...names].filter((n) => /SECRET|PASSWORD|TOKEN|PRIVATE|CREDENTIAL|_KEY$/.test(n) && n !== 'OV_NETWORK_PUBLIC_KEY' && n !== 'INDEXNOW_KEY' && !PLANTED[n]);
     assert.deepStrictEqual(secretish, [], 'a new secret-looking variable: give it a sentinel in this test (PLANTED)');
 });
 
