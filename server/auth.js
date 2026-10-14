@@ -46,6 +46,8 @@ const CAPS = Object.freeze({
     // so capabilities.check() applies the contracts rule (exact id or a `family.*` grant); the local fallback
     // below only covers an id the installed contracts do not know yet.
     resourceRead: 'events.resource.read',
+    // The control API (ADR-048, plan T13 step 10; active since contracts 0.168.0): server/api/resource-control.js.
+    resourceControl: 'events.resource.control',
 });
 
 // ── Capabilities ───────────────────────────────────────────
