@@ -12,6 +12,7 @@ const { readRouter } = require('./api/read');
 const { policiesRouter } = require('./api/policies');
 const { placementRouter } = require('./api/placement');
 const { resourcesRouter } = require('./api/resources');
+const { resourceControlRouter } = require('./api/resource-control');
 const { mountLimits } = require('./limits');
 const { createLimits } = require('./actor-limits');
 const { renderHome, renderNotFound, HOME_CSP } = require('./home');
@@ -95,6 +96,8 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     // The authority resource index (ADR-048, capability events.resource.read): the subscriptions Events owns,
     // for OpenVibe.Services' fan-out. First-party like the routes above; no per-actor limit of its own.
     app.use(resourcesRouter({ store, auth }));
+    // The control API (ADR-048, plan T13 step 10): OpenVibe.Services suspends or resumes a person's subscription.
+    app.use(resourceControlRouter({ store, auth, now: () => (clock ? clock.now() : Date.now()) }));
 
     // Discovery for the product domain (openvibe.events): robots.txt, sitemap.xml, llms.txt, llms-full.txt.
     app.use(createDiscoveryRoutes({ config, releaseLastmod: release.full().released_at === release.full().booted_at ? undefined : release.full().released_at }));
