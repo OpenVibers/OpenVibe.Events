@@ -22,7 +22,8 @@ const { createGuardedPost } = require('./egress');
 const { createBillingReadings } = require('./billing');
 const { createIndexNow } = require('openvibe-shared/indexnow');
 const indexnowNotify = require('./indexnow-notify');
-const { gracefulStop } = require('openvibe-sdk/service');
+const { gracefulStop, telemetry } = require('openvibe-sdk/service');
+const { createPgTelemetrySink, startTelemetryRetention } = require('openvibe-sdk/telemetry');
 
 async function start({
     config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, deliveryFetch = fetchImpl,
@@ -166,7 +167,11 @@ if (require.main === module) {
         // SIGTERM/SIGINT (openvibe-sdk/service, docs/service.md's handles family): requests in flight get 8 s,
         // then handles.close() (the timers stopped, the carriers/realtime/worker stopped, the server closed, the
         // database closed; a rejection exits 1); past 10 s the process exits 1.
-        gracefulStop({ name: 'events', server: handles.server, handles, drainMs: 8000, deadlineMs: 10000 });
+        // Request telemetry (openvibe-sdk/service, plan T1): one aggregated sample per route template, method and status
+        // class each minute, stored in this service's telemetry_samples table; rows older than 14 days go daily.
+        telemetry.init({ service: 'events', sink: createPgTelemetrySink({ db: handles.db, log: console }), skipPrefixes: ['/shared'], intervalMs: 60_000 });
+        const telemetryRetention = startTelemetryRetention({ db: handles.db, log: console, olderThanDays: 14 });
+        gracefulStop({ name: 'events', server: handles.server, handles, drainMs: 8000, deadlineMs: 10000, stop: [async () => { if (telemetryRetention) await telemetryRetention.stop(); await telemetry.stop(); }] });
     }).catch((err) => {
         console.error(`[events] failed to start: ${err.stack || err}`);
         process.exit(1);
