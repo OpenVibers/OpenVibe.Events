@@ -15,7 +15,7 @@ const { resourcesRouter } = require('./api/resources');
 const { resourceControlRouter } = require('./api/resource-control');
 const { mountLimits } = require('./limits');
 const { createLimits } = require('./actor-limits');
-const { renderHome, renderNotFound, HOME_CSP } = require('./home');
+const { renderHome, renderUpdates, renderNotFound, HOME_CSP } = require('./home');
 const appIcon = require('openvibe-shared/app-icon');
 const { createDiscoveryRoutes } = require('./discovery');
 const ovServe = require('openvibe-shared/serve');
@@ -110,6 +110,12 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     // API index for curl and API clients (`*/*`, no Accept, or any non-HTML Accept). Vary: Accept so a
     // shared cache never serves one to the other. The home carries its own CSP (HOME_CSP); the only
     // global security header is X-Content-Type-Options above, kept on every route.
+    // GET /updates: what shipped on this site (the shared update log), for browsers; the vhost passes GET through.
+    app.get('/updates', (req, res) => {
+        res.type('html').set('Content-Security-Policy', HOME_CSP).set('Cache-Control', 'public, max-age=300')
+            .send(renderUpdates({ siteUrl: config.siteUrl }));
+    });
+
     app.get('/', (req, res) => {
         res.vary('Accept');
         if (req.accepts(['text/plain', 'text/html']) === 'text/html') {

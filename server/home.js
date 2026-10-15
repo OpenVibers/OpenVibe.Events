@@ -10,6 +10,7 @@
  *   HOME_CSP                          its Content-Security-Policy (the Frame's scripts and calls to the Network)
  */
 const shell = require('openvibe-shared/shell');
+const frame = require('openvibe-shared/frame');
 const showcase = require('openvibe-shared/showcase');
 const ovServe = require('openvibe-shared/serve');
 const appIcon = require('openvibe-shared/app-icon');
@@ -97,6 +98,29 @@ function sections({ apiUrl }) {
 // webhook steps two by two instead of three and one alone, each title level with its number.
 const HOME_STYLE = '<style>body{margin:0}.page .sc-code{grid-template-columns:minmax(0,1fr)}.page .sc-steps{grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))}.page .sc-steps li{align-items:start;align-content:start}.page .sc-steps b{line-height:30px}</style>';
 
+const FOOTER = { service: 'events', variant: 'full', mount: '#ov-footer', brandName: SITE_NAME, updates: '/updates' };
+
+/** /updates: what shipped on this site, the network's shared update log (openvibe-shared/frame updatesBody). */
+function renderUpdates({ siteUrl }) {
+    const links = [{ label: 'Guide', href: `${SOURCE}#readme` }];
+    return shell.page({
+        name: SITE_NAME, service: 'events', lang: 'en',
+        title: `What shipped on ${SITE_NAME}`,
+        siteName: SITE_NAME,
+        description: `Every change deployed to ${SITE_NAME}, newest first.`,
+        canonical: `${siteUrl}/updates`,
+        robots: 'index, follow',
+        navbar: { service: 'events', apiBase: NETWORK_URL, links, history: { type: 'page', title: SITE_NAME } },
+        footer: FOOTER, home: '/', navLinks: links,
+        head: appIcon.headTags({ site: 'events' }),
+        body: `<div id="navbar-mount"></div>
+<main id="main" class="page">
+${frame.updatesBody({ service: 'events', siteName: SITE_NAME })}
+</main>
+<script src="${ovServe.url('shipped.js')}" defer></script>`,
+    });
+}
+
 function renderHome({ siteUrl, apiUrl }) {
     const nav = {
         service: 'events',
@@ -104,7 +128,7 @@ function renderHome({ siteUrl, apiUrl }) {
         links: [{ label: 'Guide', href: `${SOURCE}#readme` }],
         history: { type: 'page', title: SITE_NAME },
     };
-    const footer = { service: 'events', variant: 'full', mount: '#ov-footer', brandName: SITE_NAME };
+    const footer = FOOTER;
     return shell.page({
         name: SITE_NAME, service: 'events', lang: 'en',
         title: `${SITE_NAME}: durable events, signed webhooks and replay`,
@@ -134,4 +158,4 @@ function renderNotFound() {
         '<h1>Not found</h1>', `<p>Nothing is here. <a href="/">${SITE_NAME}</a> · <a href="${NETWORK_URL}">OpenVibe</a></p>`, '</body>', '</html>'].join('\n');
 }
 
-module.exports = { renderHome, renderNotFound, HOME_CSP, DESCRIPTION, sections };
+module.exports = { renderHome, renderUpdates, renderNotFound, HOME_CSP, DESCRIPTION, sections };
