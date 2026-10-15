@@ -29,6 +29,7 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     // HTTP golden signals by route template + GET /metrics (direct loopback callers only). An SSE
     // connection is a session, not a request, so it is counted by events_realtime_connections instead.
     const instrumented = instrument(app, { service: 'events', release: release.release, registry: metrics && metrics.registry, skip: (req) => req.path === '/realtime/stream' });
+    app.use(require('openvibe-sdk/service').telemetryMiddleware);   // request telemetry: a no-op until server/index.js calls telemetry.init()
     app.use(http.middleware());
     // GET /release.json (ADR-016) and POST /release-metrics (open tabs' update reports into /metrics).
     release.mount(app, { registry: instrumented.registry });

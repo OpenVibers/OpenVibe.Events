@@ -18,7 +18,7 @@ const quiet = { log() {}, warn() {}, error() {} };
 const source = fs.readFileSync(path.join(__dirname, '../server/index.js'), 'utf8');
 
 t("server/index.js imports gracefulStop from openvibe-sdk/service and owns no signal handler", () => {
-    assert.match(source, /const \{ gracefulStop \} = require\('openvibe-sdk\/service'\)/);
+    assert.match(source, /const \{ gracefulStop(, [A-Za-z]+)* \} = require\('openvibe-sdk\/service'\)/);
     assert.doesNotMatch(source, /process\.on\('SIGTERM'/);
     assert.doesNotMatch(source, /process\.on\('SIGINT'/);
     assert.doesNotMatch(source, /setTimeout\(\(\) => process\.exit\(1\), 10000\)/, 'the old 10 s exit-1 timer is gone');
