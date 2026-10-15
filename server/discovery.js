@@ -49,11 +49,12 @@ function catalog({ siteUrl, apiUrl }) {
     return [
         { title: 'Start here', links: [
             { title: 'OpenVibe.Events home', url: home, text: DESCRIPTION },
+            { title: 'What shipped', url: seo.absolute('/updates', siteUrl), note: 'every change deployed, newest first', text: 'The update log of OpenVibe.Events: every change deployed to the service, newest first, each a commit from the OpenVibers repositories linked to the change itself (the network\'s shared log; the whole network\'s is at https://openvibe.network/updates).' },
             { title: 'Guide', url: GUIDE, note: 'the README: publishing, subscriptions, developer apps and realtime', text: details({ siteUrl, apiUrl }) },
             { title: 'Source code', url: SOURCE, text: 'The OpenVibe.Events source on GitHub: the durable event store, the publish, read and subscription API, the delivery worker, the retention tiers and the realtime gateway.' },
         ] },
         { title: 'Machine-readable', links: [
-            { title: 'Sitemap', url: seo.absolute('/sitemap.xml', siteUrl), text: `The product home only: ${home}` },
+            { title: 'Sitemap', url: seo.absolute('/sitemap.xml', siteUrl), text: `The product home and its update log: ${home} and ${seo.absolute('/updates', siteUrl)}` },
             { title: 'robots.txt', url: seo.absolute('/robots.txt', siteUrl), text: 'The crawler rules: the product home is welcome, the API and the realtime gateway are kept out of the index.' },
             { title: 'API and realtime', url: apiUrl, note: 'the JSON API and the realtime gateway', text: `${apiUrl}/api/v1 is the token-guarded JSON API; ${apiUrl}/realtime/stream is the browser Server-Sent Events gateway.` },
         ] },
@@ -68,7 +69,7 @@ function createDiscoveryRoutes({ config, releaseLastmod }) {
         .send(seo.robotsTxt({ sitemaps: [abs('/sitemap.xml')], disallow: ['/api/', '/realtime/'] })));
 
     router.get('/sitemap.xml', (_req, res) => res.type('application/xml').set('Cache-Control', cache.htmlHeaders())
-        .send(seo.sitemapXml([{ loc: abs('/'), lastmod: releaseLastmod }])));
+        .send(seo.sitemapXml([{ loc: abs('/'), lastmod: releaseLastmod }, { loc: abs('/updates'), lastmod: releaseLastmod }])));
 
     const pages = catalog({ siteUrl: config.siteUrl, apiUrl: config.baseUrl });
 

@@ -138,12 +138,22 @@ t('robots.txt welcomes the home and keeps the API out, and names the sitemap', a
     assert.ok(r.body.includes(`Sitemap: ${SITE}/sitemap.xml`));
 });
 
-t('sitemap.xml lists the product home only', async () => {
+t('sitemap.xml lists the product home and its update log', async () => {
     const r = await raw(h.base, '/sitemap.xml');
     assert.strictEqual(r.status, 200);
     assert.match(r.headers['content-type'], /xml/);
-    assert.deepStrictEqual([...r.body.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]), [`${SITE}/`]);
-    assert.strictEqual(assertSitemapLastmods(r.body).length, 1);
+    assert.deepStrictEqual([...r.body.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]), [`${SITE}/`, `${SITE}/updates`]);
+    assert.strictEqual(assertSitemapLastmods(r.body).length, 2);
+});
+
+t('/updates: what shipped on this site, the shared update log, with one heading', async () => {
+    const r = await raw(h.base, '/updates', { accept: 'text/html' });
+    assert.strictEqual(r.status, 200);
+    assert.ok(r.body.includes('<h1>What shipped on OpenVibe.Events</h1>') && r.body.includes('data-ov-shipped="log" data-service="events"'));
+    assert.strictEqual((r.body.match(/<h1[\s>]/g) || []).length, 1);
+    assert.match(r.body, /<script src="\/shared\/shipped\.js\?v=[0-9a-f]+" defer><\/script>/);
+    assert.ok(r.body.includes(`<link rel="canonical" href="${SITE}/updates">`));
+    assert.ok(String(r.headers['content-security-policy']).includes('https://openvibe.network'), 'the log reads the network changelog');
 });
 
 t('llms.txt is a plain-text map that starts with the site name', async () => {
