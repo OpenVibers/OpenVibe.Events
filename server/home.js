@@ -92,6 +92,11 @@ function sections({ apiUrl }) {
     });
 }
 
+// The page's own few rules (it has no stylesheet beyond the showcase's): no browser margin around the body, so the Frame's
+// footer meets the edges; each curl sample on its own full-width row (three columns cut every command off); the four
+// webhook steps two by two instead of three and one alone, each title level with its number.
+const HOME_STYLE = '<style>body{margin:0}.page .sc-code{grid-template-columns:minmax(0,1fr)}.page .sc-steps{grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))}.page .sc-steps li{align-items:start;align-content:start}.page .sc-steps b{line-height:30px}</style>';
+
 function renderHome({ siteUrl, apiUrl }) {
     const nav = {
         service: 'events',
@@ -112,6 +117,7 @@ function renderHome({ siteUrl, apiUrl }) {
         head: [
             appIcon.headTags({ site: 'events' }),
             `<link rel="stylesheet" href="${ovServe.url(showcase.STYLESHEET)}">`,
+            HOME_STYLE,
         ].join('\n'),
         body: `<div id="navbar-mount"></div>
 <main id="main" class="page">
