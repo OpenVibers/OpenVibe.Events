@@ -5,13 +5,13 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { DEFAULT_SOURCES } = require('../server/config');
+const { DEFAULT_SOURCES, namespaceOf } = require('../server/config');
 
 const dir = path.join(path.dirname(require.resolve('openvibe-contracts/package.json')), 'manifests', 'services');
 const manifests = fs.readdirSync(dir).filter((f) => f.endsWith('.json')).map((f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')));
 const producers = manifests.filter((m) => (m.eventsProduced || []).length).map((m) => m.id || m.service).filter((id) => id !== 'events');
 const missing = producers.filter((id) => !DEFAULT_SOURCES.includes(id));
 assert.deepStrictEqual(missing, [], `producers that may not publish: ${missing.join(', ')}`);
-const outside = manifests.flatMap((m) => (m.eventsProduced || []).filter((t) => (m.id || m.service) !== 'events' && t.split('.')[0] !== (m.id || m.service) && !t.startsWith('provider.')).map((t) => `${m.id || m.service}: ${t}`));
+const outside = manifests.flatMap((m) => (m.eventsProduced || []).filter((t) => (m.id || m.service) !== 'events' && t.split('.')[0] !== namespaceOf(m.id || m.service) && !t.startsWith('provider.')).map((t) => `${m.id || m.service}: ${t}`));
 assert.deepStrictEqual(outside, [], 'every produced event type is in its producer\'s own namespace');
 console.log(`sources cover producers: ${producers.length} producers, all allowed`);

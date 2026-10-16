@@ -14,8 +14,11 @@ const list = (v, d) => (v == null || v === '' ? d : String(v).split(',').map(s =
 
 /**
  * Which sources may publish which event types. The first segment of every prefix must equal the
- * source, so a service can only ever publish into its own namespace (svc:live -> live.*).
+ * source's namespace, so a service can only ever publish into its own (svc:live -> live.*). A
+ * namespace is the source id without its hyphens: an event type has none (contracts), so
+ * svc:media-hub publishes mediahub.*.
  */
+const namespaceOf = (source) => String(source).replace(/-/g, '');
 const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openre', 'billing', 'tips',
     'vip', 'ai', 'games', 'tools', 'codes', 'host', 'sources', 'search',
     // Publication products (Waves 16-19): each publishes <product>.<type>.<action> via openvibe-publishing.
@@ -34,7 +37,9 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
     'services',
     // Record products that put their pages in OpenVibe.Search (openvibe-publishing/search-feed):
     // work.index_document.*, rent.index_document.*, help.index_document.*, quest.index_document.*
-    'work', 'rent', 'help', 'quest'];
+    'work', 'rent', 'help', 'quest',
+    // MediaHub (OpenVibe.Video, Pics and Download), in its hyphen-free namespace: mediahub.*
+    'media-hub'];
 
 /**
  * Namespaces that belong to the network rather than to one service. `provider.*` carries storage
@@ -46,7 +51,7 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
 const DEFAULT_SHARED_PREFIXES = ['provider.'];
 
 function sourcePrefixes(env) {
-    let map = Object.fromEntries(DEFAULT_SOURCES.map(s => [s, [`${s}.`]]));
+    let map = Object.fromEntries(DEFAULT_SOURCES.map(s => [s, [`${namespaceOf(s)}.`]]));
     if (env.EVENTS_SOURCE_PREFIXES) {
         // JSON { "<source>": ["<source>.x.", ...] } replaces the default map.
         map = JSON.parse(env.EVENTS_SOURCE_PREFIXES);
@@ -57,8 +62,8 @@ function sourcePrefixes(env) {
         if (source === 'app' || source.startsWith('app-')) throw new Error(`EVENTS_SOURCE_PREFIXES: "${source}" is reserved for developer apps`);
         if (!Array.isArray(prefixes) || !prefixes.length) throw new Error(`EVENTS_SOURCE_PREFIXES: ${source} needs at least one prefix`);
         for (const p of prefixes) {
-            if (typeof p !== 'string' || p.split('.')[0] !== source) {
-                throw new Error(`EVENTS_SOURCE_PREFIXES: prefix "${p}" of ${source} must start with "${source}."`);
+            if (typeof p !== 'string' || p.split('.')[0] !== namespaceOf(source)) {
+                throw new Error(`EVENTS_SOURCE_PREFIXES: prefix "${p}" of ${source} must start with "${namespaceOf(source)}."`);
             }
         }
     }
@@ -71,7 +76,7 @@ function sharedPrefixes(env, map) {
         if (!/^[a-z][a-z0-9-]*\.$/.test(p)) throw new Error(`EVENTS_SHARED_PREFIXES: bad prefix "${p}"`);
         const source = p.slice(0, -1);
         if (source === 'app' || source.startsWith('app-')) throw new Error(`EVENTS_SHARED_PREFIXES: "${p}" is reserved for developer apps`);
-        if (Object.prototype.hasOwnProperty.call(map, source)) {
+        if (Object.keys(map).some((k) => namespaceOf(k) === source)) {
             throw new Error(`EVENTS_SHARED_PREFIXES: "${p}" belongs to source "${source}", not to the network`);
         }
     }
@@ -239,4 +244,4 @@ function load(env = process.env) {
     };
 }
 
-module.exports = { load, DEFAULT_SOURCES };
+module.exports = { load, DEFAULT_SOURCES, namespaceOf };

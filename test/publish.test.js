@@ -104,6 +104,16 @@ t('a bot service principal publishes bot.* only', async () => {
     assert.strictEqual(r.body.code, 'events.type_not_allowed');
 });
 
+t('a hyphenated service publishes in its namespace without the hyphen: media-hub → mediahub.* only', async () => {
+    const hub = serviceToken('media-hub', ['events.event.publish']);
+    let r = await request(h.base, 'POST', '/api/v1/events', { token: hub, body: envelope('media-hub', { event_type: 'mediahub.video.published' }) });
+    assert.strictEqual(r.status, 201, r.text);
+    r = await request(h.base, 'POST', '/api/v1/events', { token: hub, body: envelope('media-hub', { event_type: 'media.object.deleted' }) });
+    assert.deepStrictEqual([r.status, r.body.code], [403, 'events.type_not_allowed'], 'not Media\'s namespace');
+    r = await request(h.base, 'POST', '/api/v1/events', { token: serviceToken('media', ['events.event.publish']), body: envelope('media', { event_type: 'mediahub.video.published' }) });
+    assert.deepStrictEqual([r.status, r.body.code], [403, 'events.type_not_allowed'], 'and Media cannot claim MediaHub\'s');
+});
+
 t('a watch service principal publishes watch.* only', async () => {
     const watch = serviceToken('watch', ['events.event.publish']);
     // Real ids from openvibe-contracts (Watch, v0.102.0+): watch.watch.triggered, not watch.triggered.
