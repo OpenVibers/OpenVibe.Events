@@ -185,7 +185,7 @@ t('deploy/nginx/openvibe.events.conf is the API and product origin, with no redi
     assert.ok(!conf.includes('$proxy_add_x_forwarded_for'), 'the client address is never appended to');
     // The product surface (plan expansion II) and everything the API host proxies (plan T7).
     for (const loc of ['location = / {', 'location ^~ /shared/ {', 'location = /robots.txt {', 'location = /sitemap.xml {', 'location = /llms.txt {', 'location = /llms-full.txt {',
-        'location = /realtime/stream {', 'location = /api/health', 'location = /api/ready', 'location = /release.json', 'location = /limits.json']) {
+        'location = /realtime/stream {', 'location = /api/health', 'location = /api/ready', 'location = /release.json', 'location = /limits.json', 'location = /release-metrics']) {
         assert.ok(conf.includes(loc), `${loc} is proxied`);
     }
     assert.ok(conf.includes('location ~ ^/api/v1/(events|subscriptions|checkpoints)(/|$)'), 'the token-guarded API block');
@@ -200,6 +200,8 @@ t('deploy/nginx/openvibe.events.conf is the API and product origin, with no redi
     assert.match(catchAll, /limit_except GET HEAD \{ deny all; \}/, 'the catch-all only passes GET and HEAD');
     assert.match(catchAll, /proxy_pass http:\/\/127\.0\.0\.1:4300;/, 'and lets the app answer (favicon, 404 page)');
     assert.ok(!/location \/ \{ return 404; \}/.test(conf), 'nginx\'s bare 404 page (no lang) is gone');
+    // Open tabs' release reports are POSTs: their own location, POST only, small bodies.
+    assert.match(conf, /location = \/release-metrics \{ limit_except POST \{ deny all; \} client_max_body_size 4k; proxy_pass http:\/\/127\.0\.0\.1:4300;/);
     assert.ok(!fs.existsSync(path.join(__dirname, '..', 'deploy', 'nginx', 'events.openvibe.network.conf')), 'the retired events.openvibe.network vhost is gone (plan T7)');
     assert.ok(conf.includes('return 301 https://openvibe.events$request_uri;'), ':80 and www reach the apex');
 });
