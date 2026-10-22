@@ -161,7 +161,7 @@ t('llms.txt is a plain-text map that starts with the site name', async () => {
     assert.strictEqual(r.status, 200);
     assert.match(r.headers['content-type'], /^text\/plain/);
     assert.ok(r.body.startsWith('# OpenVibe.Events'), r.body.slice(0, 40));
-    assert.ok(r.body.includes('> Durable events for the OpenVibe network'), 'the home summary');
+    assert.ok(r.body.includes("> The OpenVibe network's event bus"), 'the home summary');
     assert.ok(r.body.includes('https://github.com/OpenVibers/OpenVibe.Events#readme'), 'the guide');
     assert.ok(r.body.includes(`The API and the realtime gateway are at ${SITE}`), 'the discovery names the API origin');
 });
@@ -171,7 +171,7 @@ t('llms-full.txt is the same map in full text, starting with the site name', asy
     assert.strictEqual(r.status, 200);
     assert.match(r.headers['content-type'], /^text\/plain/);
     assert.ok(r.body.startsWith('# OpenVibe.Events'), r.body.slice(0, 40));
-    assert.ok(r.body.includes('> Durable events for the OpenVibe network'), 'the home summary');
+    assert.ok(r.body.includes("> The OpenVibe network's event bus"), 'the home summary');
     assert.ok(r.body.includes('## Start here'), 'the /llms.txt sections as pages');
     assert.ok(r.body.includes('### Guide'), 'each page with its full text');
 });
