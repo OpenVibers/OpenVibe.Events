@@ -197,7 +197,7 @@ const HOME_STYLE = '<style>body{margin:0}.page .sc-code{grid-template-columns:mi
     + '@media (max-width:520px){.page .sc-code pre{white-space:pre-wrap;overflow-wrap:anywhere}.hm-bars li{grid-template-columns:minmax(0,10.5em) minmax(0,1fr) auto;font-size:13.5px;gap:8px}.hm-bar-n{min-width:3.5em}'
     // On a phone each public type is a small card: the type across the top, what happened below it, the count and the last one on the right.
     + '.hm-table thead{display:none}.hm-table,.hm-table tbody{display:block}.hm-table tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:10px 14px;border-top:1px solid var(--border,rgba(255,255,255,.08))}'
-    + '.hm-table th,.hm-table td{display:block;padding:0;border:0}.hm-table th{grid-column:1/-1;grid-row:1}.hm-table td:nth-child(2){grid-column:1;grid-row:2/span 2;font-size:13.5px;color:var(--text-secondary,#96a7c2)}'
+    + '.hm-table th,.hm-table td{display:block;padding:0;border:0}.hm-table tbody th{grid-column:1/-1;grid-row:1;width:auto}.hm-table td:nth-child(2){grid-column:1;grid-row:2/span 2;font-size:13.5px;color:var(--text-secondary,#96a7c2)}'
     + '.hm-table td:nth-child(3){grid-column:2;grid-row:2;text-align:right}.hm-table td:nth-child(4){grid-column:2;grid-row:3;text-align:right;font-size:13px;color:var(--text-secondary,#96a7c2)}}'
     + ''
     + '@media (max-width:420px){.sc-hero,.sc-sec,.sc-cta{padding-left:16px;padding-right:16px}}</style>';
