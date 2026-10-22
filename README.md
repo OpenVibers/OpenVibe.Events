@@ -7,7 +7,7 @@
 **Plan:** OpenVibe End-to-End Realignment & Implementation Plan, revision 3 (20 Sep 2026), §6 and §6.3.  
 **License:** AGPL-3.0 (same as every OpenVibe service).
 
-The home page sitemap entry uses the release commit time as lastmod.
+The home page sitemap entry uses the release commit time as lastmod. The home page (`server/home.js`) shows the bus at work from this service's own tables (`server/home-stats.js`, kept five minutes): events in the last 24 hours and this week, how many services and event types published this week, active subscriptions and their consumers, deliveries made in the 30-day hot window and an empty dead-letter queue when it is empty; who published this week (events by the first segment of their type); and the public event types (visibility `public`) with their counts and when each last arrived. Only counts and names leave the reader, never a payload, an actor, a subject id or a principal; a section with nothing to show is left out. Its questions are a FAQPage in its JSON-LD.
 
 ## Purpose
 

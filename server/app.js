@@ -16,6 +16,7 @@ const { resourceControlRouter } = require('./api/resource-control');
 const { mountLimits } = require('./limits');
 const { createLimits } = require('./actor-limits');
 const { renderHome, renderUpdates, renderNotFound, HOME_CSP } = require('./home');
+const { createHomeStats } = require('./home-stats');
 const appIcon = require('openvibe-shared/app-icon');
 const { createDiscoveryRoutes } = require('./discovery');
 const ovServe = require('openvibe-shared/serve');
@@ -117,14 +118,19 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
             .send(renderUpdates({ siteUrl: config.siteUrl }));
     });
 
-    app.get('/', (req, res) => {
+    // The home's live sections: counts and names from this service's own tables, kept five minutes (server/home-stats.js).
+    const homeStats = createHomeStats({ store, now: () => (clock ? clock.now() : Date.now()), log });
+    app.get('/', async (req, res, next) => {
         res.vary('Accept');
         if (req.accepts(['text/plain', 'text/html']) === 'text/html') {
-            return res.type('html')
-                .set('Content-Security-Policy', HOME_CSP)
-                // private: Cloudflare caches by URL and ignores Vary: Accept, so a shared copy could reach an API client.
-                .set('Cache-Control', 'private, max-age=300')
-                .send(renderHome({ siteUrl: config.siteUrl, apiUrl: config.baseUrl }));
+            try {
+                const stats = await homeStats.read();
+                return res.type('html')
+                    .set('Content-Security-Policy', HOME_CSP)
+                    // private: Cloudflare caches by URL and ignores Vary: Accept, so a shared copy could reach an API client.
+                    .set('Cache-Control', 'private, max-age=300')
+                    .send(renderHome({ siteUrl: config.siteUrl, apiUrl: config.baseUrl, stats }));
+            } catch (e) { return next(e); }
         }
         res.type('text/plain').send([
             'OpenVibe.Events: durable events, subscriptions, signed delivery, dead letters and replay.',
