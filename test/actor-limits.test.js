@@ -93,7 +93,8 @@ t('refusals are counted in events_rate_limited_total', async () => {
 
 t('refusals are logged once each: the limit, the principal and the window, never a token', async () => {
     const warned = [];
-    const limits = createLimits({ config: load({ EVENTS_LIMITS_MINUTE: '1' }), clock: manualClock(Date.UTC(2026, 8, 27, 12, 0, 0)), log: { warn: (...a) => warned.push(a.join(' ')) } });
+    const clock = manualClock(Date.UTC(2026, 8, 27, 12, 0, 0));
+    const limits = createLimits({ config: load({ EVENTS_LIMITS_MINUTE: '1' }), clock, log: { warn: (...a) => warned.push(a.join(' ')) } });
     const mw = limits('events.event.read');
     const req = { principal: { kind: 'service', sub: 'svc:search' }, headers: { authorization: 'Bearer secret-token' } };
     const res = { headers: {}, statusCode: 200, setHeader(k, v) { this.headers[k.toLowerCase()] = v; }, end(b) { this.body = b; } };
@@ -102,6 +103,13 @@ t('refusals are logged once each: the limit, the principal and the window, never
     mw(req, res, () => { passed++; });
     assert.deepStrictEqual([passed, res.statusCode, res.headers['retry-after']], [1, 429, '60']);
     assert.deepStrictEqual(warned, ['[limits] events.event.read: svc:search refused, over 1 per minute']);
+    // A burst logs one line a minute: the refusals in between are counted on the next line (and in the metric).
+    for (let i = 0; i < 3; i++) mw(req, res, () => { passed++; });
+    assert.strictEqual(warned.length, 1, 'no line per refusal');
+    clock.advance(61000);
+    mw(req, res, () => { passed++; });
+    mw(req, res, () => { passed++; });
+    assert.deepStrictEqual(warned.slice(1), ['[limits] events.event.read: svc:search refused, over 1 per minute (and 3 more since the last line)']);
 });
 
 t('EVENTS_LIMITS=off: no limit answers', async () => {
