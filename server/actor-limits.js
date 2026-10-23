@@ -30,15 +30,26 @@ function createLimits({ config, clock = { now: () => Date.now() }, metrics = nul
     const refused = metrics && metrics.registry
         ? metrics.registry.counter({ name: 'events_rate_limited_total', help: 'Requests refused 429 by a per-actor limit, by limit name and window', labelNames: ['limit', 'window'] })
         : null;
+    const logged = new Map();   // name|actor|window → { at, skipped }: the last refusal line and how many it held back
     const limiter = createActorLimiter({
         limits: { minute: config.limits.minute, hour: config.limits.hour },
         now: () => clock.now(),
         // Shared across processes on Valkey (ADR-035) when VALKEY_URL is set; in-process otherwise.
         ...(valkey ? { store: createValkeyLimitStore(valkey) } : {}),
         onLimited(e) {
-            // The actor is a principal id (svc:…, app:app_…), never a token.
-            log.warn(`[limits] ${e.name}: ${e.actor} refused, over ${e.limit} per ${e.window}`);
+            // The actor is a principal id (svc:…, app:app_…), never a token. One line a minute per actor, limit and window,
+            // with how many were refused since the last line: a service's outbox draining a re-index after a burst was
+            // refused (and retried) hundreds of times a minute, one line each (svc:search, 935 lines on 2026-10-23).
+            // The counter below still counts every refusal.
             if (refused) refused.inc({ limit: e.name, window: e.window });
+            const k = `${e.name}|${e.actor}|${e.window}`;
+            const t = clock.now();
+            const seen = logged.get(k);
+            if (seen && t - seen.at < 60000) { seen.skipped++; return; }
+            if (logged.size > 1000) logged.clear();
+            logged.set(k, { at: t, skipped: 0 });
+            const more = seen && seen.skipped ? ` (and ${seen.skipped} more since the last line)` : '';
+            log.warn(`[limits] ${e.name}: ${e.actor} refused, over ${e.limit} per ${e.window}${more}`);
         },
     });
     const limits = (name, own) => { record(name, own); return limiter(name, own); };
