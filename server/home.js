@@ -140,13 +140,13 @@ function sections({ apiUrl, stats = null }) {
     ].join('\n');
     const publishers = stats && stats.services.filter((r) => r.ns !== 'app').length;
     return showcase.hero({
-        eyebrow: 'OpenVibe.Events · alpha',
+        eyebrow: 'OpenVibe.Events · part of OpenVibe Services · alpha',
         title: 'Events your services', accent: 'can count on.',
         lede: 'The event backbone of the OpenVibe network. Publish an event once and every subscriber gets it: stored durably, signed, '
             + `retried with backoff, and replayable after a failure.${publishers ? ` ${publishers} OpenVibe services published to it this week.` : ''}`,
         actions: [{ label: 'Read the guide', href: `${SOURCE}#readme`, primary: true }, { label: 'See an example', href: '#examples' }],
         note: `Alpha. The API is at ${apiUrl}; developer apps sign in through OpenVibe.Network.`,
-    }) + live.statRow + live.who + live.types + showcase.features({
+    }) + '<section class="sc-sec sc-part-of"><p class="sc-note">Part of <a href="https://openvibe.services/">OpenVibe Services</a>: the building blocks every OpenVibe product runs on, with one console, one account and one SDK.</p></section>' + live.statRow + live.who + live.types + showcase.features({
         title: 'What you get',
         items: [
             { icon: 'ov:upload', title: 'Publish once', text: 'One event or up to a hundred at a time, stored atomically and numbered in order. Sending the same event id twice never stores it twice.' },
