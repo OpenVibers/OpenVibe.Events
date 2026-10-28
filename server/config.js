@@ -39,7 +39,9 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
     // work.index_document.*, rent.index_document.*, help.index_document.*, quest.index_document.*
     'work', 'rent', 'help', 'quest',
     // MediaHub (OpenVibe.Video, Pics and Download), in its hyphen-free namespace: mediahub.*
-    'media-hub'];
+    'media-hub',
+    // Today (OpenVibe.Today, plan 2026-10-28 §5.3): today.event.scheduled|updated|cancelled
+    'today'];
 
 /**
  * Namespaces that belong to the network rather than to one service. `provider.*` carries storage
