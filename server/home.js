@@ -26,6 +26,15 @@ const SOURCE = 'https://github.com/OpenVibers/OpenVibe.Events';
 const DESCRIPTION = 'The OpenVibe network\'s event bus: publish once and every subscriber gets it signed, retried and replayable, '
     + 'by webhook, pull or realtime stream.';
 
+/**
+ * The page's JSON-LD in one script: every node in one @graph, so a page carries exactly one JSON-LD script.
+ * The nodes keep their own fields; only their own @context goes, because the graph carries it once.
+ */
+const oneGraph = (nodes) => {
+    const graph = nodes.filter(Boolean).map((n) => { const c = { ...n }; delete c['@context']; return c; });
+    return [{ '@context': 'https://schema.org', '@graph': graph }];
+};
+
 const HOME_CSP = [
     "default-src 'self'",
     // Cloudflare Web Analytics: Cloudflare injects its beacon at the edge on this zone; script-src loads it and connect-src
@@ -326,15 +335,18 @@ function renderHome({ siteUrl, apiUrl, stats = null }) {
         title: `${SITE_NAME}: durable events, signed webhooks and replay`,
         siteName: SITE_NAME,
         description: DESCRIPTION,
-        summary: DESCRIPTION,
         canonical: `${siteUrl}/`,
         robots: 'index, follow',
-        jsonLd: [
+        jsonLd: oneGraph([
             seo.jsonLd.website({ name: SITE_NAME, url: siteUrl, description: DESCRIPTION }),
             seo.jsonLd.softwareApp({ name: SITE_NAME, url: `${siteUrl}/`, description: DESCRIPTION, category: 'DeveloperApplication', keywords: ['event bus', 'webhooks', 'server-sent events', 'replay', 'dead-letter queue'] }),
+            // The page itself, in the same graph: `summary` would make shell.js emit it as a second script.
+            { ...seo.jsonLd.webPage({ name: SITE_NAME, url: `${siteUrl}/`, description: DESCRIPTION, siteUrl }), abstract: DESCRIPTION },
             seo.jsonLd.faq(FAQ.map(([q, a]) => ({ q, a }))),
             eventsJsonLd({ siteUrl, stats }),
-        ].filter(Boolean),
+            // The publisher the site's own WebSite node names by @id, so the reference resolves on the page.
+            seo.jsonLd.organization(),
+        ]),
         navbar: nav, footer, home: '/', navLinks: [{ label: 'Guide', href: `${SOURCE}#readme` }],
         head: [
             appIcon.headTags({ site: 'events' }),

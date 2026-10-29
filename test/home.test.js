@@ -99,7 +99,10 @@ t('GET / for a crawler or a plain curl: the server-rendered HTML, with real read
         assert.ok(readable(r.body).length > 2000, `${readable(r.body).length} readable chars for ${JSON.stringify(headers)}`);
         assert.strictEqual((r.body.match(/<h1\b/g) || []).length, 1, JSON.stringify(headers));
         assert.ok(r.body.includes(`<link rel="canonical" href="${SITE}/">`), JSON.stringify(headers));
-        const ld = [...r.body.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
+        // One JSON-LD script per page: every node lives in the page's @graph.
+        const scripts = [...r.body.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
+        assert.strictEqual(scripts.length, 1, 'the page carries exactly one JSON-LD script');
+        const ld = scripts.flatMap((x) => (Array.isArray(x['@graph']) ? x['@graph'] : [x]));
         assert.ok(ld.some((x) => x['@type'] === 'WebSite'), 'the WebSite node');
     }
 });
@@ -175,7 +178,10 @@ t('the server-rendered event list: title, real <time datetime>, place, descripti
     assert.match(page, /<nav class="hm-cats"[^>]*><a href="https:\/\/openvibe\.live">OpenVibe\.Live<\/a>/, 'the category nav');
     assert.match(page, /<code>live\.stream\.started<\/code>/, 'the exact event type');
 
-    const ld = [...page.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
+    // One JSON-LD script per page: every node lives in the page's @graph.
+    const scripts = [...page.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
+    assert.strictEqual(scripts.length, 1, 'the page carries exactly one JSON-LD script');
+    const ld = scripts.flatMap((x) => (Array.isArray(x['@graph']) ? x['@graph'] : [x]));
     assert.ok(ld.some((x) => x['@type'] === 'WebSite'), 'the WebSite node');
     const list = ld.find((x) => x['@type'] === 'ItemList');
     assert.ok(list, 'an ItemList of the events');

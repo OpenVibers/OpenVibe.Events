@@ -55,7 +55,10 @@ t('published events show as counts by service, public types and the latest publi
     assert.ok(!page.includes('live.internal.tick'));
     assert.match(page, /<b>4<\/b><span>events this week<\/span>/);
     assert.match(page, / 2 OpenVibe services published to it this week\./);
-    const ld = [...page.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
+    // One JSON-LD script per page: every node lives in the page's @graph.
+    const scripts = [...page.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
+    assert.strictEqual(scripts.length, 1, 'the page carries exactly one JSON-LD script');
+    const ld = scripts.flatMap((x) => (Array.isArray(x['@graph']) ? x['@graph'] : [x]));
     const list = ld.find((x) => x['@type'] === 'ItemList');
     assert.ok(list, 'the public events are an ItemList');
     assert.strictEqual(list.numberOfItems, 2);
@@ -65,7 +68,9 @@ t('published events show as counts by service, public types and the latest publi
 
 t('JSON-LD: WebSite, the app, and a FAQPage with exactly the questions shown', async () => {
     const page = await html();
-    const ld = [...page.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
+    const scripts = [...page.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
+    assert.strictEqual(scripts.length, 1, 'the page carries exactly one JSON-LD script');
+    const ld = scripts.flatMap((x) => (Array.isArray(x['@graph']) ? x['@graph'] : [x]));
     for (const type of ['WebSite', 'WebApplication', 'FAQPage']) assert.ok(ld.some((x) => x['@type'] === type), type);
     const faq = (/<section class="sc-sec" id="faq"[\s\S]*?<\/section>/.exec(page) || [''])[0];
     const shown = [...faq.matchAll(/<h3>([^<]+)<\/h3>/g)].map((m) => m[1].replace(/&#39;/g, "'"));
