@@ -1,8 +1,9 @@
 'use strict';
-// The product home (plan T7: openvibe.events is the API and product origin): it renders server/home.js
-// for a browser and keeps the text/plain API index for curl and API clients, serves the pinned OpenVibe
-// Frame at /shared, answers robots.txt, sitemap.xml, llms.txt and llms-full.txt, and names its own origin everywhere.
-// A parse-only check of the nginx vhost too.
+// The product home (plan T7: openvibe.events is the API and product origin): it renders server/home.js for
+// every caller by default — browser, crawler, or a plain curl with no Accept — with the public event list,
+// one h1, a canonical and JSON-LD; the text/plain API index is kept for an explicit text/plain (or ?format=text).
+// It also serves the pinned OpenVibe Frame at /shared, answers robots.txt, sitemap.xml, llms.txt and
+// llms-full.txt, and names its own origin everywhere. A parse-only check of the nginx vhost too.
 const assert = require('assert');
 
 function assertSitemapLastmods(xml, tag = 'url') {
@@ -15,16 +16,20 @@ function assertSitemapLastmods(xml, tag = 'url') {
     return entries;
 }
 
+/** The readable text of a page: scripts, styles and tags removed (what a crawler or an AI reader gets). */
+const readable = (html) => html.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+
 const fs = require('fs');
 const path = require('path');
 const nodeHttp = require('http');
 const { boot, suite } = require('./helpers');
 const { load } = require('../server/config');
-const { HOME_CSP } = require('../server/home');
+const { HOME_CSP, renderHome } = require('../server/home');
 
 const SITE = 'https://openvibe.events';
 
-// GET / without an Accept a browser would send: the API index, byte for byte, as it was before the home.
+// GET / for a caller that explicitly asks for text: the API index, byte for byte, as it was before the home.
 const INDEX = [
     'OpenVibe.Events: durable events, subscriptions, signed delivery, dead letters and replay.',
     '',
@@ -80,6 +85,23 @@ t('GET / as a browser: the home page, its CSP and its cache policy', async () =>
     assert.ok(r.body.includes(`The API is at ${SITE}`), 'the hero note names the API origin');
     assert.ok(r.body.includes(`${SITE}/api/v1/events`), 'the API examples use the API origin');
     assert.ok(!r.body.includes('events.openvibe.network'), 'the home names no other origin');
+    assert.strictEqual((r.body.match(/<link rel="canonical"/g) || []).length, 1, 'one canonical');
+    assert.match(r.body, /<html lang="en">/);
+});
+
+t('GET / for a crawler or a plain curl: the server-rendered HTML, with real readable text', async () => {
+    // `*/*` and no Accept at all are what curl, fetch() and many crawlers send. Both must get the page, not the
+    // text API index: otherwise the HTML that reaches a crawler has no title, h1, canonical or event list.
+    for (const headers of [{}, { Accept: '*/*' }, { Accept: 'application/json' }]) {
+        const r = await raw(h.base, '/', headers);
+        assert.strictEqual(r.status, 200, JSON.stringify(headers));
+        assert.match(r.headers['content-type'], /^text\/html/, JSON.stringify(headers));
+        assert.ok(readable(r.body).length > 2000, `${readable(r.body).length} readable chars for ${JSON.stringify(headers)}`);
+        assert.strictEqual((r.body.match(/<h1\b/g) || []).length, 1, JSON.stringify(headers));
+        assert.ok(r.body.includes(`<link rel="canonical" href="${SITE}/">`), JSON.stringify(headers));
+        const ld = [...r.body.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
+        assert.ok(ld.some((x) => x['@type'] === 'WebSite'), 'the WebSite node');
+    }
 });
 
 t('the home CSP lets Cloudflare Web Analytics load and report (it injects its beacon on this zone)', () => {
@@ -117,15 +139,56 @@ t('the home links the pinned Frame stylesheet, and /shared serves it', async () 
     assert.ok(sheet.body.includes('.ov-'), 'the showcase stylesheet');
 });
 
-t('GET / for curl and API clients: the text/plain index, byte for byte', async () => {
-    // `*/*`, no Accept at all, and a JSON client: all three get the API index.
-    for (const headers of [{ Accept: '*/*' }, {}, { Accept: 'application/json' }]) {
-        const r = await raw(h.base, '/', headers);
-        assert.strictEqual(r.status, 200, JSON.stringify(headers));
-        assert.match(r.headers['content-type'], /^text\/plain/, JSON.stringify(headers));
-        assert.strictEqual(r.headers.vary, 'Accept', JSON.stringify(headers));
-        assert.strictEqual(r.body, INDEX, JSON.stringify(headers));
+t('GET / for a caller that asks for text: the API index, byte for byte', async () => {
+    // Only an explicit text/plain (header or `?format=text`) gets the API index now: the HTML page is the default.
+    for (const [p, headers] of [['/', { Accept: 'text/plain' }], ['/?format=text', {}], ['/?format=text', { Accept: '*/*' }]]) {
+        const r = await raw(h.base, p, headers);
+        assert.strictEqual(r.status, 200, `${p} ${JSON.stringify(headers)}`);
+        assert.match(r.headers['content-type'], /^text\/plain/, `${p} ${JSON.stringify(headers)}`);
+        assert.strictEqual(r.headers.vary, 'Accept', `${p} ${JSON.stringify(headers)}`);
+        assert.strictEqual(r.headers['cache-control'], 'private, no-store', `${p} ${JSON.stringify(headers)}`);
+        assert.strictEqual(r.body, INDEX, `${p} ${JSON.stringify(headers)}`);
     }
+});
+
+t('the server-rendered event list: title, real <time datetime>, place, description, category links and JSON-LD', () => {
+    const last = Date.parse('2026-10-29T09:41:00Z');
+    const stats = {
+        day: 4, week: 4, types: 1, services: [{ ns: 'live', n: 3 }, { ns: 'blog', n: 1 }], subscriptions: 0, consumers: 0,
+        delivered: 0, dead: 0, measuredAt: last,
+        public: [
+            { type: 'live.stream.started', n: 3, last },
+            { type: 'blog.post.published', n: 1, last: 0 },   // no arrival recorded: no startDate may be invented
+        ],
+    };
+    const page = renderHome({ siteUrl: SITE, apiUrl: SITE, stats });
+    assert.ok(readable(page).length > 2000, `${readable(page).length} readable chars`);
+    assert.strictEqual((page.match(/<h1\b/g) || []).length, 1);
+    assert.strictEqual((page.match(/<link rel="canonical"/g) || []).length, 1);
+    const card = /<li class="hm-event"[\s\S]*?<\/li>/.exec(page)[0];
+    assert.match(card, /A channel went live on OpenVibe\.Live/, 'the event title');
+    assert.match(card, /<time datetime="2026-10-29T09:41:00\.000Z">/, 'a real <time datetime>');
+    assert.match(card, /Online, from <a href="https:\/\/openvibe\.live">OpenVibe\.Live<\/a>/, 'the place and publisher');
+    assert.match(card, /Published by OpenVibe\.Live as live\.stream\.started/, 'the short description');
+    assert.match(card, /3 this week/, 'the count');
+    assert.match(card, /Category: <a href="https:\/\/openvibe\.live">live<\/a>/, 'a category link');
+    assert.match(page, /<nav class="hm-cats"[^>]*><a href="https:\/\/openvibe\.live">OpenVibe\.Live<\/a>/, 'the category nav');
+    assert.match(page, /<code>live\.stream\.started<\/code>/, 'the exact event type');
+
+    const ld = [...page.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
+    assert.ok(ld.some((x) => x['@type'] === 'WebSite'), 'the WebSite node');
+    const list = ld.find((x) => x['@type'] === 'ItemList');
+    assert.ok(list, 'an ItemList of the events');
+    assert.strictEqual(list.numberOfItems, 2);
+    assert.strictEqual(list.itemListElement[0].item['@type'], 'Event');
+    assert.strictEqual(list.itemListElement[0].item.startDate, '2026-10-29T09:41:00.000Z');
+    assert.ok(!('startDate' in list.itemListElement[1].item), 'no date invented when none was recorded');
+
+    // A stats failure renders the shell, the h1, the description and a clear empty state — never a blank page.
+    const shell = renderHome({ siteUrl: SITE, apiUrl: SITE, stats: null });
+    assert.match(shell, /The live bus figures are unavailable right now/);
+    assert.strictEqual((shell.match(/<h1\b/g) || []).length, 1);
+    assert.ok(shell.includes(`<link rel="canonical" href="${SITE}/">`));
 });
 
 t('robots.txt welcomes the home and keeps the API out, and names the sitemap', async () => {

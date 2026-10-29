@@ -5,8 +5,9 @@
  * The OpenVibe Frame (openvibe-shared/shell) around openvibe-shared/showcase sections
  * for developers. Every claim restates the README (Publishing, Subscriptions and delivery, Developer apps,
  * Realtime) and the code. The bus at work comes from server/home-stats.js (counts and names only, never a payload):
- * the numbers, who published this week and the public event types with when each last arrived; each section is left
- * out when there is nothing to show.
+ * the numbers, who published this week and the public event types with when each last arrived. Count and publisher
+ * sections are left out when empty; the public event list always renders, with a clear empty state when the store
+ * has no public events or does not answer within its 1.5 s bound.
  *
  *   renderHome({ siteUrl, apiUrl, stats })   the whole document (siteUrl: the canonical product origin; apiUrl: the API
  *                                            origin; stats: home-stats read(), or null)
@@ -72,21 +73,110 @@ const TYPE_WORDS = {
     'trade.observation.created': 'A market observation on OpenVibe.Trade',
 };
 
-function ago(ms, now) {
-    const s = Math.max(0, Math.round((now - ms) / 1000));
-    if (s < 60) return 'just now';
-    if (s < 3600) return `${Math.round(s / 60)} min ago`;
-    if (s < 86400) return `${Math.round(s / 3600)} h ago`;
-    const d = Math.round(s / 86400);
-    return `${d} day${d === 1 ? '' : 's'} ago`;
-}
 const serviceName = (ns) => (SERVICES[ns] || [ns])[0];
 const serviceLink = (ns) => { const [name, url] = SERVICES[ns] || [ns, null]; return url ? `<a href="${esc(url)}">${esc(name)}</a>` : esc(name); };
+const serviceUrl = (ns) => (SERVICES[ns] || [])[1] || null;
+const nsOf = (type) => String(type).split('.')[0];
+const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+const eventTitle = (type) => TYPE_WORDS[type] || `An event of type ${type}`;
+const eventDescription = (type) => `Published by ${serviceName(nsOf(type))} as ${type}. Every subscriber receives it as a signed webhook; any reader can pull it with a cursor.`;
+const isoDate = (ms) => { const n = Number(ms); return Number.isFinite(n) && n > 0 ? new Date(n).toISOString() : null; };
+const humanDate = (ms) => {
+    const d = new Date(Number(ms));
+    if (!Number.isFinite(d.getTime())) return '';
+    return `${d.toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC', hour12: false })} UTC`;
+};
 
-/** The numbers, who published and the public types (each left out when empty). */
+/** One public event type as a search-readable card: title, real arrival time, place and publisher, description, count. */
+function eventCard(r) {
+    const type = String(r.type);
+    const ns = nsOf(type);
+    const iso = isoDate(r.last);
+    const url = serviceUrl(ns);
+    const category = url ? `<a href="${esc(url)}">${esc(ns)}</a>` : esc(ns);
+    const when = iso ? `<time datetime="${iso}">${esc(humanDate(r.last))}</time>` : '<span class="hm-event-undated">date not recorded</span>';
+    return `<li class="hm-event" id="event-${esc(slug(type))}">
+<p class="hm-event-cat">Category: ${category}</p>
+<h3 class="hm-event-title">${esc(eventTitle(type))}</h3>
+<p class="hm-event-meta">${when} · Online, from ${serviceLink(ns)} · ${esc(fmt(r.n))} this week</p>
+<p class="hm-event-desc">${esc(eventDescription(type))}</p>
+<p class="hm-event-type"><code>${esc(type)}</code></p>
+</li>`;
+}
+
+/** The category links above the list: one per publishing service, to its site (plain text when it has none). */
+function categoryLinks(events) {
+    const seen = [];
+    for (const r of events) { const ns = nsOf(r.type); if (!seen.includes(ns)) seen.push(ns); }
+    return `<nav class="hm-cats" aria-label="Event categories">${seen.map((ns) => {
+        const url = serviceUrl(ns);
+        return url ? `<a href="${esc(url)}">${esc(serviceName(ns))}</a>` : `<span>${esc(serviceName(ns))}</span>`;
+    }).join('')}</nav>`;
+}
+
+/**
+ * The public event types anyone may read, newest arrival first. The first page (24 types) is rendered here, on the
+ * server, so a crawler reads it without running any JavaScript; there is no client-side list to duplicate it. Each
+ * card carries a real <time datetime> from the last arrival the store recorded, never a guessed date. A slow or failed
+ * stats read leaves a clear empty state instead of an empty page.
+ */
+function eventsSection(stats) {
+    const publicTypes = (stats && stats.public) || [];
+    const list = publicTypes.slice().sort((a, b) => Number(b.last) - Number(a.last)).slice(0, 24);
+    let inner;
+    if (!stats) {
+        inner = '<p class="sc-lede">The live bus figures are unavailable right now, so this page is showing the product shell. The API, webhooks and the realtime stream described below keep running.</p>';
+    } else if (!list.length) {
+        inner = '<p class="sc-lede">No public events have arrived this week. The bus is running; public event types appear here as they arrive.</p>';
+    } else {
+        inner = `<p class="sc-lede">The public event types anyone may read, newest arrival first: when each last arrived, who published it and what it means. Subscribe to a pattern such as <code>live.stream.*</code> to get them as signed webhooks.</p>
+${categoryLinks(list)}
+<ul class="hm-events">${list.map(eventCard).join('')}</ul>
+${publicTypes.length > list.length ? `<p class="hm-note">And ${esc(fmt(publicTypes.length - list.length))} more public event types this week.</p>` : ''}`;
+    }
+    return `<section class="sc-sec" id="events" aria-labelledby="h-events"><h2 id="h-events">Public events this week</h2>${inner}</section>`;
+}
+
+/** The ItemList of public events, each with a real startDate only where the store recorded an arrival. */
+function eventsJsonLd({ siteUrl, stats }) {
+    const publicTypes = (stats && stats.public) || [];
+    const list = publicTypes.slice().sort((a, b) => Number(b.last) - Number(a.last)).slice(0, 24);
+    if (!list.length) return null;
+    return {
+        '@context': 'https://schema.org',
+        '@type': 'ItemList',
+        name: 'Public events on the OpenVibe.Events bus this week',
+        url: `${siteUrl}/#events`,
+        numberOfItems: list.length,
+        itemListElement: list.map((r, i) => {
+            const type = String(r.type);
+            const ns = nsOf(type);
+            const iso = isoDate(r.last);
+            const url = serviceUrl(ns);
+            return {
+                '@type': 'ListItem',
+                position: i + 1,
+                item: {
+                    '@type': 'Event',
+                    name: eventTitle(type),
+                    description: eventDescription(type),
+                    url: `${siteUrl}/#event-${slug(type)}`,
+                    // The last recorded arrival of this public event type: real data, never an invented schedule.
+                    ...(iso ? { startDate: iso } : {}),
+                    eventAttendanceMode: 'https://schema.org/OnlineEventAttendanceMode',
+                    location: { '@type': 'VirtualLocation', url: url || siteUrl },
+                    organizer: { '@type': 'Organization', name: serviceName(ns), ...(url ? { url } : {}) },
+                    isAccessibleForFree: true,
+                },
+            };
+        }),
+    };
+}
+
+/** The numbers, who published and the public events (the events section always renders, with its empty state). */
 function activity(stats) {
-    if (!stats) return '';
-    const now = stats.measuredAt || Date.now();
+    const events = eventsSection(stats);
+    if (!stats) return { statRow: '', who: '', events };
     const tiles = [
         [stats.day, 'events in the last 24 hours'], [stats.week, 'events this week'], [stats.services.length, 'services published this week'],
         [stats.types, 'event types this week'], [stats.subscriptions, `active subscriptions${stats.consumers ? ` from ${fmt(stats.consumers)} consumers` : ''}`],
@@ -99,12 +189,7 @@ function activity(stats) {
 <p class="sc-lede">Events by the service that published them over the last seven days. Every one was stored before any subscriber saw it.</p>
 <ul class="hm-bars">${top.map((r) => `<li><span class="hm-bar-name">${serviceLink(r.ns)}</span><span class="hm-bar" aria-hidden="true"><i style="width:${Math.max(2, Math.round((r.n / max) * 100))}%"></i></span><span class="hm-bar-n">${esc(fmt(r.n))}</span></li>`).join('')}</ul>
 ${stats.services.length > top.length ? `<p class="hm-note">And ${esc(stats.services.length - top.length)} more.</p>` : ''}</section>` : '';
-    const types = stats.public.length ? `<section class="sc-sec" aria-labelledby="h-types"><h2 id="h-types">Public events this week</h2>
-<p class="sc-lede">The event types anyone may read, with how many arrived in the last seven days. Subscribe to a pattern such as live.stream.* to get them as signed webhooks.</p>
-<div class="sc-table-wrap" tabindex="0" role="region" aria-labelledby="h-types"><table class="sc-table hm-table"><thead><tr><th scope="col">Event type</th><th scope="col">What happened</th><th scope="col">This week</th><th scope="col">Last one</th></tr></thead><tbody>
-${stats.public.map((r) => `<tr><th scope="row"><code>${esc(r.type)}</code></th><td>${esc(TYPE_WORDS[r.type] || `From ${serviceName(r.type.split('.')[0])}`)}</td><td>${esc(fmt(r.n))}</td><td>${esc(ago(r.last, now))}</td></tr>`).join('')}
-</tbody></table></div></section>` : '';
-    return { statRow, who, types };
+    return { statRow, who, events };
 }
 
 /** Questions people ask first, answered from the README and the code. */
@@ -119,7 +204,7 @@ const FAQ = [
 ];
 
 function sections({ apiUrl, stats = null }) {
-    const live = activity(stats) || { statRow: '', who: '', types: '' };
+    const live = activity(stats);
     const publish = [
         `curl -X POST ${apiUrl}/api/v1/events \\`,
         '  -H "Authorization: Bearer $TOKEN" -H \'Content-Type: application/json\' \\',
@@ -146,7 +231,7 @@ function sections({ apiUrl, stats = null }) {
             + `retried with backoff, and replayable after a failure.${publishers ? ` ${publishers} OpenVibe services published to it this week.` : ''}`,
         actions: [{ label: 'Read the guide', href: `${SOURCE}#readme`, primary: true }, { label: 'See an example', href: '#examples' }],
         note: `Alpha. The API is at ${apiUrl}; developer apps sign in through OpenVibe.Network.`,
-    }) + '<section class="sc-sec sc-part-of"><p class="sc-note">Part of <a href="https://openvibe.services/">OpenVibe Services</a>: the building blocks every OpenVibe product runs on, with one console, one account and one SDK.</p></section>' + live.statRow + live.who + live.types + showcase.features({
+    }) + '<section class="sc-sec sc-part-of"><p class="sc-note">Part of <a href="https://openvibe.services/">OpenVibe Services</a>: the building blocks every OpenVibe product runs on, with one console, one account and one SDK.</p></section>' + live.statRow + live.events + live.who + showcase.features({
         title: 'What you get',
         items: [
             { icon: 'ov:upload', title: 'Publish once', text: 'One event or up to a hundred at a time, stored atomically and numbered in order. Sending the same event id twice never stores it twice.' },
@@ -180,9 +265,9 @@ function sections({ apiUrl, stats = null }) {
 // The page's own few rules (it has no stylesheet beyond the showcase's): no browser margin around the body, so the Frame's
 // footer meets the edges; each curl sample on its own full-width row (three columns cut every command off); the four
 // webhook steps two by two instead of three and one alone, each title level with its number.
-// The data sections' rules follow: the stat tiles, the per-service bars, the public types table and the questions, in theme tokens (accent-light is drawn for dark themes, so text in it is mixed toward the text colour).
+// The data sections' rules follow: the stat tiles, the per-service bars, the public event cards and the questions, in theme tokens (accent-light is drawn for dark themes, so text in it is mixed toward the text colour).
 const HOME_STYLE = '<style>body{margin:0}.page .sc-code{grid-template-columns:minmax(0,1fr)}.page .sc-steps{grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))}.page .sc-steps li{align-items:start;align-content:start}.page .sc-steps b{line-height:30px}'
-    + '.page{--hm-accent-text:color-mix(in srgb,var(--accent-light,#60a5fa) 45%,var(--text-primary,#e6edf7))}.sc-eyebrow{color:var(--hm-accent-text)}.sc-table thead th{color:var(--text-secondary,#96a7c2)}'
+    + '.page{--hm-accent-text:color-mix(in srgb,var(--accent-light,#60a5fa) 45%,var(--text-primary,#e6edf7))}.sc-eyebrow{color:var(--hm-accent-text)}'
     + '.hm-stats-sec{margin-top:40px}.hm-stats{list-style:none;margin:0;padding:0;display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(min(130px,100%),1fr))}'
     + '.hm-stats li{display:grid;gap:2px;padding:14px 16px;border-radius:14px;border:1px solid var(--border,rgba(255,255,255,.08));background:var(--bg-secondary,#101828)}'
     + '.hm-stats b{font-size:28px;line-height:1.1;letter-spacing:-.02em}.hm-stats span{font-size:13.5px;color:var(--text-secondary,#96a7c2)}'
@@ -191,15 +276,18 @@ const HOME_STYLE = '<style>body{margin:0}.page .sc-code{grid-template-columns:mi
     + '.hm-bars li{display:grid;grid-template-columns:minmax(0,11em) minmax(0,1fr) auto;align-items:center;gap:12px;font-size:14.5px}'
     + '.hm-bar-name{overflow-wrap:anywhere}.hm-bar-name a{color:var(--hm-accent-text);text-decoration:none}.hm-bar-name a:hover{text-decoration:underline}.hm-bar{height:10px;border-radius:999px;background:var(--bg-tertiary,#172238);overflow:hidden}'
     + '.hm-bar i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,var(--accent,#3b82f6),var(--accent-light,#60a5fa))}.hm-bar-n{font-variant-numeric:tabular-nums;color:var(--text-secondary,#96a7c2);text-align:right;min-width:4.5em}'
-    + '.hm-table code{font-size:13px;overflow-wrap:anywhere}.hm-table td:nth-child(3),.hm-table td:nth-child(4){white-space:nowrap;font-variant-numeric:tabular-nums}'
+    + '.hm-cats{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 20px}.hm-cats a,.hm-cats span{display:inline-block;padding:4px 11px;border:1px solid var(--border,rgba(255,255,255,.08));border-radius:999px;font-size:13px;color:var(--hm-accent-text);text-decoration:none}'
+    + '.hm-cats span{color:var(--text-secondary,#96a7c2)}.hm-cats a:hover{text-decoration:underline}'
+    + '.hm-events{list-style:none;margin:0;padding:0;display:grid;gap:12px 28px;grid-template-columns:repeat(auto-fill,minmax(min(100%,440px),1fr))}'
+    + '.hm-event{padding:4px 0 16px;border-bottom:1px solid var(--border,rgba(255,255,255,.08))}.hm-event-cat{margin:0;font-size:12.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--text-secondary,#96a7c2)}'
+    + '.hm-event-cat a,.hm-event-meta a{color:var(--hm-accent-text);text-decoration:none}.hm-event-cat a:hover,.hm-event-meta a:hover{text-decoration:underline}'
+    + '.hm-event-title{margin:4px 0 6px;font-size:17px}.hm-event-meta{margin:0 0 6px;font-size:13.5px;line-height:1.5;color:var(--text-secondary,#96a7c2)}'
+    + '.hm-event-desc{margin:0 0 6px;font-size:14.5px;line-height:1.6;color:var(--text-secondary,#96a7c2)}.hm-event-type{margin:0}.hm-event-type code{font-size:12.5px;overflow-wrap:anywhere;color:var(--text-secondary,#96a7c2)}'
     + '.hm-faq{display:grid;gap:12px 28px;grid-template-columns:repeat(auto-fill,minmax(min(380px,100%),1fr))}.hm-qa{padding:4px 0 14px;border-bottom:1px solid var(--border,rgba(255,255,255,.08))}'
     + '.hm-qa h3{margin:0 0 6px;font-size:16px}.hm-qa p{margin:0;font-size:14.5px;line-height:1.6;color:var(--text-secondary,#96a7c2)}'
     + '@media (max-width:520px){.page .sc-code pre{white-space:pre-wrap;overflow-wrap:anywhere}.hm-bars li{grid-template-columns:minmax(0,10.5em) minmax(0,1fr) auto;font-size:13.5px;gap:8px}.hm-bar-n{min-width:3.5em}'
-    // On a phone each public type is a small card: the type across the top, what happened below it, the count and the last one on the right.
-    + '.hm-table thead{display:none}.hm-table,.hm-table tbody{display:block}.hm-table tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:10px 14px;border-top:1px solid var(--border,rgba(255,255,255,.08))}'
-    + '.hm-table th,.hm-table td{display:block;padding:0;border:0}.hm-table tbody th{grid-column:1/-1;grid-row:1;width:auto}.hm-table td:nth-child(2){grid-column:1;grid-row:2/span 2;font-size:13.5px;color:var(--text-secondary,#96a7c2)}'
-    + '.hm-table td:nth-child(3){grid-column:2;grid-row:2;text-align:right}.hm-table td:nth-child(4){grid-column:2;grid-row:3;text-align:right;font-size:13px;color:var(--text-secondary,#96a7c2)}}'
-    + ''
+    // On a phone each public event is a full-width card: the category, the title, then the date, place and count.
+    + '.hm-events{grid-template-columns:minmax(0,1fr)}.hm-event-title{font-size:16px}}'
     + '@media (max-width:420px){.sc-hero,.sc-sec,.sc-cta{padding-left:16px;padding-right:16px}}</style>';
 
 const FOOTER = { service: 'events', variant: 'full', mount: '#ov-footer', brandName: SITE_NAME, updates: '/updates' };
@@ -245,7 +333,8 @@ function renderHome({ siteUrl, apiUrl, stats = null }) {
             seo.jsonLd.website({ name: SITE_NAME, url: siteUrl, description: DESCRIPTION }),
             seo.jsonLd.softwareApp({ name: SITE_NAME, url: `${siteUrl}/`, description: DESCRIPTION, category: 'DeveloperApplication', keywords: ['event bus', 'webhooks', 'server-sent events', 'replay', 'dead-letter queue'] }),
             seo.jsonLd.faq(FAQ.map(([q, a]) => ({ q, a }))),
-        ],
+            eventsJsonLd({ siteUrl, stats }),
+        ].filter(Boolean),
         navbar: nav, footer, home: '/', navLinks: [{ label: 'Guide', href: `${SOURCE}#readme` }],
         head: [
             appIcon.headTags({ site: 'events' }),
