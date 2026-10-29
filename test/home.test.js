@@ -79,7 +79,7 @@ t('GET / as a browser: the home page, its CSP and its cache policy', async () =>
     assert.strictEqual(r.headers.vary, 'Accept');
     assert.strictEqual((r.body.match(/<h1\b/g) || []).length, 1, 'exactly one h1');
     // The page's own rules: the body meets the edges (no browser margin), each curl sample takes a full row.
-    assert.match(r.body, /<style>body\{margin:0\}\.page \.sc-code\{grid-template-columns:minmax\(0,1fr\)\}/);
+    // body margins are gone, the page clips the hero aura's spill, and the curl samples get one full-width column.\n    assert.match(r.body, /<style>body\{margin:0\}[\s\S]{0,200}\.page \.sc-code\{grid-template-columns:minmax\(0,1fr\)\}/);\n    assert.match(r.body, /\.page\{overflow-x:clip\}/);
     assert.ok(r.body.includes('Events your services'), 'the hero text');
     assert.ok(r.body.includes(`<link rel="canonical" href="${SITE}/">`), 'the canonical product origin');
     assert.ok(r.body.includes(`The API is at ${SITE}`), 'the hero note names the API origin');
