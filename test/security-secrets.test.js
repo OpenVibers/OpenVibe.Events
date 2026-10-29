@@ -125,7 +125,8 @@ t('crawl: no GET, refusal or error carries a secret, a token or the key', async 
     };
     const wr = await crawler.crawl(w.base, paths.filter((p) => p.startsWith('/api/v1/')), wrong, () => needles);
     found.push(...wr.found);
-    const ok2xx = Object.entries(wr.byPath).filter(([, s]) => s < 400).map(([k, s]) => `${k} → ${s}`);
+    // /api/v1/openapi.json is the one public redirect (308) this service answers: a token neither opens nor closes it.
+    const ok2xx = Object.entries(wr.byPath).filter(([k, s]) => s < 400 && !k.includes(' /api/v1/openapi.json')).map(([k, s]) => `${k} → ${s}`);
     assert.deepStrictEqual(ok2xx, [], 'wrong tokens open nothing');
     assert.deepStrictEqual(found, [], `secrets in answers:\n${found.join('\n')}`);
 });

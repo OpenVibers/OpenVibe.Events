@@ -19,6 +19,7 @@ const { renderHome, renderUpdates, renderNotFound, HOME_CSP } = require('./home'
 const { createHomeStats } = require('./home-stats');
 const appIcon = require('openvibe-shared/app-icon');
 const { createDiscoveryRoutes } = require('./discovery');
+const openapi = require('./openapi');
 const ovServe = require('openvibe-shared/serve');
 const pkg = require('../package.json');
 
@@ -86,6 +87,8 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
         },
     });
     app.get('/api/ready', readiness.handler);
+    // GET /openapi.json: the public OpenAPI 3.1 document (server/openapi.js); /api/v1/openapi.json redirects here.
+    openapi.mount(app);
 
     // One per-actor limiter for the capability routes below (server/actor-limits.js); health, ready,
     // release.json, limits.json, metrics and the realtime stream above are never limited.
