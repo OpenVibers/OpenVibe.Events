@@ -66,7 +66,8 @@ function createDiscoveryRoutes({ config, releaseLastmod }) {
     const abs = (p) => seo.absolute(p, config.siteUrl);
 
     router.get('/robots.txt', (_req, res) => res.type('text/plain').set('Cache-Control', cache.htmlHeaders())
-        .send(seo.robotsTxt({ sitemaps: [abs('/sitemap.xml')], disallow: ['/api/', '/realtime/'] })));
+        .send(seo.robotsTxt({ sitemaps: [abs('/sitemap.xml')], disallow: ['/api/', '/realtime/'] })
+            + `# Agent manifest: ${abs('/.well-known/agent.json')}\n`));
 
     router.get('/sitemap.xml', (_req, res) => res.type('application/xml').set('Cache-Control', cache.htmlHeaders())
         .send(seo.sitemapXml([{ loc: abs('/'), lastmod: releaseLastmod }, { loc: abs('/updates'), lastmod: releaseLastmod }])));

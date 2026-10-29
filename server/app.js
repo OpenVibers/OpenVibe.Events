@@ -19,6 +19,7 @@ const { renderHome, renderUpdates, renderNotFound, HOME_CSP } = require('./home'
 const { createHomeStats } = require('./home-stats');
 const appIcon = require('openvibe-shared/app-icon');
 const { createDiscoveryRoutes } = require('./discovery');
+const { linkHeaderTags } = require('openvibe-shared/agent-layer');
 const openapi = require('./openapi');
 const ovServe = require('openvibe-shared/serve');
 const pkg = require('../package.json');
@@ -119,11 +120,31 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     // GET /updates: what shipped on this site (the shared update log), for browsers; the vhost passes GET through.
     app.get('/updates', (req, res) => {
         res.type('html').set('Content-Security-Policy', HOME_CSP).set('Cache-Control', 'public, max-age=300')
+            .set('Link', linkHeaderTags(`${config.siteUrl}/updates`, '/llms.txt').header)
             .send(renderUpdates({ siteUrl: config.siteUrl }));
     });
 
     // The home's live sections: counts and names from this service's own tables, kept five minutes (server/home-stats.js).
     const homeStats = createHomeStats({ store, now: () => (clock ? clock.now() : Date.now()), log });
+    // The agent layer (openvibe-shared/agent-layer): /.well-known/agent.json, and the Markdown twins of the two
+    // public pages. Entered only for the manifest exactly (the rest of /.well-known/ belongs to the app) and a
+    // twin request — a `.md` path, ?format=markdown or an explicit text/markdown preference — because the layer
+    // renders pages signed out and /updates already answers browsers itself. It sits in front of the home route so
+    // /index.md is not read as a missing page, and the pages name their own twins in the head (server/home.js).
+    {
+        const agentRouter = express.Router();
+        require('openvibe-shared/agent-layer').mount(agentRouter, {
+            descriptor: require('./agent-descriptor'),
+            render: require('./agent-pages').createAgentPages({ config, homeStats }).renderPublicPage,
+        });
+        app.use((req, res, next) => {
+            if (req.path === '/.well-known/agent.json') return agentRouter(req, res, next);
+            const p = String(req.path || '');
+            if (p.endsWith('.md') || (req.query && req.query.format === 'markdown')
+                || req.accepts(['html', 'text/markdown']) === 'text/markdown') return agentRouter(req, res, next);
+            return next();
+        });
+    }
     app.get('/', async (req, res, next) => {
         res.vary('Accept');
         const wantsText = req.query.format === 'text' || req.accepts(['text/html', 'text/plain']) === 'text/plain';
@@ -134,6 +155,7 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
                     .set('Content-Security-Policy', HOME_CSP)
                     // private: Cloudflare caches by URL and ignores Vary: Accept, so a shared copy could reach an API client.
                     .set('Cache-Control', 'private, max-age=300')
+                    .set('Link', linkHeaderTags(`${config.siteUrl}/`, '/llms.txt').header)
                     .send(renderHome({ siteUrl: config.siteUrl, apiUrl: config.baseUrl, stats }));
             } catch (e) { return next(e); }
         }
