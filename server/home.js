@@ -266,7 +266,7 @@ function sections({ apiUrl, stats = null }) {
 // footer meets the edges; each curl sample on its own full-width row (three columns cut every command off); the four
 // webhook steps two by two instead of three and one alone, each title level with its number.
 // The data sections' rules follow: the stat tiles, the per-service bars, the public event cards and the questions, in theme tokens (accent-light is drawn for dark themes, so text in it is mixed toward the text colour).
-const HOME_STYLE = '<style>body{margin:0}.page .sc-code{grid-template-columns:minmax(0,1fr)}.page .sc-steps{grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))}.page .sc-steps li{align-items:start;align-content:start}.page .sc-steps b{line-height:30px}'
+const HOME_STYLE = '<style>body{margin:0}/* The hero\'s aura is drawn 54px past its right edge (shared showcase, sc-hero-vis at right:-54px); without a clip the phone scrolls sideways by ~43px (2026-10-29). */.page{overflow-x:clip}.page .sc-code{grid-template-columns:minmax(0,1fr)}.page .sc-steps{grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))}.page .sc-steps li{align-items:start;align-content:start}.page .sc-steps b{line-height:30px}'
     + '.page{--hm-accent-text:color-mix(in srgb,var(--accent-light,#60a5fa) 45%,var(--text-primary,#e6edf7))}.sc-eyebrow{color:var(--hm-accent-text)}'
     + '.hm-stats-sec{margin-top:40px}.hm-stats{list-style:none;margin:0;padding:0;display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(min(130px,100%),1fr))}'
     + '.hm-stats li{display:grid;gap:2px;padding:14px 16px;border-radius:14px;border:1px solid var(--border,rgba(255,255,255,.08));background:var(--bg-secondary,#101828)}'
