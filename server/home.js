@@ -250,7 +250,7 @@ function sections({ apiUrl, stats = null }) {
             { icon: 'ov:live', title: 'Realtime for browsers', text: 'Server-sent events, authorized per topic with a one-use ticket from OpenVibe.Network, and resumable after a reconnect.' },
             { icon: 'ov:code', title: 'Developer apps', text: 'An app publishes under its own project\'s names and keeps sandbox and production apart: sandbox events never reach production.' },
         ],
-    }) + showcase.code({
+    }) + '<details class="hm-fold"><summary>Publish, subscribe, pull<span>curl examples</span></summary>' + showcase.code({
         id: 'examples',
         title: 'Publish, subscribe, pull',
         lede: 'With an app token from OpenVibe.Network (client credentials, audience openvibe.events).',
@@ -259,7 +259,7 @@ function sections({ apiUrl, stats = null }) {
             { label: 'Subscribe', lang: 'bash', code: subscribe },
             { label: 'Pull', lang: 'bash', code: pull },
         ],
-    }) + showcase.steps({
+    }) + '</details>' + showcase.steps({
         title: 'Receive a webhook safely',
         items: [
             { title: 'Keep the secret', text: 'The subscription\'s secret is shown once, when you create it or rotate it.' },
@@ -268,7 +268,7 @@ function sections({ apiUrl, stats = null }) {
             { title: 'Expect repeats', text: 'A retry can bring the same event again: keep its event id and handle it once.' },
         ],
     }) + `<section class="sc-sec" id="faq" aria-labelledby="h-faq"><h2 id="h-faq">Questions</h2>
-<div class="hm-faq">${FAQ.map(([q, a]) => `<div class="hm-qa"><h3>${esc(q)}</h3><p>${esc(a)}</p></div>`).join('')}</div></section>`;
+<div class="hm-faq">${FAQ.map(([q, a], i) => `<details class="hm-qa"${i === 0 ? ' open' : ''}><summary><h3>${esc(q)}</h3></summary><p>${esc(a)}</p></details>`).join('')}</div></section>`;
 }
 
 // The page's own few rules (it has no stylesheet beyond the showcase's): no browser margin around the body, so the Frame's
@@ -292,6 +292,8 @@ const HOME_STYLE = '<style>body{margin:0}/* The hero\'s aura is drawn 54px past 
     + '.hm-event-cat a,.hm-event-meta a{color:var(--hm-accent-text);text-decoration:none}.hm-event-cat a:hover,.hm-event-meta a:hover{text-decoration:underline}'
     + '.hm-event-title{margin:4px 0 6px;font-size:17px}.hm-event-meta{margin:0 0 6px;font-size:13.5px;line-height:1.5;color:var(--text-secondary,#96a7c2)}'
     + '.hm-event-desc{margin:0 0 6px;font-size:14.5px;line-height:1.6;color:var(--text-secondary,#96a7c2)}.hm-event-type{margin:0}.hm-event-type code{font-size:12.5px;overflow-wrap:anywhere;color:var(--text-secondary,#96a7c2)}'
+    + '.hm-fold{margin:20px 0 0;border:1px solid var(--border,rgba(255,255,255,.1));border-radius:14px;background:var(--bg-card,#131c2e)}.hm-fold>summary{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:48px;padding:0 16px;cursor:pointer;font-weight:700;list-style:none}.hm-fold>summary::-webkit-details-marker{display:none}.hm-fold>summary span{color:var(--text-muted,#7386a3);font-weight:600;font-size:.86rem}.hm-fold .sc-sec{margin:0;padding:0 16px 14px}.hm-qa>summary{list-style:none;cursor:pointer}.hm-qa>summary::-webkit-details-marker{display:none}.hm-qa>summary h3{margin:0}'
+    + '@media (max-width:599px){.hm-events>li:nth-child(n+7),.hm-bars>li:nth-child(n+11){display:none}}'
     + '.hm-faq{display:grid;gap:12px 28px;grid-template-columns:repeat(auto-fill,minmax(min(380px,100%),1fr))}.hm-qa{padding:4px 0 14px;border-bottom:1px solid var(--border,rgba(255,255,255,.08))}'
     + '.hm-qa h3{margin:0 0 6px;font-size:16px}.hm-qa p{margin:0;font-size:14.5px;line-height:1.6;color:var(--text-secondary,#96a7c2)}'
     + '@media (max-width:520px){.page .sc-code pre{white-space:pre-wrap;overflow-wrap:anywhere}.hm-bars li{grid-template-columns:minmax(0,10.5em) minmax(0,1fr) auto;font-size:13.5px;gap:8px}.hm-bar-n{min-width:3.5em}'
