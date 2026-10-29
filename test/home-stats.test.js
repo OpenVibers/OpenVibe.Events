@@ -1,7 +1,7 @@
 'use strict';
 // The home page's live sections (server/home-stats.js, server/home.js): counts and names read from Events' own tables,
-// the public types with when each last arrived, never a payload, internal types never named, the sections left out on an
-// empty bus, and a FAQPage that holds exactly the questions the page shows.
+// the public events with when each last arrived, never a payload, internal types never named, a clear empty state on
+// an empty or failed bus, and a FAQPage that holds exactly the questions the page shows.
 const assert = require('assert');
 const { boot, request, serviceToken, envelope, suite } = require('./helpers');
 const { createHomeStats } = require('../server/home-stats');
@@ -13,11 +13,11 @@ const section = (page, id) => (new RegExp(`<section class="sc-sec"[^>]*aria-labe
 
 t('boot', async () => { h = await boot(); });
 
-t('an empty bus: the live sections are left out, the rest of the page stays', async () => {
+t('an empty bus: the counts are left out, the public event list says so, the rest of the page stays', async () => {
     const page = await html();
     assert.ok(!page.includes('aria-labelledby="h-who"'));
-    assert.ok(!page.includes('aria-labelledby="h-types"'));
     assert.ok(!page.includes('class="hm-stats"'), 'no tiles of zeros');
+    assert.match(page, /id="h-events">Public events this week<\/h2><p class="sc-lede">No public events have arrived this week\./);
     assert.match(page, /Events your services/);
     assert.match(page, /id="h-faq">Questions</);
 });
@@ -43,13 +43,24 @@ t('published events show as counts by service, public types and the latest publi
 
     const { renderHome } = require('../server/home');
     const page = renderHome({ siteUrl: 'https://openvibe.events', apiUrl: 'https://openvibe.events', stats });
+    const events = section(page, 'h-events');
     assert.match(section(page, 'h-who'), /<a href="https:\/\/openvibe\.live">OpenVibe\.Live<\/a>/);
-    assert.match(section(page, 'h-types'), /<code>live\.stream\.started<\/code><\/th><td>A channel went live on OpenVibe\.Live<\/td><td>2<\/td>/);
-    assert.match(section(page, 'h-types'), /<code>blog\.post\.published<\/code><\/th><td>A post was published on OpenVibe\.Blog<\/td><td>1<\/td><td>just now<\/td>/);
+    assert.match(events, /A channel went live on OpenVibe\.Live/);
+    assert.match(events, /<time datetime="\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z">/);
+    assert.match(events, /Online, from <a href="https:\/\/openvibe\.live">OpenVibe\.Live<\/a> · 2 this week/);
+    assert.match(events, /<code>live\.stream\.started<\/code>/);
+    assert.match(events, /A post was published on OpenVibe\.Blog/);
+    assert.match(events, /<code>blog\.post\.published<\/code>/);
     assert.ok(!page.includes('SECRET-TITLE'));
     assert.ok(!page.includes('live.internal.tick'));
     assert.match(page, /<b>4<\/b><span>events this week<\/span>/);
     assert.match(page, / 2 OpenVibe services published to it this week\./);
+    const ld = [...page.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
+    const list = ld.find((x) => x['@type'] === 'ItemList');
+    assert.ok(list, 'the public events are an ItemList');
+    assert.strictEqual(list.numberOfItems, 2);
+    assert.ok(list.itemListElement.every((x) => x.item['@type'] === 'Event' && x.item.startDate));
+    assert.ok(!JSON.stringify(list).includes('SECRET-TITLE'));
 });
 
 t('JSON-LD: WebSite, the app, and a FAQPage with exactly the questions shown', async () => {
@@ -62,6 +73,19 @@ t('JSON-LD: WebSite, the app, and a FAQPage with exactly the questions shown', a
     assert.deepStrictEqual(ld.find((x) => x['@type'] === 'FAQPage').mainEntity.map((q) => q.name), shown);
     const description = /<meta name="description" content="([^"]*)"/.exec(page)[1];
     assert.ok(description.length <= 160, `description ${description.length} chars`);
+});
+
+t('a stalled store resolves to no stats within the 1.5 s bound, so the page falls back to its empty state', async () => {
+    const pending = () => new Promise(() => {});
+    const stalled = {
+        db: { prepare: () => ({ get: pending, all: pending }) },
+        deliveryCounts: pending,
+    };
+    const started = Date.now();
+    const stats = await createHomeStats({ store: stalled, log: { warn() {} } }).read();
+    const elapsed = Date.now() - started;
+    assert.strictEqual(stats, null);
+    assert.ok(elapsed >= 1400 && elapsed < 2500, `resolved in ${elapsed} ms`);
 });
 
 t('stop', async () => { await h.stop(); });

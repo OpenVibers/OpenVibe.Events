@@ -108,10 +108,11 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     // from INDEXNOW_KEY in server/index.js). It answers its own path and passes everything else on.
     if (indexnow && indexnow.enabled) app.use(indexnow.keyFile);
 
-    // GET / on the product domain: the home page for a browser (server/home.js, openvibe.events), the
-    // API index for curl and API clients (`*/*`, no Accept, or any non-HTML Accept). Vary: Accept so a
-    // shared cache never serves one to the other. The home carries its own CSP (HOME_CSP); the only
-    // global security header is X-Content-Type-Options above, kept on every route.
+    // GET / on the product domain: the server-rendered home page (server/home.js, openvibe.events) for browsers,
+    // crawlers and plain fetchers (`*/*`, no Accept, or any non-text Accept); the text/plain API index only when
+    // the caller asks for it (`Accept: text/plain` or ?format=text). Vary: Accept so a shared cache never serves
+    // one to the other. The home carries its own CSP (HOME_CSP); the only global security header is
+    // X-Content-Type-Options above, kept on every route.
     // GET /updates: what shipped on this site (the shared update log), for browsers; the vhost passes GET through.
     app.get('/updates', (req, res) => {
         res.type('html').set('Content-Security-Policy', HOME_CSP).set('Cache-Control', 'public, max-age=300')
@@ -122,7 +123,8 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     const homeStats = createHomeStats({ store, now: () => (clock ? clock.now() : Date.now()), log });
     app.get('/', async (req, res, next) => {
         res.vary('Accept');
-        if (req.accepts(['text/plain', 'text/html']) === 'text/html') {
+        const wantsText = req.query.format === 'text' || req.accepts(['text/html', 'text/plain']) === 'text/plain';
+        if (!wantsText) {
             try {
                 const stats = await homeStats.read();
                 return res.type('html')
@@ -132,7 +134,8 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
                     .send(renderHome({ siteUrl: config.siteUrl, apiUrl: config.baseUrl, stats }));
             } catch (e) { return next(e); }
         }
-        res.type('text/plain').send([
+        // The explicit text variant is never shared-cached either (Cloudflare ignores Vary): HTML is the cached page.
+        res.type('text/plain').set('Cache-Control', 'private, no-store').send([
             'OpenVibe.Events: durable events, subscriptions, signed delivery, dead letters and replay.',
             '',
             'POST /api/v1/events              publish (service token, events.event.publish; app token, events.app.publish)',
