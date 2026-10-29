@@ -310,6 +310,9 @@ function renderUpdates({ siteUrl }) {
         siteName: SITE_NAME,
         description: `Every change deployed to ${SITE_NAME}, newest first.`,
         canonical: `${siteUrl}/updates`,
+        // A public page names its Markdown twin (openvibe-shared/agent-layer).
+        agentLayer: true,
+        llms: '/llms.txt',
         robots: 'index, follow',
         navbar: { service: 'events', apiBase: NETWORK_URL, links, history: { type: 'page', title: SITE_NAME } },
         footer: FOOTER, home: '/', navLinks: links,
@@ -336,6 +339,9 @@ function renderHome({ siteUrl, apiUrl, stats = null }) {
         siteName: SITE_NAME,
         description: DESCRIPTION,
         canonical: `${siteUrl}/`,
+        // A public page names its Markdown twin (openvibe-shared/agent-layer).
+        agentLayer: true,
+        llms: '/llms.txt',
         robots: 'index, follow',
         jsonLd: oneGraph([
             seo.jsonLd.website({ name: SITE_NAME, url: siteUrl, description: DESCRIPTION }),
