@@ -86,7 +86,7 @@ t('GET / as a browser: the home page, its CSP and its cache policy', async () =>
     assert.ok(r.body.includes(`${SITE}/api/v1/events`), 'the API examples use the API origin');
     assert.ok(!r.body.includes('events.openvibe.network'), 'the home names no other origin');
     assert.strictEqual((r.body.match(/<link rel="canonical"/g) || []).length, 1, 'one canonical');
-    assert.match(r.body, /<html lang="en">/);
+    assert.match(r.body, /<html lang="en" data-ov-service="events">/);
 });
 
 t('GET / for a crawler or a plain curl: the server-rendered HTML, with real readable text', async () => {
