@@ -175,7 +175,10 @@ t('the server-rendered event list: title, real <time datetime>, place, descripti
     assert.match(card, /Published by OpenVibe\.Live as live\.stream\.started/, 'the short description');
     assert.match(card, /3 this week/, 'the count');
     assert.match(card, /Category: <a href="https:\/\/openvibe\.live">live<\/a>/, 'a category link');
-    assert.match(page, /<nav class="hm-cats"[^>]*><a href="https:\/\/openvibe\.live">OpenVibe\.Live<\/a>/, 'the category nav');
+    // The category nav became the row of chips that picks one category at a time on a phone (the short-pages rule);
+    // the links it held are still in the page, on the cards themselves.
+    assert.match(page, /<label for="pk-events-0">OpenVibe\.Live<\/label>/, 'the category chips');
+    assert.match(page, /Online, from <a href="https:\/\/openvibe\.live">OpenVibe\.Live<\/a>/, 'the publisher link is still in the page');
     assert.match(page, /<code>live\.stream\.started<\/code>/, 'the exact event type');
 
     // One JSON-LD script per page: every node lives in the page's @graph.
