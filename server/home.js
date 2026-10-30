@@ -299,7 +299,10 @@ const HOME_STYLE = '<style>body{margin:0}/* The hero\'s aura is drawn 54px past 
     + '@media (max-width:520px){.page .sc-code pre{white-space:pre-wrap;overflow-wrap:anywhere}.hm-bars li{grid-template-columns:minmax(0,10.5em) minmax(0,1fr) auto;font-size:13.5px;gap:8px}.hm-bar-n{min-width:3.5em}'
     // On a phone each public event is a full-width card: the category, the title, then the date, place and count.
     + '.hm-events{grid-template-columns:minmax(0,1fr)}.hm-event-title{font-size:16px}}'
-    + '@media (max-width:420px){.sc-hero,.sc-sec,.sc-cta{padding-left:16px;padding-right:16px}}</style>';
+    + '@media (max-width:420px){.sc-hero,.sc-sec,.sc-cta{padding-left:16px;padding-right:16px}}'
+    // Touch targets on phones (fleet audit, 2026-10-29): touch pointers only.
+    + '@media (pointer: coarse){.hm-cats a{min-height:44px;display:inline-flex;align-items:center}.hm-bar-name a{min-height:44px;display:inline-flex;align-items:center}.hm-qa>summary{min-height:44px}}'
+    + '</style>';
 
 const FOOTER = { service: 'events', variant: 'full', mount: '#ov-footer', brandName: SITE_NAME, updates: '/updates' };
 
