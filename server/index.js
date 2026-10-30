@@ -17,6 +17,8 @@ const { createAuth } = require('./auth');
 const { createWorker } = require('./worker');
 const { createRealtime } = require('./realtime');
 const { createApp } = require('./app');
+const accountDataLib = require('./account-data');
+const { createNetworkSender, startSubscriptions } = require('openvibe-sdk/account-data');
 const { createMetrics } = require('./metrics');
 const { createGuardedPost } = require('./egress');
 const { createBillingReadings } = require('./billing');
@@ -63,7 +65,13 @@ async function start({
         indexnow = createIndexNow({ host: config.siteUrl, key: '', log });
     }
 
-    const app = createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log, valkey, policies, planner, carriers, indexnow });
+    // The account export/deletion part (ADR-033, ./account-data.js): the handle over this database and the sender
+    // that pushes the part and the confirmation to Network's internal routes.
+    const accountData = accountDataLib.create({ db, log });
+    const accountSend = config.oauth && config.oauth.clientSecret
+        ? createNetworkSender({ networkInternalUrl: config.networkInternalUrl, clientId: config.oauth.clientId, clientSecret: config.oauth.clientSecret, fetch: fetchImpl })
+        : null;
+    const app = createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log, valkey, policies, planner, carriers, indexnow, accountData, accountSend });
     app.locals.indexnow = indexnow;
     // The pages crawlers see change only with a release, so this boot is the moment to announce them.
     // A no-op without INDEXNOW_KEY.
@@ -87,6 +95,16 @@ async function start({
     } catch (err) {
         log.warn(`[events] carriers did not start: ${err.message}`);
     }
+
+    // Events' own subscription to the two account topics (ADR-033): the deliveries come back to
+    // POST /internal/events. Off without EVENTS_EVENTS_SECRET or the OAuth client secret.
+    const accountSubscription = (config.accountData.secret.length >= 32 && config.oauth && config.oauth.clientSecret)
+        ? startSubscriptions({
+            eventsUrl: config.accountData.url, endpoint: `http://127.0.0.1:${config.port}/internal/events`,
+            secret: config.accountData.secret, networkInternalUrl: config.networkInternalUrl,
+            clientId: config.oauth.clientId, clientSecret: config.oauth.clientSecret, fetch: fetchImpl, log,
+        })
+        : null;
 
     const prune = async () => {
         try {
@@ -142,6 +160,7 @@ async function start({
     }
 
     async function close() {
+        if (accountSubscription) accountSubscription.stop();
         clearInterval(pruneTimer);
         if (usageTimer) clearInterval(usageTimer);
         await billing.stop();

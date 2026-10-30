@@ -31,6 +31,9 @@ const PLANTED = {
     // cloud-v1 (an SQS-compatible queue): signs requests, never echoed.
     CLOUD_QUEUE_ACCESS_KEY: `ovsecret-events-cloud-access-${crypto.randomBytes(12).toString('hex')}`,
     CLOUD_QUEUE_SECRET_KEY: `ovsecret-events-cloud-secret-${crypto.randomBytes(12).toString('hex')}`,
+    // The account-data consumer (ADR-033): the secret its own loopback subscription signs the two
+    // account topics with. It is Events' own signing secret, never echoed.
+    EVENTS_EVENTS_SECRET: `ovsecret-events-account-${crypto.randomBytes(12).toString('hex')}`,
 };
 
 t('Events reads no secret from its environment but the planted ones', async () => {

@@ -120,6 +120,15 @@ Operators: `GET /api/v1/deliveries?status=dead` is the dead-letter queue; `POST 
 
 Pull consumers: start with `GET /api/v1/events?topic=media.vod.*&limit=100`, then request `GET /api/v1/events?topic=media.vod.*&after=<next_cursor>&limit=100`, using the previous response's opaque `next_cursor` ([ADR-042](https://github.com/OpenVibers/OpenVibe.Contracts/blob/main/docs/adr/ADR-042-events-fabric.md) decision 7). The response carries `{ events: [{ cursor, event }], next_cursor, latest_cursor }` (`latest_cursor` is the head as an opaque cursor, for a consumer that starts at "now" without history), plus `gap: { from_seq, to_seq }` when the position is older than both the hot store and the replay tier (below) or from another retention epoch. Use `next_cursor` even when no events match, since it advances past scanned events. A position is only ever an opaque cursor: `after_seq` is refused with 400 (never read as "from the start"), and there is no per-event sequence number (dedupe on `event.event_id`). `PUT /api/v1/checkpoints { topic, cursor, carrier? }` stores a consumer's cursor here if it has nowhere better (a cursor string; a number is refused); `GET /api/v1/checkpoints?topic=` and the PUT answer `{ consumer, topic, cursor, carrier, updated_at }`, with `cursor` as stored (null when none is).
 
+### Account export and deletion (ADR-033)
+
+Events is the bus, so two of its columns name a person: the `actor` (the SubjectRef of whoever caused the event) and the `subject` (what the event is about). `server/account-data.js` answers the two account topics for them:
+
+- **Export** (`network.account.export_requested`): the person's part carries the envelope of the events they caused and the events about them (`id`, `seq`, `event_type`, `source`, `subject_type`, `subject_id`, `visibility`, `project_id`, `occurred_at`, `received_at`) — never the payload, which is the publishing service's record and may name other people. The replay tier's rows are in the part too (`events-replay.json`).
+- **Deletion** (`network.account.deleted`): the events the person caused and the events about them become tombstones, exactly as a redaction does: the payload goes and the actor becomes the producer, so no person stays linked to them. The envelope keeps its id, seq, type, subject and timestamps, so the log stays continuous and the replay tier stays in step. Both tiers are answered.
+
+The route is `POST /internal/events`, signed (v2) and loopback only, mounted by `server/app.js`; `server/index.js` creates the two subscriptions at boot with `startSubscriptions` (`EVENTS_EVENTS_URL`, `EVENTS_EVENTS_SECRET` and the service's own OAuth client). Without the secret the route is off and the account events do not reach Events. The receipts of what it applied are in `account_data_events` (migration 0010), so a redelivered export or deletion changes nothing. `test/account-data.test.js` asserts `uncovered()` is empty, so a new table with a person column fails CI until it is covered or exempted with a reason.
+
 ### Retention: three tiers
 
 [ADR-042](https://github.com/OpenVibers/OpenVibe.Contracts/blob/main/docs/adr/ADR-042-events-fabric.md) decision 8. An event lives in one tier at a time:
@@ -398,6 +407,6 @@ Part of the [OpenVibe network](https://openvibe.network). Built in the open by [
 
 <!-- versions:start -->
 - openvibe-contracts: v0.222.0
-- openvibe-sdk: v0.67.0
+- openvibe-sdk: v0.74.0
 - openvibe-shared: v4.48.0
 <!-- versions:end -->
