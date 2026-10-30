@@ -19,6 +19,7 @@ const showcase = require('openvibe-shared/showcase');
 const ovServe = require('openvibe-shared/serve');
 const appIcon = require('openvibe-shared/app-icon');
 const seo = require('openvibe-shared/seo');
+const ovIcons = require('openvibe-shared/ov-icons');
 
 const SITE_NAME = 'OpenVibe.Events';
 const NETWORK_URL = 'https://openvibe.network';
@@ -96,15 +97,50 @@ const humanDate = (ms) => {
     return `${d.toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC', hour12: false })} UTC`;
 };
 
+/**
+ * A pick block: several blocks of the same kind, one at a time on a phone (the owner's short-pages rule, 2026-10-30).
+ * Radio inputs and :has(), no script: the chips are hidden and every block shows until 640 px, where a row of chips
+ * picks one block. Every block stays in the page for crawlers, and a wider screen shows them all.
+ *
+ *   pickBlock({ key, label, panes })   the markup; panes: [{ id, label, head, html }]
+ */
+function pickBlock({ key, label, panes, bodyClass = '' }) {
+    if (!panes.length) return '';
+    const chips = panes.map((p, i) => `<input type="radio" name="pick-${esc(key)}" id="pk-${esc(key)}-${esc(p.id)}" value="${esc(p.id)}"${i === 0 ? ' checked' : ''}><label for="pk-${esc(key)}-${esc(p.id)}">${esc(p.label)}</label>`).join('');
+    const body = panes.map((p) => `<div class="pick-pane" id="pp-${esc(key)}-${esc(p.id)}">${p.head ? `<div class="pick-h"><h3>${esc(p.head)}</h3></div>` : ''}${p.html}</div>`).join('');
+    return `<div class="pick" id="pick-${esc(key)}"><div class="pick-row" role="radiogroup" aria-label="${esc(label)}">${chips}</div><div class="pick-body${bodyClass ? ` ${bodyClass}` : ''}">${body}</div></div>`;
+}
+
+/** The rule that shows the picked block of a pick block: one per block, so the CSS is written for the page. */
+function pickRule(key, id) {
+    return `.pick:has(#pk-${key}-${id}:checked) #pp-${key}-${id}{display:block}`;
+}
+
+/**
+ * A fold: a part of the page a reader rarely needs, closed on a phone and open where there is room (the owner's
+ * short-pages rule, 2026-10-30). The page's own markup keeps the block open, so a browser without the script (or
+ * with scripts off) shows it as before; the script closes it on a narrow screen and remembers the reader's choice.
+ *
+ *   foldBlock({ id, head, html })   the markup, with the small script that closes it on a phone
+ */
+function foldBlock({ id, head, html }) {
+    return `<details class="hm-fold hm-fold-block" id="${esc(id)}" open><summary>${head}<span>tap to open</span></summary>${html}</details>${foldScript(id)}`;
+}
+
+/** The script a fold carries: closed on a phone unless the reader opened it before, and it remembers that. */
+function foldScript(id) {
+    return `<script>(function(){var d=document.getElementById(${JSON.stringify(id)});if(!d)return;var k='ov_fold_'+${JSON.stringify(id)};var s=null;try{s=localStorage.getItem(k)}catch(e){}if(s==='open'){d.open=true;return}if(s==='closed'){d.open=false;return}var t=0;if(window.matchMedia&&window.matchMedia('(max-width:640px)').matches){t=Date.now();d.open=false}d.addEventListener('toggle',function(){if(Date.now()-t<300)return;try{localStorage.setItem(k,d.open?'open':'closed')}catch(e){}})})();</script>`;
+}
+
 /** One public event type as a search-readable card: title, real arrival time, place and publisher, description, count. */
-function eventCard(r) {
+function eventCard(r, cat) {
     const type = String(r.type);
     const ns = nsOf(type);
     const iso = isoDate(r.last);
     const url = serviceUrl(ns);
     const category = url ? `<a href="${esc(url)}">${esc(ns)}</a>` : esc(ns);
     const when = iso ? `<time datetime="${iso}">${esc(humanDate(r.last))}</time>` : '<span class="hm-event-undated">date not recorded</span>';
-    return `<li class="hm-event" id="event-${esc(slug(type))}">
+    return `<li class="hm-event" id="event-${esc(slug(type))}" data-cat="${esc(cat)}">
 <p class="hm-event-cat">Category: ${category}</p>
 <h3 class="hm-event-title">${esc(eventTitle(type))}</h3>
 <p class="hm-event-meta">${when} · Online, from ${serviceLink(ns)} · ${esc(fmt(r.n))} this week</p>
@@ -113,21 +149,14 @@ function eventCard(r) {
 </li>`;
 }
 
-/** The category links above the list: one per publishing service, to its site (plain text when it has none). */
-function categoryLinks(events) {
-    const seen = [];
-    for (const r of events) { const ns = nsOf(r.type); if (!seen.includes(ns)) seen.push(ns); }
-    return `<nav class="hm-cats" aria-label="Event categories">${seen.map((ns) => {
-        const url = serviceUrl(ns);
-        return url ? `<a href="${esc(url)}">${esc(serviceName(ns))}</a>` : `<span>${esc(serviceName(ns))}</span>`;
-    }).join('')}</nav>`;
-}
-
 /**
  * The public event types anyone may read, newest arrival first. The first page (24 types) is rendered here, on the
  * server, so a crawler reads it without running any JavaScript; there is no client-side list to duplicate it. Each
  * card carries a real <time datetime> from the last arrival the store recorded, never a guessed date. A slow or failed
  * stats read leaves a clear empty state instead of an empty page.
+ *
+ * On a phone the list is one category at a time, picked with a row of chips (the owner's short-pages rule): the
+ * category links above the list become the chips, and every card stays in the page for crawlers.
  */
 function eventsSection(stats) {
     const publicTypes = (stats && stats.public) || [];
@@ -138,12 +167,39 @@ function eventsSection(stats) {
     } else if (!list.length) {
         inner = '<p class="sc-lede">No public events have arrived this week. The bus is running; public event types appear here as they arrive.</p>';
     } else {
+        // The categories, the one with the newest arrival first: one chip each.
+        const cats = [];
+        for (const r of list) { const ns = nsOf(r.type); if (!cats.includes(ns)) cats.push(ns); }
+        const chips = cats.map((ns, i) => `<input type="radio" name="pick-events" id="pk-events-${i}" value="${i}"${i === 0 ? ' checked' : ''}><label for="pk-events-${i}">${esc(serviceName(ns))}</label>`).join('');
+        const cards = list.map((r) => eventCard(r, String(cats.indexOf(nsOf(r.type))))).join('');
         inner = `<p class="sc-lede">The public event types anyone may read, newest arrival first: when each last arrived, who published it and what it means. Subscribe to a pattern such as <code>live.stream.*</code> to get them as signed webhooks.</p>
-${categoryLinks(list)}
-<ul class="hm-events">${list.map(eventCard).join('')}</ul>
+<div class="pick pick-events" id="pick-events"><div class="pick-row" role="radiogroup" aria-label="Public events this week">${chips}</div>
+<ul class="hm-events">${cards}</ul></div>
 ${publicTypes.length > list.length ? `<p class="hm-note">And ${esc(fmt(publicTypes.length - list.length))} more public event types this week.</p>` : ''}`;
     }
     return `<section class="sc-sec" id="events" aria-labelledby="h-events"><h2 id="h-events">Public events this week</h2>${inner}</section>`;
+}
+
+/** The rule that shows the picked category of the public event list: one per category. */
+function eventsRule(i) {
+    return `.pick-events:has(#pk-events-${i}:checked) .hm-events>li[data-cat="${i}"]{display:block}`;
+}
+
+/** The categories of the public event list, the one with the newest arrival first. */
+function eventCategories(stats) {
+    const publicTypes = (stats && stats.public) || [];
+    const list = publicTypes.slice().sort((a, b) => Number(b.last) - Number(a.last)).slice(0, 24);
+    const cats = [];
+    for (const r of list) { const ns = nsOf(r.type); if (!cats.includes(ns)) cats.push(ns); }
+    return cats;
+}
+
+/** The page's pick-block rules: one per block, so the CSS shows the block the chip picked. */
+function pickRules(stats) {
+    const rules = [];
+    for (let i = 0; i < FEATURES.length; i++) rules.push(pickRule('features', String(i)));
+    for (let i = 0; i < eventCategories(stats).length; i++) rules.push(eventsRule(i));
+    return rules.join('');
 }
 
 /** The ItemList of public events, each with a real startDate only where the store recorded an arrival. */
@@ -194,10 +250,15 @@ function activity(stats) {
     const statRow = tiles.length ? `<section class="sc-sec hm-stats-sec" aria-label="The bus right now"><ul class="hm-stats">${tiles.map(([n, label]) => `<li><b>${esc(fmt(n))}</b><span>${esc(label)}</span></li>`).join('')}</ul>${stats.dead === 0 && stats.delivered ? '<p class="hm-note">No deliveries are waiting in the dead-letter queue.</p>' : ''}</section>` : '';
     const top = stats.services.slice(0, 16);
     const max = top.length ? top[0].n : 1;
-    const who = top.length ? `<section class="sc-sec" aria-labelledby="h-who"><h2 id="h-who">Who published this week</h2>
-<p class="sc-lede">Events by the service that published them over the last seven days. Every one was stored before any subscriber saw it.</p>
+    // Who published is a fold on a phone (the owner's short-pages rule): a chart of sixteen bars is a screen of its
+    // own, and a reader on a phone is here for the events.
+    const who = top.length ? foldBlock({
+        id: 'who',
+        head: '<h2 id="h-who">Who published this week</h2>',
+        html: `<p class="sc-lede">Events by the service that published them over the last seven days. Every one was stored before any subscriber saw it.</p>
 <ul class="hm-bars">${top.map((r) => `<li><span class="hm-bar-name">${serviceLink(r.ns)}</span><span class="hm-bar" aria-hidden="true"><i style="width:${Math.max(2, Math.round((r.n / max) * 100))}%"></i></span><span class="hm-bar-n">${esc(fmt(r.n))}</span></li>`).join('')}</ul>
-${stats.services.length > top.length ? `<p class="hm-note">And ${esc(stats.services.length - top.length)} more.</p>` : ''}</section>` : '';
+${stats.services.length > top.length ? `<p class="hm-note">And ${esc(stats.services.length - top.length)} more.</p>` : ''}`,
+    }) : '';
     return { statRow, who, events };
 }
 
@@ -211,6 +272,22 @@ const FAQ = [
     ['Can a browser listen?', 'Yes. Server-sent events at /realtime/stream, authorized per topic with a one-use ticket from OpenVibe.Network, and resumable after a reconnect.'],
     ['Are sandbox and production separate?', 'Yes. A developer app\'s sandbox events never reach production apps or subscriptions, and are pruned after seven days.'],
 ];
+
+/** What the bus gives a service: the six things a reader can read the cards of. */
+const FEATURES = [
+    { icon: 'ov:upload', title: 'Publish once', text: 'One event or up to a hundred at a time, stored atomically and numbered in order. Sending the same event id twice never stores it twice.' },
+    { icon: 'ov:bell', title: 'Signed webhooks', text: 'Subscribe with a topic pattern such as media.vod.*. Every delivery is HMAC-signed with its timestamp and retried with backoff.' },
+    { icon: 'ov:history', title: 'Dead letters and replay', text: 'Deliveries that keep failing wait in a dead-letter queue. Replay them, or catch a new subscription up from a point in its history.' },
+    { icon: 'ov:download', title: 'Pull with a cursor', text: 'Read events in order with an opaque cursor when you would rather pull than receive webhooks.' },
+    { icon: 'ov:live', title: 'Realtime for browsers', text: 'Server-sent events, authorized per topic with a one-use ticket from OpenVibe.Network, and resumable after a reconnect.' },
+    { icon: 'ov:code', title: 'Developer apps', text: 'An app publishes under its own project\'s names and keeps sandbox and production apart: sandbox events never reach production.' },
+];
+
+/** One feature card, in the shared showcase's own card markup: a ring icon in a 40 px tile beside the words. */
+function featureCard(f) {
+    const name = String(f.icon || '').replace(/^ov:/, '');
+    return `<div class="sc-card"><span class="sc-ic sc-ic-ov"><span class="ov-icon sc-ovi" data-icon="${esc(name)}" style="--ovi-size:40px" aria-hidden="true">${ovIcons.svg(name)}</span></span><span><b>${esc(f.title)}</b><small>${esc(f.text)}</small></span></div>`;
+}
 
 function sections({ apiUrl, stats = null }) {
     const live = activity(stats);
@@ -233,6 +310,15 @@ function sections({ apiUrl, stats = null }) {
         '# then the same with &after=<next_cursor> from the previous page',
     ].join('\n');
     const publishers = stats && stats.services.filter((r) => r.ns !== 'app').length;
+    // What you get: on a phone one card at a time, picked with a row of chips (the owner's short-pages rule). The
+    // cards keep the shared showcase's own markup, so a wider screen shows the same grid of six.
+    const features = `<section class="sc-sec" aria-labelledby="h-features"><h2 id="h-features">What you get</h2>
+${pickBlock({
+        key: 'features',
+        label: 'What you get',
+        bodyClass: 'sc-grid',
+        panes: FEATURES.map((f, i) => ({ id: String(i), label: f.title, html: featureCard(f) })),
+    })}</section>`;
     return showcase.hero({
         eyebrow: 'OpenVibe.Events · part of OpenVibe Services · alpha',
         title: 'Events your services', accent: 'can count on.',
@@ -240,17 +326,7 @@ function sections({ apiUrl, stats = null }) {
             + `retried with backoff, and replayable after a failure.${publishers ? ` ${publishers} OpenVibe services published to it this week.` : ''}`,
         actions: [{ label: 'Read the guide', href: `${SOURCE}#readme`, primary: true }, { label: 'See an example', href: '#examples' }],
         note: `Alpha. The API is at ${apiUrl}; developer apps sign in through OpenVibe.Network.`,
-    }) + '<section class="sc-sec sc-part-of"><p class="sc-note">Part of <a href="https://openvibe.services/">OpenVibe Services</a>: the building blocks every OpenVibe product runs on, with one console, one account and one SDK.</p></section>' + live.statRow + live.events + live.who + showcase.features({
-        title: 'What you get',
-        items: [
-            { icon: 'ov:upload', title: 'Publish once', text: 'One event or up to a hundred at a time, stored atomically and numbered in order. Sending the same event id twice never stores it twice.' },
-            { icon: 'ov:bell', title: 'Signed webhooks', text: 'Subscribe with a topic pattern such as media.vod.*. Every delivery is HMAC-signed with its timestamp and retried with backoff.' },
-            { icon: 'ov:history', title: 'Dead letters and replay', text: 'Deliveries that keep failing wait in a dead-letter queue. Replay them, or catch a new subscription up from a point in its history.' },
-            { icon: 'ov:download', title: 'Pull with a cursor', text: 'Read events in order with an opaque cursor when you would rather pull than receive webhooks.' },
-            { icon: 'ov:live', title: 'Realtime for browsers', text: 'Server-sent events, authorized per topic with a one-use ticket from OpenVibe.Network, and resumable after a reconnect.' },
-            { icon: 'ov:code', title: 'Developer apps', text: 'An app publishes under its own project\'s names and keeps sandbox and production apart: sandbox events never reach production.' },
-        ],
-    }) + '<details class="hm-fold"><summary>Publish, subscribe, pull<span>curl examples</span></summary>' + showcase.code({
+    }) + '<section class="sc-sec sc-part-of"><p class="sc-note">Part of <a href="https://openvibe.services/">OpenVibe Services</a>: the building blocks every OpenVibe product runs on, with one console, one account and one SDK.</p></section>' + live.statRow + live.events + live.who + features + '<details class="hm-fold"><summary>Publish, subscribe, pull<span>curl examples</span></summary>' + showcase.code({
         id: 'examples',
         title: 'Publish, subscribe, pull',
         lede: 'With an app token from OpenVibe.Network (client credentials, audience openvibe.events).',
@@ -259,23 +335,29 @@ function sections({ apiUrl, stats = null }) {
             { label: 'Subscribe', lang: 'bash', code: subscribe },
             { label: 'Pull', lang: 'bash', code: pull },
         ],
-    }) + '</details>' + showcase.steps({
-        title: 'Receive a webhook safely',
-        items: [
-            { title: 'Keep the secret', text: 'The subscription\'s secret is shown once, when you create it or rotate it.' },
-            { title: 'Check the signature', text: 'Verify X-OpenVibe-Signature-V2 over the timestamp and the raw body, and refuse anything older than five minutes.' },
-            { title: 'Answer quickly', text: 'Reply 2xx once the event is safely stored; anything else is retried, then dead-lettered.' },
-            { title: 'Expect repeats', text: 'A retry can bring the same event again: keep its event id and handle it once.' },
-        ],
-    }) + `<section class="sc-sec" id="faq" aria-labelledby="h-faq"><h2 id="h-faq">Questions</h2>
-<div class="hm-faq">${FAQ.map(([q, a], i) => `<details class="hm-qa"${i === 0 ? ' open' : ''}><summary><h3>${esc(q)}</h3></summary><p>${esc(a)}</p></details>`).join('')}</div></section>`;
+    }) + '</details>' + foldBlock({
+        id: 'howto',
+        head: '<h2 id="h-howto">Receive a webhook safely</h2>',
+        html: showcase.steps({
+            items: [
+                { title: 'Keep the secret', text: 'The subscription\'s secret is shown once, when you create it or rotate it.' },
+                { title: 'Check the signature', text: 'Verify X-OpenVibe-Signature-V2 over the timestamp and the raw body, and refuse anything older than five minutes.' },
+                { title: 'Answer quickly', text: 'Reply 2xx once the event is safely stored; anything else is retried, then dead-lettered.' },
+                { title: 'Expect repeats', text: 'A retry can bring the same event again: keep its event id and handle it once.' },
+            ],
+        }),
+    }) + foldBlock({
+        id: 'faq',
+        head: '<h2 id="h-faq">Questions</h2>',
+        html: `<div class="hm-faq">${FAQ.map(([q, a], i) => `<details class="hm-qa"${i === 0 ? ' open' : ''}><summary><h3>${esc(q)}</h3></summary><p>${esc(a)}</p></details>`).join('')}</div>`,
+    });
 }
 
 // The page's own few rules (it has no stylesheet beyond the showcase's): no browser margin around the body, so the Frame's
 // footer meets the edges; each curl sample on its own full-width row (three columns cut every command off); the four
 // webhook steps two by two instead of three and one alone, each title level with its number.
 // The data sections' rules follow: the stat tiles, the per-service bars, the public event cards and the questions, in theme tokens (accent-light is drawn for dark themes, so text in it is mixed toward the text colour).
-const HOME_STYLE = '<style>body{margin:0}/* The hero\'s aura is drawn 54px past its right edge (shared showcase, sc-hero-vis at right:-54px); without a clip the phone scrolls sideways by ~43px (2026-10-29). */.page{overflow-x:clip}.page .sc-code{grid-template-columns:minmax(0,1fr)}.page .sc-steps{grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))}.page .sc-steps li{align-items:start;align-content:start}.page .sc-steps b{line-height:30px}'
+const HOME_STYLE = (rules = '') => '<style>body{margin:0}/* The hero\'s aura is drawn 54px past its right edge (shared showcase, sc-hero-vis at right:-54px); without a clip the phone scrolls sideways by ~43px (2026-10-29). */.page{overflow-x:clip}.page .sc-code{grid-template-columns:minmax(0,1fr)}.page .sc-steps{grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))}.page .sc-steps li{align-items:start;align-content:start}.page .sc-steps b{line-height:30px}'
     + '.page{--hm-accent-text:color-mix(in srgb,var(--accent-light,#60a5fa) 45%,var(--text-primary,#e6edf7))}.sc-eyebrow{color:var(--hm-accent-text)}'
     + '.hm-stats-sec{margin-top:40px}.hm-stats{list-style:none;margin:0;padding:0;display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(min(130px,100%),1fr))}'
     + '.hm-stats li{display:grid;gap:2px;padding:14px 16px;border-radius:14px;border:1px solid var(--border,rgba(255,255,255,.08));background:var(--bg-secondary,#101828)}'
@@ -293,7 +375,32 @@ const HOME_STYLE = '<style>body{margin:0}/* The hero\'s aura is drawn 54px past 
     + '.hm-event-title{margin:4px 0 6px;font-size:17px}.hm-event-meta{margin:0 0 6px;font-size:13.5px;line-height:1.5;color:var(--text-secondary,#96a7c2)}'
     + '.hm-event-desc{margin:0 0 6px;font-size:14.5px;line-height:1.6;color:var(--text-secondary,#96a7c2)}.hm-event-type{margin:0}.hm-event-type code{font-size:12.5px;overflow-wrap:anywhere;color:var(--text-secondary,#96a7c2)}'
     + '.hm-fold{box-sizing:border-box;max-width:1080px;margin:20px max(16px,calc((100% - 1080px) / 2)) 0;font-family:var(--ov-font,\'Inter\',-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,sans-serif);border:1px solid var(--border,rgba(255,255,255,.1));border-radius:14px;background:var(--bg-card,#131c2e)}.hm-fold>summary{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:48px;padding:0 16px;cursor:pointer;font-weight:700;list-style:none}.hm-fold>summary::-webkit-details-marker{display:none}.hm-fold>summary span{color:var(--text-muted,#7386a3);font-weight:600;font-size:.86rem}.hm-fold .sc-sec{margin:0;padding:0 16px 14px}.hm-qa>summary{list-style:none;cursor:pointer}.hm-qa>summary::-webkit-details-marker{display:none}.hm-qa>summary h3{margin:0}'
-    + '@media (max-width:599px){.hm-events>li:nth-child(n+7),.hm-bars>li:nth-child(n+11){display:none}}'
+    + '@media (max-width:599px){.hm-bars>li:nth-child(n+11){display:none}}'
+    // Pick (the owner's short-pages rule, 2026-10-30): on a phone, one of several blocks of the same kind at a time.
+    // Radio inputs and :has(), no script: the chips and the one-block rule live under 640 px and only where :has() is
+    // understood, so a wider screen, or an older browser, shows every block and no chips.
+    + '.pick-row{display:none}'
+    + '@supports selector(:has(*)){@media (max-width:640px){'
+    + '.pick-row{display:flex;gap:8px;overflow-x:auto;margin:10px -16px 0;padding:2px 16px 4px;scrollbar-width:none;overscroll-behavior-x:contain}'
+    + '.pick-row::-webkit-scrollbar{display:none}'
+    + '.pick-row input{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none}'
+    + '.pick-row label{display:inline-flex;align-items:center;flex:none;min-height:44px;padding:0 15px;border-radius:999px;border:1px solid var(--border,rgba(255,255,255,.1));color:var(--text-secondary,#a8b3c4);font-size:13.5px;font-weight:650;white-space:nowrap;cursor:pointer}'
+    + '.pick-row input:checked+label{color:var(--text-primary,#e6edf7);border-color:var(--accent,#3b82f6);background:color-mix(in srgb,var(--accent,#3b82f6) 12%,transparent)}'
+    + '.pick-row input:focus-visible+label{outline:2px solid var(--accent,#3b82f6);outline-offset:2px}'
+    + '.pick-pane{display:none}'
+    + '.pick-pane>.pick-h{display:none}'
+    // The public event list: the cards of the picked category, the others out of the way.
+    + '.pick-events .hm-events>li{display:none}'
+    // The rule for each block of the page's pick blocks: the picked one shows, the others stay out of the way.
+    + rules
+    + '}}'
+    // The fold (the owner's short-pages rule): closed on a phone, and where there is room it looks like the section
+    // it replaces: a heading and its content, with no card around it.
+    + '.hm-fold-block{margin-top:56px}.hm-fold-block>summary h2{margin:0;font-size:clamp(19px,2.2vw,26px);letter-spacing:-.01em}'
+    + '@media (min-width:641px){.hm-fold-block{border:0;background:none;border-radius:0;padding:0 24px}'
+    + '.hm-fold-block>summary{display:block;min-height:0;padding:0}.hm-fold-block>summary h2{margin:0 0 6px;font-size:clamp(22px,2.6vw,30px);letter-spacing:-.02em}'
+    + '.hm-fold-block>summary span{display:none}.hm-fold-block .sc-sec{padding:0}.hm-fold-block .hm-faq,.hm-fold-block .hm-bars{padding:0}}'
+    + '@media (max-width:640px){.hm-fold-block{margin-top:32px}}'
     + '.hm-faq{display:grid;gap:12px 28px;grid-template-columns:repeat(auto-fill,minmax(min(380px,100%),1fr))}.hm-qa{padding:4px 0 14px;border-bottom:1px solid var(--border,rgba(255,255,255,.08))}'
     + '.hm-qa h3{margin:0 0 6px;font-size:16px}.hm-qa p{margin:0;font-size:14.5px;line-height:1.6;color:var(--text-secondary,#96a7c2)}'
     + '@media (max-width:520px){.page .sc-code pre{white-space:pre-wrap;overflow-wrap:anywhere}.hm-bars li{grid-template-columns:minmax(0,10.5em) minmax(0,1fr) auto;font-size:13.5px;gap:8px}.hm-bar-n{min-width:3.5em}'
@@ -362,7 +469,7 @@ function renderHome({ siteUrl, apiUrl, stats = null }) {
         head: [
             appIcon.headTags({ site: 'events' }),
             `<link rel="stylesheet" href="${ovServe.url(showcase.STYLESHEET)}">`,
-            HOME_STYLE,
+            HOME_STYLE(pickRules(stats)),
         ].join('\n'),
         body: `<div id="navbar-mount"></div>
 <main id="main" class="page">

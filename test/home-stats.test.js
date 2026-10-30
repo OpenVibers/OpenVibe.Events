@@ -10,6 +10,8 @@ const t = suite('home-stats');
 let h;
 const html = async () => (await request(h.base, 'GET', '/', { headers: { Accept: 'text/html' } })).text;
 const section = (page, id) => (new RegExp(`<section class="sc-sec"[^>]*aria-labelledby="${id}"[\\s\\S]*?</section>`).exec(page) || [''])[0];
+// The parts a reader rarely needs are folds now (the owner's short-pages rule, 2026-10-30): the same block, folded.
+const fold = (page, id) => (new RegExp(`<details class="hm-fold hm-fold-block" id="${id}"[\\s\\S]*?</details>`).exec(page) || [''])[0];
 
 t('boot', async () => { h = await boot(); });
 
@@ -44,7 +46,7 @@ t('published events show as counts by service, public types and the latest publi
     const { renderHome } = require('../server/home');
     const page = renderHome({ siteUrl: 'https://openvibe.events', apiUrl: 'https://openvibe.events', stats });
     const events = section(page, 'h-events');
-    assert.match(section(page, 'h-who'), /<a href="https:\/\/openvibe\.live">OpenVibe\.Live<\/a>/);
+    assert.match(fold(page, 'who'), /<a href="https:\/\/openvibe\.live">OpenVibe\.Live<\/a>/);
     assert.match(events, /A channel went live on OpenVibe\.Live/);
     assert.match(events, /<time datetime="\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z">/);
     assert.match(events, /Online, from <a href="https:\/\/openvibe\.live">OpenVibe\.Live<\/a> · 2 this week/);
@@ -72,7 +74,9 @@ t('JSON-LD: WebSite, the app, and a FAQPage with exactly the questions shown', a
     assert.strictEqual(scripts.length, 1, 'the page carries exactly one JSON-LD script');
     const ld = scripts.flatMap((x) => (Array.isArray(x['@graph']) ? x['@graph'] : [x]));
     for (const type of ['WebSite', 'WebApplication', 'FAQPage']) assert.ok(ld.some((x) => x['@type'] === type), type);
-    const faq = (/<section class="sc-sec" id="faq"[\s\S]*?<\/section>/.exec(page) || [''])[0];
+    // The questions are in the fold now; they are the only bare <h3> left on the page.
+    const faqAt = page.indexOf('<details class="hm-fold hm-fold-block" id="faq"');
+    const faq = faqAt >= 0 ? page.slice(faqAt, page.indexOf('</main>')) : '';
     const shown = [...faq.matchAll(/<h3>([^<]+)<\/h3>/g)].map((m) => m[1].replace(/&#39;/g, "'"));
     assert.ok(shown.length >= 6);
     assert.deepStrictEqual(ld.find((x) => x['@type'] === 'FAQPage').mainEntity.map((q) => q.name), shown);
