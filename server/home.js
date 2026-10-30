@@ -305,7 +305,14 @@ const FOOTER = { service: 'events', variant: 'full', mount: '#ov-footer', brandN
 
 /** /updates: what shipped on this site, the network's shared update log (openvibe-shared/frame updatesBody). */
 function renderUpdates({ siteUrl }) {
-    const links = [{ label: 'Guide', href: `${SOURCE}#readme` }];
+    const links = [{ label: 'Guide', href: 
+/* Touch targets on phones (fleet audit, 2026-10-29): touch pointers only. */
+@media (pointer: coarse) {
+  .hm-cats a { min-height: 44px; display: inline-flex; align-items: center; }
+  .hm-bar-name a { min-height: 44px; display: inline-flex; align-items: center; }
+  .hm-qa > summary { min-height: 44px; }
+}
+`${SOURCE}#readme` }];
     return shell.page({
         name: SITE_NAME, service: 'events', lang: 'en',
         title: `What shipped on ${SITE_NAME}`,
