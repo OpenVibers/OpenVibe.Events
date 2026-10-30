@@ -24,7 +24,7 @@ const openapi = require('./openapi');
 const ovServe = require('openvibe-shared/serve');
 const pkg = require('../package.json');
 
-function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log = console, valkey = null, policies = null, planner = null, carriers = null, indexnow = null }) {
+function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log = console, valkey = null, policies = null, planner = null, carriers = null, indexnow = null, accountData = null, accountSend = null }) {
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', 'loopback');
@@ -47,6 +47,10 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     // content-addressed /shared/* URLs, from this repo's pinned openvibe-shared. Mounted before the
     // routers and outside the per-actor limiter: it is static and unauthenticated.
     app.use('/shared', ovServe.handler());
+
+    // The account export/deletion consumer (ADR-033, ./account-data.js): the two account topics, signed and loopback
+    // only. No body parser before it: the v2 signature covers the raw body.
+    if (accountData) app.post('/internal/events', accountData.consumer({ secrets: [config.accountData.secret].filter((s) => s.length >= 32), send: accountSend }));
 
     // Realtime first: it answers CORS preflights and must not go through the JSON body parser.
     app.options('/realtime/stream', realtime.cors);

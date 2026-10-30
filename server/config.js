@@ -231,6 +231,20 @@ function load(env = process.env) {
             timeoutMs: Math.max(1000, int(env.OV_BILLING_TIMEOUT_MS, 10000)),
         },
 
+        // The service's own OAuth client at OpenVibe.Network: the account-data consumer signs its part and its
+        // confirmation with it, and its Events subscription is created with it.
+        oauth: {
+            clientId: env.OV_OAUTH_CLIENT_ID || 'events',
+            clientSecret: env.OV_OAUTH_CLIENT_SECRET || '',
+        },
+
+        // The account-data consumer (ADR-033): Events' own subscription to the two account topics, delivered back to
+        // POST /internal/events. Unset: the route is off and the account events do not reach Events.
+        accountData: {
+            url: (env.EVENTS_EVENTS_URL || baseUrl).replace(/\/+$/, ''),
+            secret: String(env.EVENTS_EVENTS_SECRET || '').trim(),
+        },
+
         // Realtime (SSE) gateway
         realtime: {
             maxConnections: int(env.REALTIME_MAX_CONNECTIONS, 2000),
