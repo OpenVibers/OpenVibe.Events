@@ -106,9 +106,9 @@ const humanDate = (ms) => {
  */
 function pickBlock({ key, label, panes, bodyClass = '' }) {
     if (!panes.length) return '';
-    const chips = panes.map((p, i) => `<input type="radio" name="pick-${esc(key)}" id="pk-${esc(key)}-${esc(p.id)}" value="${esc(p.id)}"${i === 0 ? ' checked' : ''}><label for="pk-${esc(key)}-${esc(p.id)}">${esc(p.label)}</label>`).join('');
-    const body = panes.map((p) => `<div class="pick-pane" id="pp-${esc(key)}-${esc(p.id)}">${p.head ? `<div class="pick-h"><h3>${esc(p.head)}</h3></div>` : ''}${p.html}</div>`).join('');
-    return `<div class="pick" id="pick-${esc(key)}"><div class="pick-row" role="radiogroup" aria-label="${esc(label)}">${chips}</div><div class="pick-body${bodyClass ? ` ${bodyClass}` : ''}">${body}</div></div>`;
+    // Every block is on the page on every screen (the owner's rule, 2026-10-31); the chip row that picked one at a
+    // time on a phone is gone. The pane keeps its id, so a link into it still lands.
+    return panes.map((p) => `<div class="pick-pane" id="pp-${esc(key)}-${esc(p.id)}">${p.head ? `<div class="pick-h"><h3>${esc(p.head)}</h3></div>` : ''}${p.html}</div>`).join('');
 }
 
 /** The rule that shows the picked block of a pick block: one per block, so the CSS is written for the page. */
@@ -124,7 +124,7 @@ function pickRule(key, id) {
  *   foldBlock({ id, head, html })   the markup, with the small script that closes it on a phone
  */
 function foldBlock({ id, head, html }) {
-    return `<details class="hm-fold hm-fold-block" id="${esc(id)}" open><summary>${head}<span>tap to open</span></summary>${html}</details>${foldScript(id)}`;
+    return `<details class="hm-fold hm-fold-block" id="${esc(id)}" open><summary>${head}</summary>${html}</details>`;
 }
 
 /** The script a fold carries: closed on a phone unless the reader opened it before, and it remembers that. */
@@ -170,11 +170,9 @@ function eventsSection(stats) {
         // The categories, the one with the newest arrival first: one chip each.
         const cats = [];
         for (const r of list) { const ns = nsOf(r.type); if (!cats.includes(ns)) cats.push(ns); }
-        const chips = cats.map((ns, i) => `<input type="radio" name="pick-events" id="pk-events-${i}" value="${i}"${i === 0 ? ' checked' : ''}><label for="pk-events-${i}">${esc(serviceName(ns))}</label>`).join('');
         const cards = list.map((r) => eventCard(r, String(cats.indexOf(nsOf(r.type))))).join('');
         inner = `<p class="sc-lede">The public event types anyone may read, newest arrival first: when each last arrived, who published it and what it means. Subscribe to a pattern such as <code>live.stream.*</code> to get them as signed webhooks.</p>
-<div class="pick pick-events" id="pick-events"><div class="pick-row" role="radiogroup" aria-label="Public events this week">${chips}</div>
-<ul class="hm-events">${cards}</ul></div>
+<ul class="hm-events">${cards}</ul>
 ${publicTypes.length > list.length ? `<p class="hm-note">And ${esc(fmt(publicTypes.length - list.length))} more public event types this week.</p>` : ''}`;
     }
     return `<section class="sc-sec" id="events" aria-labelledby="h-events"><h2 id="h-events">Public events this week</h2>${inner}</section>`;
@@ -194,12 +192,9 @@ function eventCategories(stats) {
     return cats;
 }
 
-/** The page's pick-block rules: one per block, so the CSS shows the block the chip picked. */
-function pickRules(stats) {
-    const rules = [];
-    for (let i = 0; i < FEATURES.length; i++) rules.push(pickRule('features', String(i)));
-    for (let i = 0; i < eventCategories(stats).length; i++) rules.push(eventsRule(i));
-    return rules.join('');
+/** The page's pick-block rules: none, now that every block shows (the owner's rule, 2026-10-31). */
+function pickRules() {
+    return '';
 }
 
 /** The ItemList of public events, each with a real startDate only where the store recorded an arrival. */
@@ -375,25 +370,6 @@ const HOME_STYLE = (rules = '') => '<style>body{margin:0}/* The hero\'s aura is 
     + '.hm-event-title{margin:4px 0 6px;font-size:17px}.hm-event-meta{margin:0 0 6px;font-size:13.5px;line-height:1.5;color:var(--text-secondary,#96a7c2)}'
     + '.hm-event-desc{margin:0 0 6px;font-size:14.5px;line-height:1.6;color:var(--text-secondary,#96a7c2)}.hm-event-type{margin:0}.hm-event-type code{font-size:12.5px;overflow-wrap:anywhere;color:var(--text-secondary,#96a7c2)}'
     + '.hm-fold{box-sizing:border-box;max-width:1080px;margin:20px max(16px,calc((100% - 1080px) / 2)) 0;font-family:var(--ov-font,\'Inter\',-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,sans-serif);border:1px solid var(--border,rgba(255,255,255,.1));border-radius:14px;background:var(--bg-card,#131c2e)}.hm-fold>summary{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:48px;padding:0 16px;cursor:pointer;font-weight:700;list-style:none}.hm-fold>summary::-webkit-details-marker{display:none}.hm-fold>summary span{color:var(--text-muted,#7386a3);font-weight:600;font-size:.86rem}.hm-fold .sc-sec{margin:0;padding:0 16px 14px}.hm-qa>summary{list-style:none;cursor:pointer}.hm-qa>summary::-webkit-details-marker{display:none}.hm-qa>summary h3{margin:0}'
-    + '@media (max-width:599px){.hm-bars>li:nth-child(n+11){display:none}}'
-    // Pick (the owner's short-pages rule, 2026-10-30): on a phone, one of several blocks of the same kind at a time.
-    // Radio inputs and :has(), no script: the chips and the one-block rule live under 640 px and only where :has() is
-    // understood, so a wider screen, or an older browser, shows every block and no chips.
-    + '.pick-row{display:none}'
-    + '@supports selector(:has(*)){@media (max-width:640px){'
-    + '.pick-row{display:flex;gap:8px;overflow-x:auto;margin:10px -16px 0;padding:2px 16px 4px;scrollbar-width:none;overscroll-behavior-x:contain}'
-    + '.pick-row::-webkit-scrollbar{display:none}'
-    + '.pick-row input{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none}'
-    + '.pick-row label{display:inline-flex;align-items:center;flex:none;min-height:44px;padding:0 15px;border-radius:999px;border:1px solid var(--border,rgba(255,255,255,.1));color:var(--text-secondary,#a8b3c4);font-size:13.5px;font-weight:650;white-space:nowrap;cursor:pointer}'
-    + '.pick-row input:checked+label{color:var(--text-primary,#e6edf7);border-color:var(--accent,#3b82f6);background:color-mix(in srgb,var(--accent,#3b82f6) 12%,transparent)}'
-    + '.pick-row input:focus-visible+label{outline:2px solid var(--accent,#3b82f6);outline-offset:2px}'
-    + '.pick-pane{display:none}'
-    + '.pick-pane>.pick-h{display:none}'
-    // The public event list: the cards of the picked category, the others out of the way.
-    + '.pick-events .hm-events>li{display:none}'
-    // The rule for each block of the page's pick blocks: the picked one shows, the others stay out of the way.
-    + rules
-    + '}}'
     // The fold (the owner's short-pages rule): closed on a phone, and where there is room it looks like the section
     // it replaces: a heading and its content, with no card around it.
     + '.hm-fold-block{margin-top:56px}.hm-fold-block>summary h2{margin:0;font-size:clamp(19px,2.2vw,26px);letter-spacing:-.01em}'

@@ -175,9 +175,9 @@ t('the server-rendered event list: title, real <time datetime>, place, descripti
     assert.match(card, /Published by OpenVibe\.Live as live\.stream\.started/, 'the short description');
     assert.match(card, /3 this week/, 'the count');
     assert.match(card, /Category: <a href="https:\/\/openvibe\.live">live<\/a>/, 'a category link');
-    // The category nav became the row of chips that picks one category at a time on a phone (the short-pages rule);
-    // the links it held are still in the page, on the cards themselves.
-    assert.match(page, /<label for="pk-events-0">OpenVibe\.Live<\/label>/, 'the category chips');
+    // Every category link stays on its card; no chip row picks one category at a time (the owner's rule, 2026-10-31).
+    assert.ok(!page.includes('pk-events-0'), 'no category chip');
+    assert.match(page, /Category: <a href="https:\/\/openvibe\.live">live<\/a>/, 'the category link stays on the card');
     assert.match(page, /Online, from <a href="https:\/\/openvibe\.live">OpenVibe\.Live<\/a>/, 'the publisher link is still in the page');
     assert.match(page, /<code>live\.stream\.started<\/code>/, 'the exact event type');
 
