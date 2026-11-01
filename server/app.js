@@ -185,7 +185,8 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     // A browser asking for a page that is not here gets a page; an API client the problem document.
     app.use((req, res) => {
         if (req.method === 'GET' && !req.path.startsWith('/api/') && req.accepts(['application/json', 'text/html']) === 'text/html') {
-            return res.status(404).type('html').set('Content-Security-Policy', HOME_CSP).set('Cache-Control', 'no-store').send(renderNotFound());
+            return res.status(404).type('html').set('Content-Security-Policy', HOME_CSP).set('Cache-Control', 'no-store')
+                .set('X-Robots-Tag', 'noindex').send(renderNotFound({ siteUrl: config.siteUrl }));
         }
         return http.sendProblem(res, 404, 'events.not_found', { detail: `no route ${req.method} ${req.path}`, ctx: req.ov });
     });
