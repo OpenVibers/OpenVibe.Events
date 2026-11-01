@@ -86,6 +86,16 @@ const TYPE_WORDS = {
 const serviceName = (ns) => (SERVICES[ns] || [ns])[0];
 const serviceLink = (ns) => { const [name, url] = SERVICES[ns] || [ns, null]; return url ? `<a href="${esc(url)}">${esc(name)}</a>` : esc(name); };
 const serviceUrl = (ns) => (SERVICES[ns] || [])[1] || null;
+// The hero's picture is this site's own (2026-11-01): it drew the generic aura, the same on six homes.
+// The bus itself: the services that published this week circle the core, the busiest on the inner ring. With fewer than
+// four (a quiet week, or the numbers are late) the hero keeps the aura.
+const RING_ICONS = new Set((({ names }) => (typeof names === 'function' ? names() : names || []))(require('openvibe-shared/ov-icons')));
+function busOrbit(stats) {
+    const svc = ((stats && stats.services) || []).filter((r) => r.ns !== 'app' && RING_ICONS.has(r.ns) && serviceUrl(r.ns));
+    if (svc.length < 4) return null;
+    const node = (r) => ({ icon: `ov:${r.ns}`, label: serviceName(r.ns).replace(/^OpenVibe\./, ''), href: serviceUrl(r.ns) });
+    return { label: `${svc.length} services published events this week`, center: { title: 'Events', sub: 'publish once' }, inner: svc.slice(0, 6).map(node), outer: svc.slice(6, 16).map(node) };
+}
 const nsOf = (type) => String(type).split('.')[0];
 const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 const eventTitle = (type) => TYPE_WORDS[type] || `An event of type ${type}`;
@@ -325,6 +335,7 @@ ${pickBlock({
         lede: 'The event backbone of the OpenVibe network. Publish an event once and every subscriber gets it: stored durably, signed, '
             + `retried with backoff, and replayable after a failure.${publishers ? ` ${publishers} OpenVibe services published to it this week.` : ''}`,
         actions: [{ label: 'Read the guide', href: `${SOURCE}#readme`, primary: true }, { label: 'See an example', href: '#examples' }],
+        orbit: busOrbit(stats),
         note: `Alpha. The API is at ${apiUrl}; developer apps sign in through OpenVibe.Network.`,
     }) + '<section class="sc-sec sc-part-of"><p class="sc-note">Part of <a href="https://openvibe.services/">OpenVibe Services</a>: the building blocks every OpenVibe product runs on, with one console, one account and one SDK.</p></section>' + live.statRow + live.events + live.who + features + '<details class="hm-fold"><summary>Publish, subscribe, pull<span>curl examples</span></summary>' + showcase.code({
         id: 'examples',
