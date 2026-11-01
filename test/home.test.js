@@ -112,11 +112,16 @@ t('the home CSP lets Cloudflare Web Analytics load and report (it injects its be
     assert.match(HOME_CSP, /connect-src [^;]*https:\/\/cloudflareinsights\.com/);
 });
 
-t('a browser gets a page for a path nothing serves (lang, title, icon); an API client the problem document', async () => {
+t('a browser that asks for a missing page gets the site 404 page; an API client the problem document', async () => {
     const page = await raw(h.base, '/no-such-page', { Accept: 'text/html,*/*;q=0.8' });
     assert.strictEqual(page.status, 404);
     assert.match(page.headers['content-type'], /^text\/html/);
-    assert.ok(page.body.includes('<html lang="en">') && page.body.includes('<title>Not found') && page.body.includes('rel="icon"'), page.body.slice(0, 300));
+    assert.ok(page.body.includes('<h1>Page not found</h1>'), page.body.slice(0, 300));
+    assert.ok(page.body.includes('There is no page at this address on openvibe.events. The link may be old or mistyped.'));
+    assert.ok(page.body.includes('id="navbar-mount"'), 'the page is in the site Frame');
+    assert.ok(page.body.includes('<meta name="robots" content="noindex, follow">'));
+    assert.strictEqual(page.headers['x-robots-tag'], 'noindex');
+    assert.ok(page.body.includes('class="sc-btn sc-primary" href="/"'), 'home is the first way back');
     const api = await raw(h.base, '/no-such-page', { Accept: 'application/json' });
     assert.strictEqual(api.status, 404);
     assert.match(api.headers['content-type'], /problem\+json|json/);
