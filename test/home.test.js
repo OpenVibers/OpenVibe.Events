@@ -266,7 +266,10 @@ t('deploy/nginx/openvibe.events.conf is the API and product origin, with no redi
         assert.ok(conf.includes(loc), `${loc} is proxied`);
     }
     assert.ok(conf.includes('location ~ ^/api/v1/(events|subscriptions|checkpoints)(/|$)'), 'the token-guarded API block');
-    assert.ok(conf.includes('location /api/ {'), 'the /api/ refusal block');
+    const apiBlock = conf.slice(conf.indexOf('location /api/ {'), conf.indexOf('\n    }', conf.indexOf('location /api/ {')));
+    assert.ok(apiBlock.includes('default_type application/problem+json;'), 'an unknown API path answers a problem document');
+    assert.ok(/return 404 /.test(apiBlock), 'with a 404');
+    assert.ok(!/^\s*proxy_pass/m.test(apiBlock), 'the API stays host-local');
     assert.ok(conf.includes('proxy_buffering off;'), 'SSE is not buffered');
     assert.ok(conf.includes('proxy_read_timeout 1h;'), 'SSE keeps its long read timeout');
     const refusals = [conf.indexOf('location ~* ^/metrics(/|$) { return 404; }'), conf.indexOf('location ~* ^/internal(/|$) { return 404; }')];
