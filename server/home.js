@@ -428,7 +428,8 @@ function renderUpdates({ siteUrl }) {
         robots: 'index, follow',
         navbar: { service: 'events', apiBase: NETWORK_URL, links, history: { type: 'page', title: SITE_NAME } },
         footer: FOOTER, home: '/', navLinks: links,
-        head: appIcon.headTags({ site: 'events' }),
+        // The site's stylesheet: without it /updates fell back to the browser's serif (domain sweep, 2026-11-01).
+        head: [appIcon.headTags({ site: 'events' }), `<link rel="stylesheet" href="${ovServe.url(showcase.STYLESHEET)}">`].join('\n'),
         body: `<div id="navbar-mount"></div>
 <main id="main" class="page">
 ${frame.updatesBody({ service: 'events', siteName: SITE_NAME })}
