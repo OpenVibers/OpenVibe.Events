@@ -1,7 +1,6 @@
 'use strict';
-// The home on a phone (the owner's short-pages rule, 2026-10-30): the blocks of the same kind are one pick block,
-// a row of chips picks one of them, and the parts a reader rarely needs are folds. Radio inputs and :has(), no
-// script for the chips; every block stays in the page for crawlers; a wider screen shows them all and no chips.
+// The home on a phone: the blocks of the same kind are all shown, and a row of chips jumps to one (the owner,
+// 2026-10-31: never hide content to shorten); the parts a reader rarely needs are folds. A wider screen shows no chips.
 const assert = require('assert');
 const { renderHome } = require('../server/home');
 
@@ -17,44 +16,36 @@ const STATS = {
 
 const t = (name, fn) => { try { fn(); console.log(`ok   ${name}`); } catch (e) { console.error(`FAIL ${name}: ${e.message}`); process.exitCode = 1; } };
 
-t('the public events are one pick block: a chip per category, the first picked, every card in the page', () => {
+t('the public events: every card shown, a chip per category that jumps to its first card', () => {
     const page = renderHome({ siteUrl: 'https://openvibe.events', apiUrl: 'https://openvibe.events', stats: STATS });
     const block = page.slice(page.indexOf('<div class="pick pick-events"'), page.indexOf('</section>', page.indexOf('<div class="pick pick-events"')));
-    assert.ok(block.startsWith('<div class="pick pick-events"'), 'the pick block is on the home');
-    assert.match(block, /<div class="pick-row" role="radiogroup" aria-label="Public events this week">/);
-    // One chip per category, in the order the categories appear.
-    const chips = [...block.matchAll(/<input type="radio" name="pick-events" id="pk-events-(\d+)" value="\1"( checked)?><label for="pk-events-\1">([^<]+)<\/label>/g)];
+    assert.ok(block.startsWith('<div class="pick pick-events"'), 'the block is on the home');
+    assert.match(block, /<nav class="pick-row" aria-label="Public events this week">/);
+    const chips = [...block.matchAll(/<a class="pick-chip" href="#(event-[a-z0-9-]+)">([^<]+)<\/a>/g)];
     assert.strictEqual(chips.length, 2, `a chip per category (${chips.length})`);
-    assert.deepStrictEqual(chips.map((m) => m[1]), ['0', '1'], 'the chips are in order');
-    assert.deepStrictEqual(chips.filter((m) => m[2]).map((m) => m[1]), ['0'], 'the first category is picked');
-    assert.ok(chips[0][3].includes('OpenVibe.Live'), `the chip names the category (${chips[0][3]})`);
-    // Every card stays in the page: the crawler still reads them all.
+    assert.ok(chips[0][2].includes('OpenVibe.Live'), `the chip names the category (${chips[0][2]})`);
+    for (const [, id] of chips) assert.ok(block.includes(`<li class="hm-event" id="${id}"`), `${id} is a card in the page`);
+    assert.ok(!/type="radio"/.test(page), 'no chip is a radio: nothing is picked');
     const cards = [...block.matchAll(/<li class="hm-event" id="event-([a-z0-9-]+)" data-cat="(\d+)">/g)];
     assert.strictEqual(cards.length, 2, `every event card is in the page (${cards.length})`);
-    assert.deepStrictEqual(cards.map((m) => m[2]), ['0', '1'], 'each card knows its category');
 });
 
-t('what you get is one pick block too: six chips, the first picked, every card in the page', () => {
+t('what you get: six cards shown, a chip per card that jumps to it', () => {
     const page = renderHome({ siteUrl: 'https://openvibe.events', apiUrl: 'https://openvibe.events', stats: STATS });
     const block = page.slice(page.indexOf('<div class="pick" id="pick-features">'), page.indexOf('</section>', page.indexOf('<div class="pick" id="pick-features">')));
-    const chips = [...block.matchAll(/<input type="radio" name="pick-features" id="pk-features-(\d+)" value="\1"( checked)?><label for="pk-features-\1">([^<]+)<\/label>/g)];
+    const chips = [...block.matchAll(/<a class="pick-chip" href="#(pp-features-\d+)">([^<]+)<\/a>/g)];
     assert.strictEqual(chips.length, 6, `a chip per feature (${chips.length})`);
-    assert.deepStrictEqual(chips.filter((m) => m[2]).map((m) => m[1]), ['0'], 'the first feature is picked');
+    for (const [, id] of chips) assert.ok(block.includes(`<div class="pick-pane" id="${id}">`), `${id} is in the page`);
     assert.strictEqual((block.match(/class="sc-card"/g) || []).length, 6, 'every card is in the page');
-    // The CSS that shows the picked block, one rule per block.
-    for (let i = 0; i < 6; i++) {
-        assert.ok(page.includes(`.pick:has(#pk-features-${i}:checked) #pp-features-${i}{display:block}`), `feature ${i} shows when its chip is picked`);
-    }
 });
 
-t('the CSS guard: the chips are hidden and the blocks all show until 640 px and where :has() is understood', () => {
+t('the CSS: no chips where there is room, link chips on a phone, and nothing hidden', () => {
     const page = renderHome({ siteUrl: 'https://openvibe.events', apiUrl: 'https://openvibe.events', stats: STATS });
-    assert.ok(page.includes('.pick-row{display:none}'), 'the chips are hidden by default');
-    assert.ok(page.includes('@supports selector(:has(*)){@media (max-width:640px){'), 'the phone rules are under :has() and 640 px');
-    assert.ok(page.includes('.pick-pane{display:none}'), 'the blocks are hidden on a phone');
-    assert.match(page, /\.pick-row label\{[^}]*min-height:44px/, 'a chip is a 44 px target');
-    assert.ok(page.includes('.pick-events .hm-events>li{display:none}'), 'only the picked category shows on a phone');
-    assert.ok(page.includes('.pick-events:has(#pk-events-0:checked) .hm-events>li[data-cat="0"]{display:block}'), 'the picked category shows');
+    assert.ok(page.includes('.pick-row{display:none}'), 'no chips where there is room');
+    assert.match(page, /\.pick-chip\{[^}]*min-height:44px/, 'a chip is a 44 px target');
+    assert.ok(!page.includes('.pick-pane{display:none}') && !page.includes('.hm-events>li{display:none}'), 'no block or card is hidden');
+    assert.ok(!/nth-child\(n\+11\)\{display:none\}/.test(page), 'no list is cut short on a phone');
+    assert.ok(!page.includes(':checked'), 'no picker rules');
 });
 
 t('the parts a reader rarely needs are folds, open in the page and closed on a phone', () => {
