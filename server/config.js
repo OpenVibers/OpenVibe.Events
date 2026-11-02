@@ -48,7 +48,11 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
     // Shoes (open.shoes): shoes.index_document.* (contracts 0.273.0), its model pages in OpenVibe.Search.
     'shoes',
     // Tours (openvibe.tours): tours.index_document.* (contracts 0.274.0), its places, cities and walks in Search.
-    'tours'];
+    'tours',
+    // Report (openvibe.report): report.index_document.* (contracts 0.275.0), its Rundown topic pages in Search.
+    'report',
+    // Design (openvibe.design): design.index_document.* (contracts 0.275.0), its icon and theme pages in Search.
+    'design'];
 
 /**
  * Namespaces that belong to the network rather than to one service. `provider.*` carries storage
