@@ -41,7 +41,10 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
     // MediaHub (OpenVibe.Video, Pics and Download), in its hyphen-free namespace: mediahub.*
     'media-hub',
     // Today (OpenVibe.Today, plan 2026-10-28 §5.3): today.event.scheduled|updated|cancelled
-    'today'];
+    'today',
+    // Bench (OpenVibe.Bench): bench.round.finished, bench.judgement.recorded, bench.rating.changed (contracts
+    // events/payloads). It was missing here and in Network's grants, so its outbox retried every event (2026-11-02).
+    'bench'];
 
 /**
  * Namespaces that belong to the network rather than to one service. `provider.*` carries storage
