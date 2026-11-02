@@ -538,9 +538,13 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
      */
     const claimDeliveries = async (now, limit, { owner, leaseUntil, maxApp = limit } = {}) => {
         if (!owner || !(leaseUntil > now) || limit <= 0) return [];
-        // Claimable: due, and the head of its key (no lower-seq pending/failed row of it, nothing of it leased). Two
-        // bindings, both `now` (the due check and the lease check).
+        // Claimable: due, not leased itself, and the head of its key (no lower-seq pending/failed row of it, nothing of
+        // it leased). Three bindings, all `now` (the due check, its own lease and the key's leases). Without its own
+        // lease check a delivery with no ordering key stayed claimable while in flight, so a subscription with
+        // max_inflight above 1 had the same lowest row claimed up to max_inflight times in one pass: Search's
+        // deliveries went out six times each on 2026-11-02 (27,428 "lease expired" lines in 15 minutes).
         const claimable = (d) => `(${d}.status IN ('pending', 'failed') AND ${d}.next_attempt_at <= ?
+            AND (${d}.lease_until IS NULL OR ${d}.lease_until <= ?)
             AND (${d}.ordering_key IS NULL OR (
                 NOT EXISTS (SELECT 1 FROM deliveries x WHERE x.subscription_id = ${d}.subscription_id
                     AND x.ordering_key = ${d}.ordering_key AND x.status IN ('pending', 'failed') AND x.seq < ${d}.seq)
@@ -562,7 +566,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
                   AND EXISTS (SELECT 1 FROM deliveries d WHERE d.subscription_id = s.id AND ${claimable('d')})
                   AND ${leased('s.id')} < s.max_inflight
                 ORDER BY p, q LIMIT ?
-                FOR UPDATE OF s SKIP LOCKED`).all(now, now, now, now, now, now, now, n));
+                FOR UPDATE OF s SKIP LOCKED`).all(now, now, now, now, now, now, now, now, now, now, n));
             const subs = [...await candidates(false, limit), ...await candidates(true, Math.min(limit, Math.max(0, maxApp)))]
                 .sort((x, y) => Number(x.p) - Number(y.p) || Number(x.q) - Number(y.q));
             const picked = [];
@@ -582,9 +586,9 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
                 // subscription is at its cap or has no claimable delivery left.
                 for (;;) {
                     if (picked.length >= limit || (sub.project_id && apps >= maxApp)) break;
-                    const d = await next.get(sub.id, now, now, now);
+                    const d = await next.get(sub.id, now, now, now, now);
                     if (!d) break;
-                    if ((await lease.run(owner, leaseUntil, d.event_id, d.subscription_id, now, now, now)).changes !== 1) break;   // another worker got there first
+                    if ((await lease.run(owner, leaseUntil, d.event_id, d.subscription_id, now, now, now, now)).changes !== 1) break;   // another worker got there first
                     picked.push({ ...d, lease_owner: owner, lease_until: leaseUntil });
                     if (sub.project_id) apps++;
                 }
@@ -613,6 +617,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
             if (!locked) return null;
             const r = await db.prepare(`UPDATE deliveries d SET lease_owner = ?, lease_until = ? WHERE d.event_id = ? AND d.subscription_id = ?
                 AND d.status IN ('pending', 'failed') AND d.next_attempt_at <= ?
+                AND (d.lease_until IS NULL OR d.lease_until <= ?)
                 AND (d.ordering_key IS NULL OR (
                     NOT EXISTS (SELECT 1 FROM deliveries x WHERE x.subscription_id = d.subscription_id
                         AND x.ordering_key = d.ordering_key AND x.status IN ('pending', 'failed') AND x.seq < d.seq)
@@ -622,7 +627,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
                 AND (SELECT COUNT(*) FROM deliveries x WHERE x.subscription_id = d.subscription_id AND x.lease_until > ?)
                     < (SELECT s.max_inflight FROM subscriptions s WHERE s.id = d.subscription_id AND s.enabled = 1)
                 RETURNING d.*, (SELECT s.project_id FROM subscriptions s WHERE s.id = d.subscription_id) AS app_project_id`)
-                .get(owner, leaseUntil, eventId, subscriptionId, now, now, now);
+                .get(owner, leaseUntil, eventId, subscriptionId, now, now, now, now);
             return r || null;
         });
     };
