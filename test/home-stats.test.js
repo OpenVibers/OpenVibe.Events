@@ -97,6 +97,12 @@ t('a stalled store resolves to no stats within the 1.5 s bound, so the page fall
     assert.ok(elapsed >= 1400 && elapsed < 2500, `resolved in ${elapsed} ms`);
 });
 
+t('the week is read in one pass: no COUNT(DISTINCT event_type), which took 7 s on production (past the query timeout)', async () => {
+    const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'server', 'home-stats.js'), 'utf8').replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.ok(!/COUNT\(DISTINCT event_type\)/i.test(src), 'no distinct count over the week');
+    assert.strictEqual((src.match(/FROM events WHERE received_at > \? (GROUP|AND)/g) || []).length, 1, 'one grouped read of the week');
+});
+
 t('stop', async () => { await h.stop(); });
 
 t.run();
