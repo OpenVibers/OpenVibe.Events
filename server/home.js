@@ -98,7 +98,9 @@ function busOrbit(stats) {
 }
 const nsOf = (type) => String(type).split('.')[0];
 const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-const eventTitle = (type) => TYPE_WORDS[type] || `An event of type ${type}`;
+// A type with no words of its own reads as its publisher and what happened ("OpenVibe.Host: release published"), not
+// "An event of type host.release.published" over the same name again.
+const eventTitle = (type) => TYPE_WORDS[type] || `${serviceName(nsOf(type))}: ${String(type).split('.').slice(1).join(' ').replace(/_/g, ' ')}`;
 const eventDescription = (type) => `Published by ${serviceName(nsOf(type))} as ${type}. Every subscriber receives it as a signed webhook; any reader can pull it with a cursor.`;
 const isoDate = (ms) => { const n = Number(ms); return Number.isFinite(n) && n > 0 ? new Date(n).toISOString() : null; };
 const humanDate = (ms) => {
@@ -159,11 +161,12 @@ function eventCard(r, cat) {
     const url = serviceUrl(ns);
     const category = url ? `<a href="${esc(url)}">${esc(ns)}</a>` : esc(ns);
     const when = iso ? `<time datetime="${iso}">${esc(humanDate(r.last))}</time>` : '<span class="hm-event-undated">date not recorded</span>';
+    // What every public event is (a signed webhook to each subscriber, a cursor for any reader) is said once, above the
+    // list; each card says only its own: what happened, when it last arrived, who published it, how often, its name.
+    void category;
     return `<li class="hm-event" id="event-${esc(slug(type))}" data-cat="${esc(cat)}">
-<p class="hm-event-cat">Category: ${category}</p>
 <h3 class="hm-event-title">${esc(eventTitle(type))}</h3>
-<p class="hm-event-meta">${when} · Online, from ${serviceLink(ns)} · ${esc(fmt(r.n))} this week</p>
-<p class="hm-event-desc">${esc(eventDescription(type))}</p>
+<p class="hm-event-meta">${when} · from ${serviceLink(ns)} · ${esc(fmt(r.n))} this week</p>
 <p class="hm-event-type"><code>${esc(type)}</code></p>
 </li>`;
 }
@@ -193,7 +196,7 @@ function eventsSection(stats) {
         const firstOf = (ns) => list.find((r) => nsOf(r.type) === ns);
         const chips = cats.map((ns) => `<a class="pick-chip" href="#event-${esc(slug(String(firstOf(ns).type)))}">${esc(serviceName(ns))}</a>`).join('');
         const cards = list.map((r) => eventCard(r, String(cats.indexOf(nsOf(r.type))))).join('');
-        inner = `<p class="sc-lede">The public event types anyone may read, newest arrival first: when each last arrived, who published it and what it means. Subscribe to a pattern such as <code>live.stream.*</code> to get them as signed webhooks.</p>
+        inner = `<p class="sc-lede">The public event types anyone may read, newest arrival first: when each last arrived, who published it and what it means. Subscribe to a pattern such as <code>live.stream.*</code> to get them as signed webhooks; any reader can also pull them with a cursor.</p>
 <div class="pick pick-events" id="pick-events"><nav class="pick-row" aria-label="Public events this week">${chips}</nav>
 <ul class="hm-events">${cards}</ul></div>
 ${publicTypes.length > list.length ? `<p class="hm-note">And ${esc(fmt(publicTypes.length - list.length))} more public event types this week.</p>` : ''}`;
