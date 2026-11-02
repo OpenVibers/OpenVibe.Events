@@ -43,7 +43,7 @@ async function start({
     // carrier on every delivery at fan-out and records a (class, key) decision in delivery_placements when it changes.
     const carriers = createCarriers({ config, clock, log, valkey });
     const planner = createPlanner({ registry: carriers, db, clock, log });
-    const store = createStore(db, { clock, maxHops: config.maxHops, usage: config.usage, policies, planner });
+    const store = createStore(db, { clock, maxHops: config.maxHops, usage: config.usage, policies, planner, countsCacheMs: config.countsCacheMs });
     const keys = createNetworkKeys({ network: config.networkInternalUrl, publicKey: config.networkPublicKey, fetch: fetchImpl, log });
     const auth = createAuth({ config, keys, store });
     const metrics = createMetrics({ store });

@@ -275,7 +275,7 @@ t('backpressure: one in flight per subscription, <= maxInflight (20) overall', a
     await bp.worker.drain();
     assert.strictEqual(peak, 20, `peak in flight ${peak}`);
     assert.strictEqual(perSubPeak, 1);
-    assert.strictEqual((await bp.store.deliveryCounts()).delivered, 75);
+    assert.strictEqual((await bp.store.deliveryCounts({ fresh: true })).delivered, 75);
     await bp.stop();
 });
 

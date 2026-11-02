@@ -232,7 +232,7 @@ t('max_inflight = 2: two keys run together, never two of one key, never three at
 
     assert.strictEqual(totalPeak, 2, 'two keys of the subscription went in flight together');
     assert.strictEqual(keyPeak, 1, 'never two of one key at once');
-    assert.strictEqual((await h.store.deliveryCounts()).pending, 0, 'every delivery was sent');
+    assert.strictEqual((await h.store.deliveryCounts({ fresh: true })).pending, 0, 'every delivery was sent');
 
     await h.store.db.prepare('UPDATE subscriptions SET max_inflight = 1 WHERE id = ?').run(sub.id);
     await deletePolicy('live.ord4.*');
