@@ -44,7 +44,9 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
     'today',
     // Bench (OpenVibe.Bench): bench.round.finished, bench.judgement.recorded, bench.rating.changed (contracts
     // events/payloads). It was missing here and in Network's grants, so its outbox retried every event (2026-11-02).
-    'bench'];
+    'bench',
+    // Shoes (open.shoes): shoes.index_document.* (contracts 0.273.0), its model pages in OpenVibe.Search.
+    'shoes'];
 
 /**
  * Namespaces that belong to the network rather than to one service. `provider.*` carries storage
