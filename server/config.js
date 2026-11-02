@@ -46,7 +46,9 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
     // events/payloads). It was missing here and in Network's grants, so its outbox retried every event (2026-11-02).
     'bench',
     // Shoes (open.shoes): shoes.index_document.* (contracts 0.273.0), its model pages in OpenVibe.Search.
-    'shoes'];
+    'shoes',
+    // Tours (openvibe.tours): tours.index_document.* (contracts 0.274.0), its places, cities and walks in Search.
+    'tours'];
 
 /**
  * Namespaces that belong to the network rather than to one service. `provider.*` carries storage
