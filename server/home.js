@@ -122,6 +122,20 @@ function pickBlock({ key, label, panes, bodyClass = '' }) {
 
 
 /**
+ * What a fold holds, counted, for its title row (the owner, 2026-10-31: a fold that shortens a page shows its count):
+ * "6 questions", "12 items", "latest 5" for the shipped list, or nothing when there is nothing to count. Replaces the
+ * hint the fold used to show instead.
+ */
+function foldMeta(body, cls = '') {
+    const s = typeof body === 'string' ? body : String((body && (body.s || body.html || body.value)) || body || '');
+    const n = (re) => (s.match(re) || []).length;
+    const shipped = /data-ov-shipped="list"[^>]*?data-limit="(\d+)"|data-limit="(\d+)"[^>]*?data-ov-shipped="list"/.exec(s);
+    const q = n(/<details[\s>]/g), li = n(/<li[\s>]/g), a = n(/<a\s/g);
+    const text = shipped ? `latest ${shipped[1] || shipped[2]}` : q > 1 ? `${q} questions` : li > 1 ? `${li} items` : a > 1 ? `${a} links` : '';
+    return text ? `<span${cls ? ` class="${cls}"` : ''}>${text}</span>` : '';
+}
+
+/**
  * A fold: a part of the page a reader rarely needs, closed on a phone and open where there is room (the owner's
  * short-pages rule, 2026-10-30). The page's own markup keeps the block open, so a browser without the script (or
  * with scripts off) shows it as before; the script closes it on a narrow screen and remembers the reader's choice.
@@ -129,7 +143,7 @@ function pickBlock({ key, label, panes, bodyClass = '' }) {
  *   foldBlock({ id, head, html })   the markup, with the small script that closes it on a phone
  */
 function foldBlock({ id, head, html }) {
-    return `<details class="hm-fold hm-fold-block" id="${esc(id)}" open><summary>${head}<span>tap to open</span></summary>${html}</details>${foldScript(id)}`;
+    return `<details class="hm-fold hm-fold-block" id="${esc(id)}" open><summary>${head}${foldMeta(html)}</summary>${html}</details>${foldScript(id)}`;
 }
 
 /** The script a fold carries: closed on a phone unless the reader opened it before, and it remembers that. */
