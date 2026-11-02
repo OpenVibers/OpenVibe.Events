@@ -49,7 +49,7 @@ t('published events show as counts by service, public types and the latest publi
     assert.match(fold(page, 'who'), /<a href="https:\/\/openvibe\.live">OpenVibe\.Live<\/a>/);
     assert.match(events, /A channel went live on OpenVibe\.Live/);
     assert.match(events, /<time datetime="\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z">/);
-    assert.match(events, /Online, from <a href="https:\/\/openvibe\.live">OpenVibe\.Live<\/a> · 2 this week/);
+    assert.match(events, / · from <a href="https:\/\/openvibe\.live">OpenVibe\.Live<\/a> · 2 this week/);
     assert.match(events, /<code>live\.stream\.started<\/code>/);
     assert.match(events, /A post was published on OpenVibe\.Blog/);
     assert.match(events, /<code>blog\.post\.published<\/code>/);

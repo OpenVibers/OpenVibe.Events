@@ -176,14 +176,19 @@ t('the server-rendered event list: title, real <time datetime>, place, descripti
     const card = /<li class="hm-event"[\s\S]*?<\/li>/.exec(page)[0];
     assert.match(card, /A channel went live on OpenVibe\.Live/, 'the event title');
     assert.match(card, /<time datetime="2026-10-29T09:41:00\.000Z">/, 'a real <time datetime>');
-    assert.match(card, /Online, from <a href="https:\/\/openvibe\.live">OpenVibe\.Live<\/a>/, 'the place and publisher');
-    assert.match(card, /Published by OpenVibe\.Live as live\.stream\.started/, 'the short description');
+    assert.match(card, / · from <a href="https:\/\/openvibe\.live">OpenVibe\.Live<\/a> · /, 'the publisher');
     assert.match(card, /3 this week/, 'the count');
-    assert.match(card, /Category: <a href="https:\/\/openvibe\.live">live<\/a>/, 'a category link');
+    // What every event is, said once above the list (2026-11-02: the same sentence on 24 cards made the page 9 screens).
+    assert.ok(!card.includes('Every subscriber receives it') && !card.includes('Category:'), 'no boilerplate on the card');
+    assert.match(page, /signed webhooks; any reader can also pull them with a cursor/, 'said once in the lede');
+    // A type without its own words reads as its publisher and what happened.
+    const odd = renderHome({ siteUrl: SITE, apiUrl: SITE, stats: { ...stats, public: [{ type: 'host.release_note.published', n: 1, last }] } });
+    assert.match(odd, /<h3 class="hm-event-title">OpenVibe\.Host: release note published<\/h3>/, 'its publisher and what happened');
+    assert.ok(!odd.includes('An event of type'), 'never "An event of type …"');
     // The category nav became the row of chips that picks one category at a time on a phone (the short-pages rule);
     // the links it held are still in the page, on the cards themselves.
     assert.match(page, /<a class="pick-chip" href="#event-[a-z0-9-]+">OpenVibe\.Live<\/a>/, 'the category chips jump to their first card');
-    assert.match(page, /Online, from <a href="https:\/\/openvibe\.live">OpenVibe\.Live<\/a>/, 'the publisher link is still in the page');
+    assert.match(page, /from <a href="https:\/\/openvibe\.live">OpenVibe\.Live<\/a>/, 'the publisher link is still in the page');
     assert.match(page, /<code>live\.stream\.started<\/code>/, 'the exact event type');
 
     // One JSON-LD script per page: every node lives in the page's @graph.
