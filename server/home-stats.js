@@ -24,21 +24,39 @@ function createHomeStats({ store, now = () => Date.now(), ttlMs = 5 * 60 * 1000,
         const t = now();
         const day = t - DAY_MS;
         const week = t - 7 * DAY_MS;
-        const [dayRow, byNs, typeRow, pub, subs, counts] = await Promise.all([
+        // The week in one pass, by type and visibility (1.4 s on 1.1M events, 2026-11-02): the services, the number of
+        // types and the public list all come from it. Three reads did the same, and COUNT(DISTINCT event_type) alone
+        // took 7 s, past the query timeout, so the home waited 1.5 s on every request and showed no figures.
+        const [dayRow, byType, subs, counts] = await Promise.all([
             db.prepare('SELECT COUNT(*) AS n FROM events WHERE received_at > ?').get(day),
-            db.prepare("SELECT split_part(event_type, '.', 1) AS ns, COUNT(*) AS n FROM events WHERE received_at > ? GROUP BY 1 ORDER BY 2 DESC, 1").all(week),
-            db.prepare('SELECT COUNT(DISTINCT event_type) AS n FROM events WHERE received_at > ?').get(week),
-            db.prepare("SELECT event_type, COUNT(*) AS n, MAX(received_at) AS last FROM events WHERE received_at > ? AND visibility = 'public' GROUP BY 1 ORDER BY 2 DESC, 1").all(week),
+            db.prepare('SELECT event_type, visibility, COUNT(*) AS n, MAX(received_at) AS last FROM events WHERE received_at > ? GROUP BY 1, 2').all(week),
             db.prepare('SELECT COUNT(*) AS n, COUNT(DISTINCT consumer) AS c FROM subscriptions WHERE enabled = 1').get(),
             store.deliveryCounts(),
         ]);
-        const services = byNs.map((r) => ({ ns: String(r.ns), n: Number(r.n) })).filter((r) => r.ns && r.n > 0);
+        const byNs = new Map();
+        const types = new Set();
+        const pub = new Map();
+        for (const r of byType) {
+            const type = String(r.event_type);
+            const n = Number(r.n);
+            types.add(type);
+            const ns = type.split('.')[0];
+            if (ns) byNs.set(ns, (byNs.get(ns) || 0) + n);
+            if (r.visibility === 'public') {
+                const p = pub.get(type) || { type, n: 0, last: 0 };
+                p.n += n;
+                p.last = Math.max(p.last, Number(r.last));
+                pub.set(type, p);
+            }
+        }
+        const byCount = (a, b) => b.n - a.n || (a.ns || a.type).localeCompare(b.ns || b.type);
+        const services = [...byNs].map(([ns, n]) => ({ ns, n })).filter((r) => r.n > 0).sort(byCount);
         return {
             day: Number(dayRow.n),
             week: services.reduce((sum, r) => sum + r.n, 0),
-            types: Number(typeRow.n),
+            types: types.size,
             services,
-            public: pub.map((r) => ({ type: String(r.event_type), n: Number(r.n), last: Number(r.last) })),
+            public: [...pub.values()].sort(byCount),
             subscriptions: Number(subs.n),
             consumers: Number(subs.c),
             delivered: Number(counts.delivered || 0),
