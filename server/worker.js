@@ -138,6 +138,7 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
     let finished = 0;   // deliveries settled so far (drain)
     let passing = null;
     let queued = null;
+    let stopping = false;   // stop() was called: no new pass claims anything
     function dispatch() {
         if (!passing) {
             passing = dispatchPass().finally(() => { passing = null; });
@@ -150,6 +151,7 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
     /** Start every due delivery there is room for. Returns how many were started. */
     async function dispatchPass() {
         lastTickAt = Date.now();
+        if (stopping) return 0;
         const room = opts.maxInflight - inflight.size;
         if (room <= 0) return 0;
         const now = clock.now();
@@ -198,8 +200,17 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
     }
 
     return {
-        start() { if (!running) { running = true; schedule(0); } },
-        async stop() { running = false; clearTimeout(timer); timer = null; await Promise.allSettled([...inflight]); },
+        start() { if (!running) { running = true; stopping = false; schedule(0); } },
+        // A pass that is reading the due rows when the service stops still starts what it claimed (those rows are
+        // leased to this worker), so stop() waits for the pass and then for every delivery it started: the database
+        // pool is closed after this returns, and a delivery recording its attempt on a closed pool crashed and was
+        // sent again by the next worker (2026-11-02, both deploys of the day). No new pass claims anything once
+        // stopping; a later start() lifts that.
+        async stop() {
+            running = false; stopping = true; clearTimeout(timer); timer = null;
+            for (let i = 0; i < 3 && (passing || queued); i++) await Promise.allSettled([queued, passing].filter(Boolean));
+            while (inflight.size) await Promise.allSettled([...inflight]);
+        },
         kick() { schedule(0); },
         // The carrier path (ADR-042 decision 5): claim one row (store.claimDelivery) and send it through the same send().
         deliver(delivery) { return send(delivery); },
