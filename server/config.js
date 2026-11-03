@@ -35,6 +35,9 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
     'inventory',
     // Services (OpenVibe.Services, the developer console): its services.* events
     'services',
+    // OpenVibe Connect (CON-15, contracts 0.282.0): connect.hook.received, a pointer to a webhook it keeps for a
+    // person's share, which Connect's own subscription delivers to their computer once it is back.
+    'connect',
     // Record products that put their pages in OpenVibe.Search (openvibe-publishing/search-feed):
     // work.index_document.*, rent.index_document.*, help.index_document.*, quest.index_document.*
     'work', 'rent', 'help', 'quest',
