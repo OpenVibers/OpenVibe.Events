@@ -47,6 +47,22 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     // content-addressed /shared/* URLs, from this repo's pinned openvibe-shared. Mounted before the
     // routers and outside the per-actor limiter: it is static and unauthenticated.
     app.use('/shared', ovServe.handler());
+    // Terms, Privacy and DMCA in this site's own words (openvibe-shared/legal, profile 'service'; 11-03: the footer's
+    // legal links answered 404 here). The facts must match the code: change both together.
+    const legal = require('openvibe-shared/legal');
+    app.get(legal.PATHS, legal.handler({
+        "host": "openvibe.events",
+        "name": "OpenVibe.Events",
+        "id": "events",
+        "service": "events",
+        "profile": "service",
+        "what": "Publish an event once and every subscriber gets it, signed, retried and replayable: webhooks, a pull API with a cursor, dead letters and realtime streams for the browser.",
+        "makes": [
+                "your topics, subscriptions and webhook endpoints",
+                "the events you publish, kept so subscribers can replay them"
+        ],
+        "fetches": true
+    }));
 
     // The account export/deletion consumer (ADR-033, ./account-data.js): the two account topics, signed and loopback
     // only. No body parser before it: the v2 signature covers the raw body.
