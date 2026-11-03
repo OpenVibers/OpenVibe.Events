@@ -406,7 +406,7 @@ implemented service.
 Part of the [OpenVibe network](https://openvibe.network). Built in the open by [OpenVibers](https://github.com/OpenVibers).
 
 <!-- versions:start -->
-- openvibe-contracts: v0.222.0
+- openvibe-contracts: v0.280.0
 - openvibe-sdk: v0.82.0
-- openvibe-shared: v4.106.2
+- openvibe-shared: v4.107.0
 <!-- versions:end -->
