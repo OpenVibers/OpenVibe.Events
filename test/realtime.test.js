@@ -158,6 +158,11 @@ t('CORS: credentials only for https://*.openvibe.* origins', async () => {
         r = await fetch(`${h.base}/realtime/stream?topics=live.*`, { method: 'OPTIONS', headers: { Origin: origin } });
         assert.strictEqual(r.headers.get('access-control-allow-origin'), null, origin);
     }
+    // A first-party site not named openvibe.* (a manifest's domain) is allowed; a look-alike is not.
+    r = await fetch(`${h.base}/realtime/stream?topics=live.*`, { method: 'OPTIONS', headers: { Origin: 'https://open.shoes', 'Access-Control-Request-Method': 'GET' } });
+    assert.strictEqual(r.headers.get('access-control-allow-origin'), 'https://open.shoes', 'open.shoes is in the manifests');
+    r = await fetch(`${h.base}/realtime/stream?topics=live.*`, { method: 'OPTIONS', headers: { Origin: 'https://evil.shoes', 'Access-Control-Request-Method': 'GET' } });
+    assert.strictEqual(r.headers.get('access-control-allow-origin'), null, 'a domain no manifest names');
     const c = await stream('topics=live.*', { Origin: 'https://live.openvibe.network' });
     assert.strictEqual(c.headers['access-control-allow-origin'], 'https://live.openvibe.network');
     c.close();

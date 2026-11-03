@@ -49,7 +49,7 @@ t('valid envelope -> 201 with a cursor; defaults filled', async () => {
 t('bad envelope -> 422 events.invalid_envelope with errors', async () => {
     for (const bad of [
         { ...envelope(), event_id: 'nope' },
-        { ...envelope(), event_type: 'live.started' },            // needs 3+ segments
+        { ...envelope(), event_type: 'live' },                    // needs 2+ segments (contracts 0.280.0; it was 3+)
         { ...envelope(), actor: { type: 'user', id: 57 } },
         { ...envelope(), extra: true },
         (() => { const e = envelope(); delete e.subject; return e; })(),

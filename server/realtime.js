@@ -38,6 +38,24 @@ const cursor = require('./cursor');
 const { rowToEnvelope } = require('./store');
 
 const ORIGIN_RE = /^https:\/\/(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*openvibe\.[a-z]{2,63}$/;
+// Every first-party origin the service manifests declare (openvibe-contracts manifests/services/*.json `domains`),
+// exact https origins only: the sites not named openvibe.* (open.shoes, openre.stream, …) get the live release feed
+// too. 11-02: open.shoes's footer was refused ("No 'Access-Control-Allow-Origin'"). As Network's first-party-origins.js.
+const HOST_RE = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+let manifestOriginSet = null;
+function manifestOrigins() {
+    if (manifestOriginSet) return manifestOriginSet;
+    const out = new Set();
+    const manifests = (require('openvibe-contracts').services || {}).manifests || [];
+    for (const m of manifests) {
+        for (const d of m.domains || []) {
+            const host = String(d || '').trim().toLowerCase();
+            if (HOST_RE.test(host)) out.add(`https://${host}`);
+        }
+    }
+    manifestOriginSet = out;
+    return out;
+}
 const MAX_BUFFERED = 1024 * 1024; // a client this far behind is dropped; it resumes with Last-Event-ID
 
 function createRealtime({ store, auth, config, clock = { now: () => Date.now() }, log = console }) {
@@ -46,10 +64,10 @@ function createRealtime({ store, auth, config, clock = { now: () => Date.now() }
     let heartbeat = null;
 
     function originAllowed(origin) {
-        return typeof origin === 'string' && (ORIGIN_RE.test(origin) || opts.extraOrigins.includes(origin));
+        return typeof origin === 'string' && (ORIGIN_RE.test(origin) || manifestOrigins().has(origin) || opts.extraOrigins.includes(origin));
     }
 
-    /** CORS for browser EventSource({ withCredentials: true }) from https://*.openvibe.* only. */
+    /** CORS for browser EventSource({ withCredentials: true }) from https://*.openvibe.* and the manifests' domains only. */
     function cors(req, res, next) {
         const origin = req.headers.origin;
         res.setHeader('Vary', 'Origin');

@@ -52,7 +52,10 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
     // Report (openvibe.report): report.index_document.* (contracts 0.275.0), its Rundown topic pages in Search.
     'report',
     // Design (openvibe.design): design.index_document.* (contracts 0.275.0), its icon and theme pages in Search.
-    'design'];
+    'design',
+    // Vision (openvibe.vision, VIS-5): vision.result.ready, vision.alert. Its manifest declared them, but it was missing
+    // here, so its events were refused as events.unknown_source (found 11-02 when the contracts pin moved to 0.280.0).
+    'vision'];
 
 /**
  * Namespaces that belong to the network rather than to one service. `provider.*` carries storage
