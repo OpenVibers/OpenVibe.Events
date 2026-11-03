@@ -258,6 +258,19 @@ t('llms-full.txt is the same map in full text, starting with the site name', asy
     assert.ok(r.body.includes('### Guide'), 'each page with its full text');
 });
 
+t('deploy/nginx/openvibe.events.conf: realtime streams allow a shared address, and a refusal is readable (CORS)', () => {
+    const conf = fs.readFileSync(path.join(__dirname, '..', 'deploy', 'nginx', 'openvibe.events.conf'), 'utf8');
+    const stream = /location = \/realtime\/stream \{([\s\S]*?)\n    \}/.exec(conf)[1];
+    assert.match(stream, /limit_conn ovevents_apex_streams 60;/);
+    assert.match(stream, /limit_req  zone=ovevents_apex_connect burst=60 nodelay;/);
+    assert.match(stream, /limit_req_status 429;\s*limit_conn_status 429;\s*error_page 429 = @ovevents_stream_busy;/);
+    const busy = /location @ovevents_stream_busy \{([\s\S]*?)\n    \}/.exec(conf)[1];
+    assert.match(busy, /add_header Access-Control-Allow-Origin \$http_origin always;/);
+    assert.match(busy, /add_header Retry-After 10 always;/);
+    assert.match(busy, /return 429 '\{"type":"about:blank","title":"realtime\.busy"/);
+    assert.ok(!/Access-Control-Allow-Credentials/.test(busy), 'no credentials: the answer carries no data');
+});
+
 t('deploy/nginx/openvibe.events.conf is the API and product origin, with no redirect to the old host', () => {
     const conf = fs.readFileSync(path.join(__dirname, '..', 'deploy', 'nginx', 'openvibe.events.conf'), 'utf8');
     assert.match(conf, /server_name openvibe\.events;/);
