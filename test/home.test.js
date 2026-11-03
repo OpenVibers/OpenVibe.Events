@@ -246,6 +246,8 @@ t('llms.txt is a plain-text map that starts with the site name', async () => {
     assert.ok(r.body.includes("> The OpenVibe network's event bus"), 'the home summary');
     assert.ok(r.body.includes('https://github.com/OpenVibers/OpenVibe.Events#readme'), 'the guide');
     assert.ok(r.body.includes(`The API and the realtime gateway are at ${SITE}`), 'the discovery names the API origin');
+    assert.ok(r.body.includes('\n## Optional\n'), 'the optional section');
+    assert.ok(r.body.includes(`(${SITE}/index.md)`), 'the home link uses its markdown twin');
 });
 
 t('llms-full.txt is the same map in full text, starting with the site name', async () => {

@@ -79,7 +79,10 @@ function createDiscoveryRoutes({ config, releaseLastmod }) {
             name: 'OpenVibe.Events',
             summary: DESCRIPTION,
             details: details({ siteUrl: config.siteUrl, apiUrl: config.baseUrl }),
-            sections: pages.map((s) => ({ title: s.title, links: s.links.map((l) => ({ title: l.title, url: l.url, ...(l.note ? { note: l.note } : {}) })) })),
+            markdown: true,
+            base: config.siteUrl,
+            sections: pages.filter((s) => s.title === 'Start here').map((s) => ({ title: s.title, links: s.links.map((l) => ({ title: l.title, url: l.url, ...(l.note ? { note: l.note } : {}) })) })),
+            optional: pages.filter((s) => s.title === 'Machine-readable').flatMap((s) => s.links.map((l) => ({ title: l.title, url: l.url, ...(l.note ? { note: l.note } : {}) }))),
         })));
 
     // /llms-full.txt: the same pages as /llms.txt, each with its full plain text (openvibe-shared/seo.llmsFull).
