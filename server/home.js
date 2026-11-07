@@ -44,7 +44,8 @@ const HOME_CSP = [
     "style-src 'self' 'unsafe-inline' https://openvibe.network https://fonts.googleapis.com https://cdnjs.cloudflare.com",
     "font-src 'self' data: https://fonts.gstatic.com https://cdnjs.cloudflare.com",
     "img-src 'self' data: https:",
-    "connect-src 'self' https://openvibe.network https://openvibe.events https://cloudflareinsights.com",
+    // The navbar's Messages count asks Chat (openvibe-shared 4.130.0).
+    "connect-src 'self' https://openvibe.chat https://openvibe.network https://openvibe.events https://cloudflareinsights.com",
     "frame-src 'self' https://openvibe.network",
     "frame-ancestors 'none'",
     "object-src 'none'",
