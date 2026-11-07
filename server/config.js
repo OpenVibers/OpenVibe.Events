@@ -63,14 +63,17 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
 /**
  * Namespaces that belong to the network rather than to one service. `provider.*` carries storage
  * provider health/capacity telemetry, which whichever first-party service observes a provider
- * publishes (Media, Sources, Host, ...), so any service token may publish into it. `agent.*` is the
+ * publishes (Media, Sources, Host, ...), so any service token may publish into it. `share.*` is
+ * the sharing family Network publishes (share.granted, share.revoked, share.transfer.*), named by
+ * its family rather than by the network namespace in Contracts' network manifest. `agent.*` is the
  * network's agent namespace (design 2026-11-07): every mode of the one agent publishes the steps it
- * takes into it (agent.step.started|updated|ended, contracts 0.312.0), and OpenVibe.Actor keeps the
- * one timeline behind the Dock. Sources still own their own namespace first; a shared prefix never
- * replaces `<source>.`. Developer apps can never publish a shared prefix. EVENTS_SHARED_PREFIXES
- * (comma-separated) replaces the default.
+ * takes into it (agent.step.started|updated|ended), and OpenVibe.Actor keeps the one timeline behind
+ * the Dock. Sources still own their own namespace first; a shared prefix never replaces `<source>.`.
+ * Developer apps can never publish a shared prefix. EVENTS_SHARED_PREFIXES (comma-separated)
+ * replaces the default.
  */
-const DEFAULT_SHARED_PREFIXES = ['provider.', 'agent.'];
+const DEFAULT_SHARED_PREFIXES = ['provider.', 'share.', 'agent.'];
+
 
 function sourcePrefixes(env) {
     let map = Object.fromEntries(DEFAULT_SOURCES.map(s => [s, [`${namespaceOf(s)}.`]]));
