@@ -10,6 +10,26 @@ const live = serviceToken('live', ['events.event.publish']);
 
 t('boot', async () => { h = await boot(); });
 
+t('the network agent namespace: any first-party service may publish agent.step.*', async () => {
+		const codes = serviceToken('codes', ['events.event.publish']);
+		const r = await request(h.base, 'POST', '/api/v1/events', {
+			token: codes,
+			body: envelope('codes', { event_type: 'agent.step.started', subject: { type: 'user', id: 'usr_01JAB2C3D4E5F6G7H8J9K0MNPS' }, payload: { step_id: 'tsk_01JAB2C3D4E5F6G7H8J9K0MNPS' } }),
+		});
+		assert.strictEqual(r.status, 201, r.text);
+		// A developer app never publishes into a network-wide namespace.
+		const appId = ids.newId('app');
+		const appUlid = appId.split('_')[1].toLowerCase();
+		const app = await request(h.base, 'POST', '/api/v1/events', {
+			token: appToken({ appId, cap: ['events.app.publish'] }),
+			body: envelope('app', { source: `app-${appUlid}`, actor: { type: 'app', id: appId }, event_type: 'agent.step.started' }),
+		});
+		assert.strictEqual(app.status, 403, JSON.stringify(app.body));
+		assert.strictEqual(app.body.code, 'events.type_not_allowed', JSON.stringify(app.body));
+	});
+
+
+
 t('no token -> 401, wrong audience -> 401, missing capability -> 403', async () => {
     let r = await request(h.base, 'POST', '/api/v1/events', { body: envelope() });
     assert.strictEqual(r.status, 401);
