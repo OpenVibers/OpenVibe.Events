@@ -63,11 +63,13 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
 /**
  * Namespaces that belong to the network rather than to one service. `provider.*` carries storage
  * provider health/capacity telemetry, which whichever first-party service observes a provider
- * publishes (Media, Sources, Host, ...), so any service token may publish into it. Sources still
+ * publishes (Media, Sources, Host, ...), so any service token may publish into it. `share.*` is
+ * the sharing family Network publishes (share.granted, share.revoked, share.transfer.*), named by
+ * its family rather than by the network namespace in Contracts' network manifest. Sources still
  * own their own namespace first; a shared prefix never replaces `<source>.`. Developer apps can
  * never publish a shared prefix. EVENTS_SHARED_PREFIXES (comma-separated) replaces the default.
  */
-const DEFAULT_SHARED_PREFIXES = ['provider.'];
+const DEFAULT_SHARED_PREFIXES = ['provider.', 'share.'];
 
 function sourcePrefixes(env) {
     let map = Object.fromEntries(DEFAULT_SOURCES.map(s => [s, [`${namespaceOf(s)}.`]]));
