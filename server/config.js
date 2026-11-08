@@ -126,8 +126,9 @@ function load(env = process.env) {
         host: env.HOST || '127.0.0.1',
         nodeEnv,
         isProduction,
-        // How long the delivery counts by status are kept (server/store.js deliveryCounts): 15 s in production.
-        countsCacheMs: Math.max(0, Number(env.EVENTS_COUNTS_CACHE_MS || (isProduction ? 15000 : 0)) || 0),
+        // How long the delivery counts by status are kept (server/store.js deliveryCounts): 60 s in production, so a
+        // 30 s scrape reuses the previous answer instead of re-walking 1.35M deliveries (2026-11-08).
+        countsCacheMs: Math.max(0, Number(env.EVENTS_COUNTS_CACHE_MS || (isProduction ? 60000 : 0)) || 0),
         baseUrl,
         // The product origin is the API origin (plan T7): the home page and its robots.txt/sitemap.xml/
         // llms.txt are served from baseUrl. EVENTS_SITE_URL overrides it for a deployment that serves them apart.

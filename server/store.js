@@ -719,19 +719,24 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
         return rows.length;
     });
 
-    // The counts by status walk every delivery (a million rows: 42 ms) and were asked for every few seconds (the two
-    // metric gauges per scrape, the readiness check and its details, the home and the status API: 414k calls in 35 days,
-    // 289 minutes of database time). Callers at the same moment share one query, and in production its answer is kept
-    // countsCacheMs (15 s; config.countsCacheMs). Elsewhere every call counts, so a test reads its own writes.
+    // The counts by status walk every delivery (1.35M rows on 2026-11-08: 350 ms, 482k heap fetches on the index-only
+    // scan) and were asked for every few seconds (the two metric gauges per scrape, the readiness check and its details,
+    // the home and the status API: 414k calls in 35 days, 289 minutes of database time). One heap pass computes all four
+    // with FILTER (the index-only scan was slower; a status index has nothing to cover), callers at the same moment
+    // share one query, and in production its answer is kept countsCacheMs (60 s; config.countsCacheMs). Elsewhere every
+    // call counts, so a test reads its own writes.
     const COUNTS_MS = Math.max(0, Number(countsCacheMs) || 0);
     let counted = null;   // { at, value } or { at, pending }
     async function countDeliveries() {
-        const out = { pending: 0, delivered: 0, failed: 0, dead: 0 };
-        for (const r of await db.prepare('SELECT status, COUNT(*) AS n FROM deliveries GROUP BY status').all()) out[r.status] = r.n;
-        return out;
+        const r = await db.prepare(`SELECT count(*) FILTER (WHERE status = 'pending') AS pending,
+                                           count(*) FILTER (WHERE status = 'delivered') AS delivered,
+                                           count(*) FILTER (WHERE status = 'failed') AS failed,
+                                           count(*) FILTER (WHERE status = 'dead') AS dead
+                                      FROM deliveries`).get();
+        return { pending: Number(r.pending), delivered: Number(r.delivered), failed: Number(r.failed), dead: Number(r.dead) };
     }
     async function deliveryCounts({ fresh = false } = {}) {
-        const t = Date.now();
+        const t = clock.now();
         if (!fresh && counted && t - counted.at < COUNTS_MS) return counted.pending ? counted.pending : { ...counted.value };
         const pending = countDeliveries();
         counted = { at: t, pending };
