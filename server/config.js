@@ -58,7 +58,11 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
     'design',
     // Vision (openvibe.vision, VIS-5): vision.result.ready, vision.alert. Its manifest declared them, but it was missing
     // here, so its events were refused as events.unknown_source (found 11-02 when the contracts pin moved to 0.280.0).
-    'vision'];
+    'vision',
+    // Agent (OpenVibe.Actor): agent.step.started|updated|ended. The Actor manifest declares them (contracts 0.298.0),
+    // so the source has to be known here or its events are refused as events.unknown_source (found 2026-11-08 when
+    // the contracts pin moved to v0.338.0). They live in the network's shared agent.* namespace, not in actor.*.
+    'actor'];
 
 /**
  * Namespaces that belong to the network rather than to one service. `provider.*` carries storage
@@ -285,4 +289,4 @@ function load(env = process.env) {
     };
 }
 
-module.exports = { load, DEFAULT_SOURCES, namespaceOf };
+module.exports = { load, DEFAULT_SOURCES, DEFAULT_SHARED_PREFIXES, namespaceOf };
