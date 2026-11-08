@@ -26,6 +26,7 @@ const pkg = require('../package.json');
 
 function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLookup, clock, log = console, valkey = null, policies = null, planner = null, carriers = null, indexnow = null, accountData = null, accountSend = null }) {
     const app = express();
+    app.use('/auth', require('./web-sso').webSso({ config, log }));
     app.disable('x-powered-by');
     app.set('trust proxy', 'loopback');
     const release = createRelease({ service: 'events', root: path.join(__dirname, '..') });
