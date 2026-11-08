@@ -558,7 +558,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
             // priority: app subscriptions that outrank first-party ones can never crowd them out of a claim. Only a
             // subscription with a CLAIMABLE delivery is a candidate (a backlog of non-heads cannot occupy claim slots).
             const candidates = (apps, n) => (n <= 0 ? [] : db.prepare(`
-                SELECT s.id, s.project_id,
+                SELECT s.id, s.project_id, s.max_inflight, ${leased('s.id')} AS leased,
                     (SELECT d.priority FROM deliveries d WHERE d.subscription_id = s.id AND ${claimable('d')} ORDER BY d.priority, d.seq LIMIT 1) AS p,
                     (SELECT d.seq FROM deliveries d WHERE d.subscription_id = s.id AND ${claimable('d')} ORDER BY d.priority, d.seq LIMIT 1) AS q
                 FROM subscriptions s
@@ -566,7 +566,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
                   AND EXISTS (SELECT 1 FROM deliveries d WHERE d.subscription_id = s.id AND ${claimable('d')})
                   AND ${leased('s.id')} < s.max_inflight
                 ORDER BY p, q LIMIT ?
-                FOR UPDATE OF s SKIP LOCKED`).all(now, now, now, now, now, now, now, now, now, now, n));
+                FOR UPDATE OF s SKIP LOCKED`).all(now, now, now, now, now, now, now, now, now, now, now, n));
             const subs = [...await candidates(false, limit), ...await candidates(true, Math.min(limit, Math.max(0, maxApp)))]
                 .sort((x, y) => Number(x.p) - Number(y.p) || Number(x.q) - Number(y.q));
             const picked = [];
@@ -582,14 +582,18 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
             for (const sub of subs) {
                 if (picked.length >= limit) break;
                 if (sub.project_id && apps >= maxApp) continue;
-                // Up to (max_inflight − leased) deliveries of this subscription in one pass: `next` returns null when the
-                // subscription is at its cap or has no claimable delivery left.
-                for (;;) {
+                // Up to (max_inflight − leased) deliveries of this subscription in one pass. Stop at the cap here: the
+                // old loop asked `next` once more after the last slot was taken, and that lookup could never succeed —
+                // its cap filter is false for every row — yet it walked every pending row of the subscription to prove
+                // it. On 2026-11-08 that second lookup was half of 111,300 claim lookups and 442 M index tuples a day.
+                const room = Math.max(0, Number(sub.max_inflight) - Number(sub.leased));
+                for (let claimed = 0; claimed < room;) {
                     if (picked.length >= limit || (sub.project_id && apps >= maxApp)) break;
                     const d = await next.get(sub.id, now, now, now, now);
                     if (!d) break;
                     if ((await lease.run(owner, leaseUntil, d.event_id, d.subscription_id, now, now, now, now)).changes !== 1) break;   // another worker got there first
                     picked.push({ ...d, lease_owner: owner, lease_until: leaseUntil });
+                    claimed++;
                     if (sub.project_id) apps++;
                 }
             }
