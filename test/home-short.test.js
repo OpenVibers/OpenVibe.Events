@@ -21,7 +21,7 @@ t('the public events: every card shown, a chip per category that jumps to its fi
     const page = renderHome({ siteUrl: 'https://openvibe.events', apiUrl: 'https://openvibe.events', stats: STATS });
     const block = page.slice(page.indexOf('<div class="pick pick-events"'), page.indexOf('</section>', page.indexOf('<div class="pick pick-events"')));
     assert.ok(block.startsWith('<div class="pick pick-events"'), 'the block is on the home');
-    assert.match(block, /<nav class="pick-row" aria-label="Public events this week">/);
+    assert.match(block, /<nav class="pick-row" data-ovk-scroll aria-label="Public events this week">/);
     const chips = [...block.matchAll(/<a class="pick-chip" href="#(event-[a-z0-9-]+)">([^<]+)<\/a>/g)];
     assert.strictEqual(chips.length, 2, `a chip per category (${chips.length})`);
     assert.ok(chips[0][2].includes('OpenVibe.Live'), `the chip names the category (${chips[0][2]})`);

@@ -122,7 +122,7 @@ function pickBlock({ key, label, panes, bodyClass = '' }) {
     if (!panes.length) return '';
     const chips = panes.map((p) => `<a class="pick-chip" href="#pp-${esc(key)}-${esc(p.id)}">${esc(p.label)}</a>`).join('');
     const body = panes.map((p) => `<div class="pick-pane" id="pp-${esc(key)}-${esc(p.id)}">${p.head ? `<div class="pick-h"><h3 class="ovk-titled">${sectionIcon('grid')}${esc(p.head)}</h3></div>` : ''}${p.html}</div>`).join('');
-    return `<div class="pick" id="pick-${esc(key)}"><nav class="pick-row" aria-label="${esc(label)}">${chips}</nav><div class="pick-body${bodyClass ? ` ${bodyClass}` : ''}">${body}</div></div>`;
+    return `<div class="pick" id="pick-${esc(key)}"><nav class="pick-row" data-ovk-scroll aria-label="${esc(label)}">${chips}</nav><div class="pick-body${bodyClass ? ` ${bodyClass}` : ''}">${body}</div></div>`;
 }
 
 
@@ -200,7 +200,7 @@ function eventsSection(stats) {
         const chips = cats.map((ns) => `<a class="pick-chip" href="#event-${esc(slug(String(firstOf(ns).type)))}">${esc(serviceName(ns))}</a>`).join('');
         const cards = list.map((r) => eventCard(r, String(cats.indexOf(nsOf(r.type))))).join('');
         inner = `<p class="sc-lede">The public event types anyone may read, newest arrival first: when each last arrived, who published it and what it means. Subscribe to a pattern such as <code>live.stream.*</code> to get them as signed webhooks; any reader can also pull them with a cursor.</p>
-<div class="pick pick-events" id="pick-events"><nav class="pick-row" aria-label="Public events this week">${chips}</nav>
+<div class="pick pick-events" id="pick-events"><nav class="pick-row" data-ovk-scroll aria-label="Public events this week">${chips}</nav>
 <ul class="hm-events">${cards}</ul></div>
 ${publicTypes.length > list.length ? `<p class="hm-note">And ${esc(fmt(publicTypes.length - list.length))} more public event types this week.</p>` : ''}`;
     }
@@ -327,7 +327,7 @@ ${pickBlock({
         bodyClass: 'sc-grid',
         panes: FEATURES.map((f, i) => ({ id: String(i), label: f.title, html: featureCard(f) })),
     })}</section>`;
-    return showcase.hero({
+    return showcase.hero({ pageHead: { icon: 'live' },
         eyebrow: 'OpenVibe.Events · part of OpenVibe Services · alpha',
         title: 'Events your services', accent: 'can count on.',
         lede: 'The event backbone of the OpenVibe network. Publish an event once and every subscriber gets it: stored durably, signed, '
@@ -474,7 +474,7 @@ function renderHome({ siteUrl, apiUrl, stats = null }) {
         navbar: nav, footer, home: '/', navLinks: [{ label: 'Guide', href: `${SOURCE}#readme` }],
         head: [
             appIcon.headTags({ site: 'events' }),
-            `<link rel="stylesheet" href="${ovServe.url('kit.css')}">`,
+            `<link rel="stylesheet" href="${ovServe.url('kit.css')}"><script src="${ovServe.url('kit-web.js')}" defer></script>`,
             `<link rel="stylesheet" href="${ovServe.url(showcase.STYLESHEET)}">`,
             HOME_STYLE(),
         ].join('\n'),
@@ -502,12 +502,12 @@ function renderNotFound({ siteUrl = 'https://openvibe.events' } = {}) {
         footer: FOOTER, home: '/', navLinks: links,
         head: [
             appIcon.headTags({ site: 'events' }),
-            `<link rel="stylesheet" href="${ovServe.url('kit.css')}">`,
+            `<link rel="stylesheet" href="${ovServe.url('kit.css')}"><script src="${ovServe.url('kit-web.js')}" defer></script>`,
             `<link rel="stylesheet" href="${ovServe.url(showcase.STYLESHEET)}">`,
         ].join('\n'),
         body: `<div id="navbar-mount"></div>
 <main id="main" class="page">
-<h1>Page not found</h1>
+${kit.pageHead({ title: `Page not found`, icon: 'live', back: { href: '/', label: 'Home' } })}
 <p>There is no page at this address on ${esc(host)}. The link may be old or mistyped.</p>
 <div class="sc-actions">
 <a class="sc-btn sc-primary" href="/">${SITE_NAME} home</a>
