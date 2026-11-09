@@ -1,4 +1,6 @@
 'use strict';
+const kit = require('openvibe-shared/kit');
+const sectionIcon = (name) => kit.icon(name, { cls: 'ovk-heading-icon' });
 
 /**
  * The product home of OpenVibe.Events (openvibe.events, plan T7: the API origin is the product origin too).
@@ -119,8 +121,8 @@ const humanDate = (ms) => {
 function pickBlock({ key, label, panes, bodyClass = '' }) {
     if (!panes.length) return '';
     const chips = panes.map((p) => `<a class="pick-chip" href="#pp-${esc(key)}-${esc(p.id)}">${esc(p.label)}</a>`).join('');
-    const body = panes.map((p) => `<div class="pick-pane" id="pp-${esc(key)}-${esc(p.id)}">${p.head ? `<div class="pick-h"><h3>${esc(p.head)}</h3></div>` : ''}${p.html}</div>`).join('');
-    return `<div class="pick" id="pick-${esc(key)}"><nav class="pick-row" aria-label="${esc(label)}">${chips}</nav><div class="pick-body${bodyClass ? ` ${bodyClass}` : ''}">${body}</div></div>`;
+    const body = panes.map((p) => `<div class="pick-pane" id="pp-${esc(key)}-${esc(p.id)}">${p.head ? `<div class="pick-h"><h3 class="ovk-titled">${sectionIcon('grid')}${esc(p.head)}</h3></div>` : ''}${p.html}</div>`).join('');
+    return `<div class="pick" id="pick-${esc(key)}"><nav class="pick-row" data-ovk-scroll aria-label="${esc(label)}">${chips}</nav><div class="pick-body${bodyClass ? ` ${bodyClass}` : ''}">${body}</div></div>`;
 }
 
 
@@ -166,7 +168,7 @@ function eventCard(r, cat) {
     // list; each card says only its own: what happened, when it last arrived, who published it, how often, its name.
     void category;
     return `<li class="hm-event" id="event-${esc(slug(type))}" data-cat="${esc(cat)}">
-<h3 class="hm-event-title">${esc(eventTitle(type))}</h3>
+<h3 class="ovk-titled hm-event-title">${sectionIcon('live')}${esc(eventTitle(type))}</h3>
 <p class="hm-event-meta">${when} · from ${serviceLink(ns)} · ${esc(fmt(r.n))} this week</p>
 <p class="hm-event-type"><code>${esc(type)}</code></p>
 </li>`;
@@ -188,7 +190,7 @@ function eventsSection(stats) {
     if (!stats) {
         inner = '<p class="sc-lede">The live bus figures are unavailable right now, so this page is showing the product shell. The API, webhooks and the realtime stream described below keep running.</p>';
     } else if (!list.length) {
-        inner = '<p class="sc-lede">No public events have arrived this week. The bus is running; public event types appear here as they arrive.</p>';
+        inner = kit.empty({ icon: 'live', text: 'No public events have arrived this week. The bus is running; public event types appear here as they arrive.', action: { href: '#howto', label: 'Set up a webhook', icon: 'code' } });
     } else {
         // The categories, the one with the newest arrival first: one chip each.
         const cats = [];
@@ -198,11 +200,11 @@ function eventsSection(stats) {
         const chips = cats.map((ns) => `<a class="pick-chip" href="#event-${esc(slug(String(firstOf(ns).type)))}">${esc(serviceName(ns))}</a>`).join('');
         const cards = list.map((r) => eventCard(r, String(cats.indexOf(nsOf(r.type))))).join('');
         inner = `<p class="sc-lede">The public event types anyone may read, newest arrival first: when each last arrived, who published it and what it means. Subscribe to a pattern such as <code>live.stream.*</code> to get them as signed webhooks; any reader can also pull them with a cursor.</p>
-<div class="pick pick-events" id="pick-events"><nav class="pick-row" aria-label="Public events this week">${chips}</nav>
+<div class="pick pick-events" id="pick-events"><nav class="pick-row" data-ovk-scroll aria-label="Public events this week">${chips}</nav>
 <ul class="hm-events">${cards}</ul></div>
 ${publicTypes.length > list.length ? `<p class="hm-note">And ${esc(fmt(publicTypes.length - list.length))} more public event types this week.</p>` : ''}`;
     }
-    return `<section class="sc-sec" id="events" aria-labelledby="h-events"><h2 id="h-events">Public events this week</h2>${inner}</section>`;
+    return kit.section({ id: 'events', cls: 'sc-sec', title: 'Public events this week', icon: 'live', actions: [kit.button({ href: '#howto', label: 'Set up a webhook', icon: 'code', kind: 'quiet' })], body: inner });
 }
 
 
@@ -260,7 +262,7 @@ function activity(stats) {
     // own, and a reader on a phone is here for the events.
     const who = top.length ? foldBlock({
         id: 'who',
-        head: '<h2 id="h-who">Who published this week</h2>',
+        head: `<h2 id="h-who" class="ovk-titled">${sectionIcon('live')}Who published this week</h2>`,
         html: `<p class="sc-lede">Events by the service that published them over the last seven days. Every one was stored before any subscriber saw it.</p>
 <ul class="hm-bars">${top.map((r) => `<li><span class="hm-bar-name">${serviceLink(r.ns)}</span><span class="hm-bar" aria-hidden="true"><i style="width:${Math.max(2, Math.round((r.n / max) * 100))}%"></i></span><span class="hm-bar-n">${esc(fmt(r.n))}</span></li>`).join('')}</ul>
 ${stats.services.length > top.length ? `<p class="hm-note">And ${esc(stats.services.length - top.length)} more.</p>` : ''}`,
@@ -318,14 +320,14 @@ function sections({ apiUrl, stats = null }) {
     const publishers = stats && stats.services.filter((r) => r.ns !== 'app').length;
     // What you get: every card shown; on a phone a row of chips jumps to one. The cards keep the shared showcase's
     // own markup, so a wider screen shows the same grid of six.
-    const features = `<section class="sc-sec" aria-labelledby="h-features"><h2 id="h-features">What you get</h2>
+    const features = `<section class="sc-sec" aria-labelledby="h-features"><h2 id="h-features" class="ovk-titled">${sectionIcon('grid')}What you get</h2>
 ${pickBlock({
         key: 'features',
         label: 'What you get',
         bodyClass: 'sc-grid',
         panes: FEATURES.map((f, i) => ({ id: String(i), label: f.title, html: featureCard(f) })),
     })}</section>`;
-    return showcase.hero({
+    return showcase.hero({ pageHead: { icon: 'live' },
         eyebrow: 'OpenVibe.Events · part of OpenVibe Services · alpha',
         title: 'Events your services', accent: 'can count on.',
         lede: 'The event backbone of the OpenVibe network. Publish an event once and every subscriber gets it: stored durably, signed, '
@@ -344,7 +346,7 @@ ${pickBlock({
         ],
     }) + '</details>' + foldBlock({
         id: 'howto',
-        head: '<h2 id="h-howto">Receive a webhook safely</h2>',
+        head: `<h2 id="h-howto" class="ovk-titled">${sectionIcon('grid')}Receive a webhook safely</h2>`,
         html: showcase.steps({
             items: [
                 { title: 'Keep the secret', text: 'The subscription\'s secret is shown once, when you create it or rotate it.' },
@@ -355,8 +357,8 @@ ${pickBlock({
         }),
     }) + foldBlock({
         id: 'faq',
-        head: '<h2 id="h-faq">Questions</h2>',
-        html: `<div class="hm-faq">${FAQ.map(([q, a], i) => `<details class="hm-qa"${i === 0 ? ' open' : ''}><summary><h3>${esc(q)}</h3></summary><p>${esc(a)}</p></details>`).join('')}</div>`,
+        head: `<h2 id="h-faq" class="ovk-titled">${sectionIcon('help')}Questions</h2>`,
+        html: `<div class="hm-faq">${FAQ.map(([q, a], i) => `<details class="hm-qa"${i === 0 ? ' open' : ''}><summary><h3 class="ovk-titled">${sectionIcon('help')}${esc(q)}</h3></summary><p>${esc(a)}</p></details>`).join('')}</div>`,
     });
 }
 
@@ -472,6 +474,7 @@ function renderHome({ siteUrl, apiUrl, stats = null }) {
         navbar: nav, footer, home: '/', navLinks: [{ label: 'Guide', href: `${SOURCE}#readme` }],
         head: [
             appIcon.headTags({ site: 'events' }),
+            `<link rel="stylesheet" href="${ovServe.url('kit.css')}"><script src="${ovServe.url('kit-web.js')}" defer></script>`,
             `<link rel="stylesheet" href="${ovServe.url(showcase.STYLESHEET)}">`,
             HOME_STYLE(),
         ].join('\n'),
@@ -499,11 +502,12 @@ function renderNotFound({ siteUrl = 'https://openvibe.events' } = {}) {
         footer: FOOTER, home: '/', navLinks: links,
         head: [
             appIcon.headTags({ site: 'events' }),
+            `<link rel="stylesheet" href="${ovServe.url('kit.css')}"><script src="${ovServe.url('kit-web.js')}" defer></script>`,
             `<link rel="stylesheet" href="${ovServe.url(showcase.STYLESHEET)}">`,
         ].join('\n'),
         body: `<div id="navbar-mount"></div>
 <main id="main" class="page">
-<h1>Page not found</h1>
+${kit.pageHead({ title: `Page not found`, icon: 'live', back: { href: '/', label: 'Home' } })}
 <p>There is no page at this address on ${esc(host)}. The link may be old or mistyped.</p>
 <div class="sc-actions">
 <a class="sc-btn sc-primary" href="/">${SITE_NAME} home</a>

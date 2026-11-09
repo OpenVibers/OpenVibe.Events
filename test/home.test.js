@@ -5,6 +5,7 @@
 // It also serves the pinned OpenVibe Frame at /shared, answers robots.txt, sitemap.xml, llms.txt and
 // llms-full.txt, and names its own origin everywhere. A parse-only check of the nginx vhost too.
 const assert = require('assert');
+const { parseHTML } = require('linkedom');
 
 function assertSitemapLastmods(xml, tag = 'url') {
     const entries = [...xml.matchAll(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, 'g'))];
@@ -139,7 +140,7 @@ t('/favicon.ico is the app icon (SVG), cached a day', async () => {
 
 t('the home links the pinned Frame stylesheet, and /shared serves it', async () => {
     const r = await raw(h.base, '/', { Accept: 'text/html' });
-    const href = /<link rel="stylesheet" href="([^"]+)"/.exec(r.body);
+    const href = /<link rel="stylesheet" href="(\/shared\/showcase\.css[^"]+)"/.exec(r.body);
     assert.ok(href && href[1].startsWith('/shared/showcase.css?v='), `showcase.css link, got ${href && href[1]}`);
     const sheet = await raw(h.base, href[1]);
     assert.strictEqual(sheet.status, 200);
@@ -183,7 +184,7 @@ t('the server-rendered event list: title, real <time datetime>, place, descripti
     assert.match(page, /signed webhooks; any reader can also pull them with a cursor/, 'said once in the lede');
     // A type without its own words reads as its publisher and what happened.
     const odd = renderHome({ siteUrl: SITE, apiUrl: SITE, stats: { ...stats, public: [{ type: 'host.release_note.published', n: 1, last }] } });
-    assert.match(odd, /<h3 class="hm-event-title">OpenVibe\.Host: release note published<\/h3>/, 'its publisher and what happened');
+    assert.strictEqual(parseHTML(odd).document.querySelector('.hm-event-title').textContent, 'OpenVibe.Host: release note published', 'its publisher and what happened');
     assert.ok(!odd.includes('An event of type'), 'never "An event of type …"');
     // The category nav became the row of chips that picks one category at a time on a phone (the short-pages rule);
     // the links it held are still in the page, on the cards themselves.

@@ -2,6 +2,7 @@
 // The home on a phone: the blocks of the same kind are all shown, and a row of chips jumps to one (the owner,
 // 2026-10-31: never hide content to shorten); the parts a reader rarely needs are folds. A wider screen shows no chips.
 const assert = require('assert');
+const { parseHTML } = require('linkedom');
 const { renderHome } = require('../server/home');
 
 const last = Date.parse('2026-10-29T09:41:00Z');
@@ -20,7 +21,7 @@ t('the public events: every card shown, a chip per category that jumps to its fi
     const page = renderHome({ siteUrl: 'https://openvibe.events', apiUrl: 'https://openvibe.events', stats: STATS });
     const block = page.slice(page.indexOf('<div class="pick pick-events"'), page.indexOf('</section>', page.indexOf('<div class="pick pick-events"')));
     assert.ok(block.startsWith('<div class="pick pick-events"'), 'the block is on the home');
-    assert.match(block, /<nav class="pick-row" aria-label="Public events this week">/);
+    assert.match(block, /<nav class="pick-row" data-ovk-scroll aria-label="Public events this week">/);
     const chips = [...block.matchAll(/<a class="pick-chip" href="#(event-[a-z0-9-]+)">([^<]+)<\/a>/g)];
     assert.strictEqual(chips.length, 2, `a chip per category (${chips.length})`);
     assert.ok(chips[0][2].includes('OpenVibe.Live'), `the chip names the category (${chips[0][2]})`);
@@ -55,7 +56,7 @@ t('the parts a reader rarely needs are folds, open in the page and closed on a p
         assert.ok(page.includes(`document.getElementById("${id}")`), `${id} has the script that closes it on a phone`);
     }
     // The content of the folds stays in the page.
-    assert.match(page, /<h2 id="h-who">Who published this week<\/h2>/);
-    assert.match(page, /<h2 id="h-faq">Questions<\/h2>/);
+    assert.strictEqual(parseHTML(page).document.querySelector('#h-who').textContent, 'Who published this week');
+    assert.strictEqual(parseHTML(page).document.querySelector('#h-faq').textContent, 'Questions');
     assert.match(page, /What is OpenVibe\.Events\?/, 'the questions are still in the page');
 });
