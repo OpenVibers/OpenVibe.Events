@@ -43,6 +43,8 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
     'work', 'rent', 'help', 'quest',
     // MediaHub (OpenVibe.Video, Pics and Download), in its hyphen-free namespace: mediahub.*
     'media-hub',
+    // Mail (OpenVibe.Mail): mail.agent_inbox.received
+    'mail',
     // Today (OpenVibe.Today, plan 2026-10-28 §5.3): today.event.scheduled|updated|cancelled
     'today',
     // Bench (OpenVibe.Bench): bench.round.finished, bench.judgement.recorded, bench.rating.changed (contracts
