@@ -26,7 +26,7 @@
     "iovalkey": "^0.4.0",
     "openvibe-contracts": "https://codeload.github.com/OpenVibers/OpenVibe.Contracts/tar.gz/refs/tags/v0.338.0",
     "openvibe-sdk": "https://codeload.github.com/OpenVibers/OpenVibe.SDK/tar.gz/refs/tags/v0.94.0",
-    "openvibe-shared": "https://codeload.github.com/OpenVibers/OpenVibe.Shared/tar.gz/db48ebf8679c01d2bfe4136f6b6ba5a2e774661b",
+    "openvibe-shared": "https://codeload.github.com/OpenVibers/OpenVibe.Shared/tar.gz/e032c848bdbef1d898ed09ffcbce5833d6f5e54e",
     "pg": "^8.23.0"
   },
   "engines": {
