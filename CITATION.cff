@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use OpenVibe.Events in research or a product, cite it as below."
+title: openvibe-events
+type: software
+authors:
+  - name: OpenVibe
+    alias: OpenVibers
+    website: https://openvibe.network
+repository-code: https://github.com/OpenVibers/OpenVibe.Events
+url: https://openvibe.events
+license: AGPL-3.0-only
+abstract: "Durable events, subscriptions, delivery, retry, dead letters and replay, at openvibe.events."
+keywords:
+  - openvibe
+  - events
+  - message-queue
+  - nodejs
+  - pubsub
