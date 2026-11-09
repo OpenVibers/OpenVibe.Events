@@ -3,13 +3,14 @@
 // the public events with when each last arrived, never a payload, internal types never named, a clear empty state on
 // an empty or failed bus, and a FAQPage that holds exactly the questions the page shows.
 const assert = require('assert');
+const { parseHTML } = require('linkedom');
 const { boot, request, serviceToken, envelope, suite } = require('./helpers');
 const { createHomeStats } = require('../server/home-stats');
 
 const t = suite('home-stats');
 let h;
 const html = async () => (await request(h.base, 'GET', '/', { headers: { Accept: 'text/html' } })).text;
-const section = (page, id) => (new RegExp(`<section class="sc-sec"[^>]*aria-labelledby="${id}"[\\s\\S]*?</section>`).exec(page) || [''])[0];
+const section = (page, id) => parseHTML(page).document.querySelector(`section[aria-labelledby="${id}"]`)?.outerHTML || '';
 // The parts a reader rarely needs are folds now (the owner's short-pages rule, 2026-10-30): the same block, folded.
 const fold = (page, id) => (new RegExp(`<details class="hm-fold hm-fold-block" id="${id}"[\\s\\S]*?</details>`).exec(page) || [''])[0];
 
@@ -19,9 +20,12 @@ t('an empty bus: the counts are left out, the public event list says so, the res
     const page = await html();
     assert.ok(!page.includes('aria-labelledby="h-who"'));
     assert.ok(!page.includes('class="hm-stats"'), 'no tiles of zeros');
-    assert.match(page, /id="h-events">Public events this week<\/h2><p class="sc-lede">No public events have arrived this week\./);
+    const doc = parseHTML(page).document;
+    assert.strictEqual(doc.querySelector('#events-h').textContent, 'Public events this week');
+    assert.match(doc.querySelector('#events .ovk-empty').textContent, /No public events have arrived this week\./);
+    assert.strictEqual(doc.querySelector('#events .ovk-empty .ovk-btn').getAttribute('href'), '#howto');
     assert.match(page, /Events your services/);
-    assert.match(page, /id="h-faq">Questions</);
+    assert.strictEqual(parseHTML(page).document.querySelector('#h-faq').textContent, 'Questions');
 });
 
 t('published events show as counts by service, public types and the latest public events, never a payload', async () => {
@@ -45,7 +49,7 @@ t('published events show as counts by service, public types and the latest publi
 
     const { renderHome } = require('../server/home');
     const page = renderHome({ siteUrl: 'https://openvibe.events', apiUrl: 'https://openvibe.events', stats });
-    const events = section(page, 'h-events');
+    const events = section(page, 'events-h');
     assert.match(fold(page, 'who'), /<a href="https:\/\/openvibe\.live">OpenVibe\.Live<\/a>/);
     assert.match(events, /A channel went live on OpenVibe\.Live/);
     assert.match(events, /<time datetime="\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z">/);
@@ -77,7 +81,7 @@ t('JSON-LD: WebSite, the app, and a FAQPage with exactly the questions shown', a
     // The questions are in the fold now; they are the only bare <h3> left on the page.
     const faqAt = page.indexOf('<details class="hm-fold hm-fold-block" id="faq"');
     const faq = faqAt >= 0 ? page.slice(faqAt, page.indexOf('</main>')) : '';
-    const shown = [...faq.matchAll(/<h3>([^<]+)<\/h3>/g)].map((m) => m[1].replace(/&#39;/g, "'"));
+    const shown = [...parseHTML(faq).document.querySelectorAll('h3')].map((el) => el.textContent);
     assert.ok(shown.length >= 6);
     assert.deepStrictEqual(ld.find((x) => x['@type'] === 'FAQPage').mainEntity.map((q) => q.name), shown);
     const description = /<meta name="description" content="([^"]*)"/.exec(page)[1];

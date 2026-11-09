@@ -2,6 +2,7 @@
 // The home on a phone: the blocks of the same kind are all shown, and a row of chips jumps to one (the owner,
 // 2026-10-31: never hide content to shorten); the parts a reader rarely needs are folds. A wider screen shows no chips.
 const assert = require('assert');
+const { parseHTML } = require('linkedom');
 const { renderHome } = require('../server/home');
 
 const last = Date.parse('2026-10-29T09:41:00Z');
@@ -55,7 +56,7 @@ t('the parts a reader rarely needs are folds, open in the page and closed on a p
         assert.ok(page.includes(`document.getElementById("${id}")`), `${id} has the script that closes it on a phone`);
     }
     // The content of the folds stays in the page.
-    assert.match(page, /<h2 id="h-who">Who published this week<\/h2>/);
-    assert.match(page, /<h2 id="h-faq">Questions<\/h2>/);
+    assert.strictEqual(parseHTML(page).document.querySelector('#h-who').textContent, 'Who published this week');
+    assert.strictEqual(parseHTML(page).document.querySelector('#h-faq').textContent, 'Questions');
     assert.match(page, /What is OpenVibe\.Events\?/, 'the questions are still in the page');
 });
