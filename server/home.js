@@ -446,8 +446,7 @@ const HOME_STYLE = () => '<style>body{margin:0}/* The hero\'s aura is drawn 54px
     + '.ev-scene-subs{margin:0;text-align:center;color:var(--text-secondary,#96a7c2);font-size:.9rem}.ev-scene-subs b{color:var(--text-primary,#e6edf7)}'
     + '.ev-scene figcaption{text-align:center;color:var(--text-muted,#7386a3);font-size:.8rem}'
     + '@keyframes evSceneBar{from{transform:scaleX(.2)}to{transform:none}}@keyframes evSceneDot{0%{opacity:0;transform:translateY(0)}20%{opacity:1}80%{opacity:1}100%{opacity:0;transform:translateY(26px)}}'
-    + '@media (prefers-reduced-motion:reduce){.ev-scene-pubs i{animation:none}.ev-scene-flow i{display:none}}'
-    + 'html[data-ov-motion=reduced] .ev-scene-pubs i{animation:none}html[data-ov-motion=reduced] .ev-scene-flow i{display:none}'
+    + 'html[data-ov-motion=off] .ev-scene-flow i{display:none}'
     + '</style>';
 
 const FOOTER = { service: 'events', variant: 'full', mount: '#ov-footer', brandName: SITE_NAME, updates: '/updates' };

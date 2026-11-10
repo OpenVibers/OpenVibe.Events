@@ -20,7 +20,8 @@ t('the picture is the week\'s publishers, the bus and the subscriptions, from th
     assert.match(scene, /<p class="ev-scene-bus"><b>The bus<\/b><span>24,958 events this week<\/span><\/p>/);
     assert.match(scene, /<p class="ev-scene-subs"><b>61<\/b> subscriptions receive them, signed and retried<\/p>/);
     assert.ok(!/sc-orbit/.test(page), 'the generic orbit is gone');
-    assert.match(page, /@media \(prefers-reduced-motion:reduce\)\{\.ev-scene-pubs i\{animation:none\}\.ev-scene-flow i\{display:none\}\}/, 'still under reduced motion');
+    assert.match(page, /html\[data-ov-motion=off\] \.ev-scene-flow i\{display:none\}/, 'the traffic stops only with motion off');
+    assert.ok(!/prefers-reduced-motion/.test(page), 'Calm plays the scene, smaller and slower');
 });
 
 t('no subscriptions: that line is left out, not shown as zero', () => {
