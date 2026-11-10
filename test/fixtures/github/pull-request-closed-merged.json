@@ -1,0 +1,21 @@
+{
+  "action": "closed",
+  "number": 999,
+  "pull_request": {
+    "number": 999,
+    "title": "AL5: a ticket follows its pull request",
+    "merged": true,
+    "mergeable": true,
+    "mergeable_state": "clean",
+    "draft": false,
+    "html_url": "https://github.com/OpenVibers/OpenVibe.Codes/pull/999",
+    "url": "https://api.github.com/repos/OpenVibers/OpenVibe.Codes/pulls/999",
+    "changed_files": 7,
+    "additions": 412,
+    "deletions": 9,
+    "head": { "ref": "al5-scratch", "sha": "abc123def456abc123def456abc123def456abc1" },
+    "base": { "ref": "main", "sha": "b9354f8b9354f8b9354f8b9354f8b9354f8b9354" }
+  },
+  "repository": { "full_name": "OpenVibers/OpenVibe.Codes" },
+  "sender": { "login": "OpenVibers", "type": "User" }
+}

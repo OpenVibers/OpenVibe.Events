@@ -1,0 +1,18 @@
+{
+  "action": "submitted",
+  "pull_request": {
+    "number": 999,
+    "html_url": "https://github.com/OpenVibers/OpenVibe.Codes/pull/999",
+    "head": { "ref": "al5-scratch", "sha": "abc123def456abc123def456abc123def456abc1" },
+    "base": { "ref": "main" }
+  },
+  "repository": { "full_name": "OpenVibers/OpenVibe.Codes" },
+  "review": {
+    "id": 2,
+    "state": "approved",
+    "body": "",
+    "html_url": "https://github.com/OpenVibers/OpenVibe.Codes/pull/999#pullrequestreview-2",
+    "user": { "login": "owner-person", "type": "User" }
+  },
+  "sender": { "login": "owner-person", "type": "User" }
+}

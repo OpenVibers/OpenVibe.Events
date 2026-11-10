@@ -132,6 +132,49 @@ Events is the bus, so two of its columns name a person: the `actor` (the Subject
 
 The route is `POST /internal/events`, signed (v2) and loopback only, mounted by `server/app.js`; `server/index.js` creates the two subscriptions at boot with `startSubscriptions` (`EVENTS_EVENTS_URL`, `EVENTS_EVENTS_SECRET` and the service's own OAuth client). Without the secret the route is off and the account events do not reach Events. The receipts of what it applied are in `account_data_events` (migration 0010), so a redelivered export or deletion changes nothing. `test/account-data.test.js` asserts `uncovered()` is empty, so a new table with a person column fails CI until it is covered or exempted with a reason.
 
+### GitHub webhooks in (AL5: a ticket follows its pull request)
+
+`server/github.js` is the one receiver of GitHub's pull-request events on this estate (nothing else receives
+them). GitHub POSTs a delivery to `POST /api/v1/in/github`; the ingress verifies `X-Hub-Signature-256` against
+`EVENTS_GITHUB_WEBHOOK_SECRET` (HMAC-SHA256 of the raw body; comma-separated while rotating; 16 characters or
+more), claims `X-GitHub-Delivery` in `github_deliveries` (migration 0012) so a redelivery stores nothing, and
+normalizes it into the ordinary github.* envelopes any subscriber can consume:
+
+- `github.check.completed` — a `check_run`, `check_suite` or `workflow_run` finished: `kind`, `conclusion`,
+  `check_name`, `head_sha`, `html_url`, `details_url`, and `output` (title/summary/text — the failing job's log
+  tail when GitHub sends one). Codes decides which conclusions are red.
+- `github.pr.updated` — a `pull_request` opened/synchronize/reopened/closed: `merged`, `mergeable`,
+  `mergeable_state`, `head_sha`, `head_ref`, `base`, `changed_files`, `html_url`, `files_url`.
+- `github.pr.commented` — an `issue_comment` on a PR, a submitted `pull_request_review` or a
+  `pull_request_review_comment`: `author`, `author_type` (Bot/User), `author_association`, `state`, `body`,
+  `comment_id`, `path`, `line`, `head_sha`. A bare approval, an edited comment and a dismissed review are not
+  new instructions and store nothing.
+
+The subject is `{ type: 'pr', id: '<owner>/<name>#<number>' }` (repo lowercased), the key Codes' `pr_bindings`
+matches on. `202` answers `{ event_ids }` (or `{ ignored }` for `ping` and kinds with no pull request); a
+redelivery answers `{ event_ids, duplicate: true }`; `401` is a bad signature; `404` while
+`EVENTS_GITHUB_WEBHOOK_SECRET` is unset. The route is off by default and never stores a secret. The body limit is
+1 MB; the per-address window is 300 deliveries a minute.
+
+**What the owner adds** (this PR creates nothing on GitHub):
+
+1. `/etc/openvibe/events.env`: `EVENTS_GITHUB_WEBHOOK_SECRET=<at least 16 random characters>`; restart
+   `openvibe-events`.
+2. Apply the `/api/v1/in/github` location from [deploy/nginx/openvibe.events.conf](deploy/nginx/openvibe.events.conf)
+   and reload nginx (the path must reach 127.0.0.1:4300; the catch-all under `/api/` answers 404).
+3. On the repository (`OpenVibers/*`) → Settings → Webhooks → Add webhook: Payload URL
+   `https://openvibe.events/api/v1/in/github`, content type `application/json`, the same secret, SSL
+   verification on, and the events **Check runs**, **Check suites**, **Pull requests**, **Issue comments**,
+   **Pull request reviews**, **Pull request review comments** (optionally **Workflow runs**). A `ping` delivery
+   answers `202 {"ignored":"ping"}`.
+4. On Codes: set `CODES_PR_FOLLOW_ENABLED=1`; Codes subscribes to the github.* event types above at boot and
+   receives them at `/internal/events` under its existing `CODES_EVENTS_SECRET`, with the usual Events delivery
+   v2 signature check. The pull request the worker opened binds to the task there, and the same receiver wakes it.
+
+`test/github.test.js` covers the signature, the normalization of every event type (including the log tail and a
+review comment's path/line), a multi-PR delivery claimed once, an idempotent redelivery, and the off-by-default
+route; `test/fixtures/github/` holds the recorded payloads.
+
 ### Retention: three tiers
 
 [ADR-042](https://github.com/OpenVibers/OpenVibe.Contracts/blob/main/docs/adr/ADR-042-events-fabric.md) decision 8. An event lives in one tier at a time:

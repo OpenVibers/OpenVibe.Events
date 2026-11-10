@@ -27,6 +27,8 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
     'bot',
     // Watch (OpenVibe.Watch): watch.observation.recorded, watch.watch.triggered, watch.check.failed
     'watch',
+    // GitHub webhooks in (AL5): the ingress stores github.check.completed|github.pr.updated|github.pr.commented.
+    'github',
     // Run (OpenVibe.Run, plan T14): run.job.queued|started|succeeded|failed|cancelled|expired
     'run',
     // Space (OpenVibe.Space, plan T10 step 3): space.thread.created, space.post.created, space.moderation.action
@@ -275,6 +277,12 @@ function load(env = process.env) {
         accountData: {
             url: (env.EVENTS_EVENTS_URL || baseUrl).replace(/\/+$/, ''),
             secret: String(env.EVENTS_EVENTS_SECRET || '').trim(),
+        },
+
+        // GitHub webhooks in (AL5: server/github.js): HMAC secrets for X-Hub-Signature-256, comma-separated for
+        // rotation. Empty: POST /api/v1/in/github answers 404 and no github.* event is ever stored.
+        github: {
+            secrets: String(env.EVENTS_GITHUB_WEBHOOK_SECRET || '').split(',').map((s) => s.trim()).filter((s) => s.length >= 16),
         },
 
         // Realtime (SSE) gateway
