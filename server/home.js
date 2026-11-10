@@ -93,11 +93,27 @@ const serviceUrl = (ns) => (SERVICES[ns] || [])[1] || null;
 // The bus itself: the services that published this week circle the core, the busiest on the inner ring. With fewer than
 // four (a quiet week, or the numbers are late) the hero keeps the aura.
 const RING_ICONS = new Set((({ names }) => (typeof names === 'function' ? names() : names || []))(require('openvibe-shared/ov-icons')));
-function busOrbit(stats) {
-    const svc = ((stats && stats.services) || []).filter((r) => r.ns !== 'app' && RING_ICONS.has(r.ns) && serviceUrl(r.ns));
-    if (svc.length < 4) return null;
-    const node = (r) => ({ icon: `ov:${r.ns}`, label: serviceName(r.ns).replace(/^OpenVibe\./, ''), href: serviceUrl(r.ns) });
-    return { label: `${svc.length} services published events this week`, center: { title: 'Events', sub: 'publish once' }, inner: svc.slice(0, 6).map(node), outer: svc.slice(6, 16).map(node) };
+/**
+ * The home's picture, drawn from the bus's own counts (home-stats.js): the services that published most this week,
+ * each with a bar as long as its share of the largest; the bus they all publish to, with the week's total; and the
+ * subscriptions that received them. Three dots travel from the publishers to the bus once when the page opens (CSS,
+ * HOME_STYLE .ev-scene) and are simply not drawn under reduced motion. No sample numbers: null with fewer than two
+ * publishers, and the subscriptions line only when there are some.
+ */
+function busScene(stats) {
+    const svc = ((stats && stats.services) || []).filter((r) => r.ns !== 'app' && Number(r.n) > 0);
+    if (svc.length < 2) return null;
+    const top = svc.slice(0, 4);
+    const max = Math.max(...top.map((r) => Number(r.n)));
+    const rows = top.map((r) => `<li><span>${esc(serviceName(r.ns).replace(/^OpenVibe\./, ''))}</span><i style="--w:${Math.max(6, Math.round((Number(r.n) / max) * 100))}%"></i><b>${esc(fmt(r.n))}</b></li>`).join('');
+    const more = svc.length - top.length;
+    const subs = Number(stats.subscriptions) || 0;
+    return `<figure class="ev-scene" aria-label="Who published events this week, and who received them">`
+        + `<ol class="ev-scene-pubs">${rows}</ol>${more > 0 ? `<p class="ev-scene-more">and ${esc(fmt(more))} more ${more === 1 ? 'service' : 'services'}</p>` : ''}`
+        + '<div class="ev-scene-flow" aria-hidden="true"><i></i><i></i><i></i></div>'
+        + `<p class="ev-scene-bus"><b>The bus</b><span>${esc(fmt(stats.week))} ${Number(stats.week) === 1 ? 'event' : 'events'} this week</span></p>`
+        + (subs ? `<p class="ev-scene-subs"><b>${esc(fmt(subs))}</b> ${subs === 1 ? 'subscription receives' : 'subscriptions receive'} them, signed and retried</p>` : '')
+        + '<figcaption>This week, from the bus\'s own counts.</figcaption></figure>';
 }
 const nsOf = (type) => String(type).split('.')[0];
 const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -333,7 +349,10 @@ ${pickBlock({
         lede: 'The event backbone of the OpenVibe network. Publish an event once and every subscriber gets it: stored durably, signed, '
             + `retried with backoff, and replayable after a failure.${publishers ? ` ${publishers} OpenVibe services published to it this week.` : ''}`,
         actions: [{ label: 'Read the guide', href: `${SOURCE}#readme`, primary: true }, { label: 'See an example', href: '#examples' }],
-        orbit: busOrbit(stats),
+        // The hero's picture is the bus's own week (2026-11-10; the owner: no more "generic circled" homes): who
+        // published, how much, and how many subscriptions received it. Real counts only: with fewer than two
+        // publishers there is no picture.
+        ...(busScene(stats) ? { aside: { html: busScene(stats) } } : {}),
         note: `Alpha. The API is at ${apiUrl}; developer apps sign in through OpenVibe.Network.`,
     }) + '<section class="sc-sec sc-part-of"><p class="sc-note">Part of <a href="https://openvibe.services/">OpenVibe Services</a>: the building blocks every OpenVibe product runs on, with one console, one account and one SDK.</p></section>' + live.statRow + live.events + live.who + features + '<details class="hm-fold"><summary>Publish, subscribe, pull<span>curl examples</span></summary>' + showcase.code({
         id: 'examples',
@@ -411,6 +430,24 @@ const HOME_STYLE = () => '<style>body{margin:0}/* The hero\'s aura is drawn 54px
     + '@media (max-width:420px){.sc-hero,.sc-sec,.sc-cta{padding-left:16px;padding-right:16px}}'
     // Touch targets on phones (fleet audit, 2026-10-29): touch pointers only.
     + '@media (pointer: coarse){.hm-cats a{min-height:44px;display:inline-flex;align-items:center}.hm-bar-name a{min-height:44px;display:inline-flex;align-items:center}.hm-qa>summary{min-height:44px}}'
+    // The hero's picture (busScene): publishers and their bars, the flow, the bus, the subscriptions.
+    + '.ev-scene{width:min(100%,400px);margin:0 auto;display:grid;gap:10px}'
+    + '.ev-scene-pubs{list-style:none;margin:0;padding:12px 14px;display:grid;gap:8px;border:1px solid var(--border,#1f2d47);border-radius:16px;background:var(--bg-secondary,#101828)}'
+    + '.ev-scene-pubs li{display:grid;grid-template-columns:minmax(0,5.5em) minmax(0,1fr) auto;align-items:center;gap:10px;font-size:.9rem;color:var(--text-secondary,#96a7c2)}'
+    + '.ev-scene-pubs span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-primary,#e6edf7);font-weight:650}'
+    + '.ev-scene-pubs i{height:8px;width:var(--w);border-radius:999px;background:linear-gradient(90deg,var(--accent,#3b82f6),var(--accent-light,#60a5fa));transform-origin:left center;animation:evSceneBar .9s var(--ov-ease-out,ease-out) .3s both}'
+    + '.ev-scene-pubs b{font-variant-numeric:tabular-nums;color:var(--text-primary,#e6edf7)}'
+    + '.ev-scene-more{margin:-4px 0 0;text-align:center;color:var(--text-muted,#7386a3);font-size:.8rem}'
+    + '.ev-scene-flow{position:relative;height:34px;justify-self:center;width:2px;border-radius:2px;background:color-mix(in srgb,var(--accent,#3b82f6) 35%,transparent)}'
+    + '.ev-scene-flow i{position:absolute;left:-3px;top:0;width:8px;height:8px;border-radius:50%;background:var(--accent-light,#60a5fa);opacity:0;animation:evSceneDot 1.1s var(--ov-ease-in-out,ease-in-out) 1 both}'
+    + '.ev-scene-flow i:nth-child(1){animation-delay:.9s}.ev-scene-flow i:nth-child(2){animation-delay:1.25s}.ev-scene-flow i:nth-child(3){animation-delay:1.6s}'
+    + '.ev-scene-bus{display:grid;gap:1px;justify-items:center;margin:0;padding:12px 14px;border-radius:16px;border:1px solid color-mix(in srgb,var(--accent,#3b82f6) 50%,transparent);background:color-mix(in srgb,var(--accent,#3b82f6) 12%,var(--bg-secondary,#101828))}'
+    + '.ev-scene-bus b{font-size:1.05rem;color:var(--text-primary,#e6edf7)}.ev-scene-bus span{color:var(--text-secondary,#96a7c2);font-size:.9rem;font-variant-numeric:tabular-nums}'
+    + '.ev-scene-subs{margin:0;text-align:center;color:var(--text-secondary,#96a7c2);font-size:.9rem}.ev-scene-subs b{color:var(--text-primary,#e6edf7)}'
+    + '.ev-scene figcaption{text-align:center;color:var(--text-muted,#7386a3);font-size:.8rem}'
+    + '@keyframes evSceneBar{from{transform:scaleX(.2)}to{transform:none}}@keyframes evSceneDot{0%{opacity:0;transform:translateY(0)}20%{opacity:1}80%{opacity:1}100%{opacity:0;transform:translateY(26px)}}'
+    + '@media (prefers-reduced-motion:reduce){.ev-scene-pubs i{animation:none}.ev-scene-flow i{display:none}}'
+    + 'html[data-ov-motion=reduced] .ev-scene-pubs i{animation:none}html[data-ov-motion=reduced] .ev-scene-flow i{display:none}'
     + '</style>';
 
 const FOOTER = { service: 'events', variant: 'full', mount: '#ov-footer', brandName: SITE_NAME, updates: '/updates' };
