@@ -2,6 +2,9 @@
 
 > Durable events, subscriptions, delivery, retry, dead letters and replay for the network.
 
+**Live site:** https://openvibe.events · **API docs:** https://openvibe.services · **For AI:** https://openvibe.events/llms.txt
+**Run it:** `npm ci && npm run dev` (Node 20 or newer) · **Tests:** `npm test`
+
 **Status:** alpha (roadmap Wave 3), deployed on `openvibe-ovh` (unit `openvibe-events`, 127.0.0.1:4300, public at `https://openvibe.events`). In the week to 2026-10-21, 28 of the network's services published to it in production (`events.source`; Search, Sources, Reviews, AI and Work the most), and seven developer apps sent events of their own; every consumer webhook requires signature v2. Media's completion events reach Live only through Events (`/internal/media-events`; Live's direct `/internal/media-webhook` was retired on 2026-10-10), and the shared notification bell can follow `network.notification.created` over the realtime stream with a Network ticket.  
 **Domain:** `openvibe.events` is the API and product origin (plan T7): the JSON API, the realtime gateway (ADR-005 put Realtime inside Events; `realtime.openvibe.network` has no runtime of its own), the home page and its `robots.txt`/`sitemap.xml`/`llms.txt`. The old `events.openvibe.network` address was retired on 2026-10-10.  
 **Plan:** OpenVibe End-to-End Realignment & Implementation Plan, revision 3 (20 Sep 2026), §6 and §6.3.  
