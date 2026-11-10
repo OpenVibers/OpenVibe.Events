@@ -102,6 +102,24 @@ route('get', '/events/{id}', {
     responses: { 200: json('The event and its position', eventItem), ...errors([401, 403, 404, 429]) },
 });
 
+// ── GitHub webhooks in (AL5) ───────────────────────────────────────────────────────────────────
+route('post', '/in/github', {
+    operationId: 'receiveGithubWebhook', summary: 'Receive a signed GitHub webhook (AL5)', tags: ['github'], security: [],
+    description: 'GitHub\'s pull request, check and comment deliveries. The body is verified with X-Hub-Signature-256 (HMAC-SHA256 with EVENTS_GITHUB_WEBHOOK_SECRET) and X-GitHub-Delivery is claimed once; a delivery is normalized to github.check.completed, github.pr.updated or github.pr.commented envelopes and stored for subscribers. Off (404) while the secret is unset; a ping answers 202 and stores nothing.',
+    parameters: [
+        { name: 'X-Hub-Signature-256', in: 'header', required: true, schema: str({ pattern: '^sha256=[0-9a-f]{64}$' }) },
+        { name: 'X-GitHub-Event', in: 'header', required: true, schema: str() },
+        { name: 'X-GitHub-Delivery', in: 'header', required: true, schema: str() },
+    ],
+    requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } },
+    responses: {
+        202: json('Stored, or ignored when the delivery carries no pull request', { type: 'object', properties: {
+            event_ids: arrayOf(str({ pattern: '^evt_[0-9A-HJKMNP-TV-Z]{26}$' })), duplicate: { type: 'boolean' }, ignored: str(),
+        } }),
+        ...errors([400, 401, 404, 429]),
+    },
+});
+
 // ── Checkpoints ───────────────────────────────────────────────────────────────────────────────
 route('get', '/checkpoints', {
     operationId: 'getCheckpoint', summary: 'The caller\'s stored cursor for a topic pattern', tags: ['checkpoints'], security: [...SERVICE, ...APP],

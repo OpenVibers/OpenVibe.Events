@@ -73,6 +73,14 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     app.options('/realtime/stream', realtime.cors);
     app.get('/realtime/stream', realtime.cors, realtime.handler);
 
+    // GitHub webhooks in (AL5: server/github.js): raw body (the HMAC covers it), mounted before the JSON
+    // parser. Off (404) without EVENTS_GITHUB_WEBHOOK_SECRET.
+    {
+        const { createGithubIngress } = require('./github');
+        const ingress = createGithubIngress({ config, store, log });
+        app.post('/api/v1/in/github', ingress.raw, ingress.handler);
+    }
+
     app.use('/api', express.json({ limit: '2mb', type: ['application/json', 'application/*+json'] }));
 
     app.get('/api/health', (_req, res) => {

@@ -1,0 +1,19 @@
+{
+  "action": "created",
+  "pull_request": {
+    "number": 999,
+    "html_url": "https://github.com/OpenVibers/OpenVibe.Codes/pull/999",
+    "head": { "ref": "al5-scratch", "sha": "abc123def456abc123def456abc123def456abc1" },
+    "base": { "ref": "main" }
+  },
+  "comment": {
+    "id": 4,
+    "body": "This swallow hides the 401; return the problem instead.",
+    "path": "server/github.js",
+    "line": 212,
+    "html_url": "https://github.com/OpenVibers/OpenVibe.Codes/pull/999#discussion_r4",
+    "user": { "login": "owner-person", "type": "User" }
+  },
+  "repository": { "full_name": "OpenVibers/OpenVibe.Codes" },
+  "sender": { "login": "owner-person", "type": "User" }
+}

@@ -1,0 +1,18 @@
+{
+  "action": "completed",
+  "check_run": {
+    "id": 224,
+    "name": "codes-ci / tests",
+    "status": "completed",
+    "conclusion": "failure",
+    "head_sha": "def456abc123def456abc123def456abc123def4",
+    "html_url": "https://github.com/OpenVibers/OpenVibe.Codes/actions/runs/113/job/224",
+    "output": { "title": "1 failing test", "summary": "one check names two pull requests", "text": "not ok 1 - shared" },
+    "pull_requests": [
+      { "id": 888, "number": 888, "base": { "ref": "main" }, "head": { "ref": "al5-a" }, "url": "https://api.github.com/repos/OpenVibers/OpenVibe.Codes/pulls/888" },
+      { "id": 999, "number": 999, "base": { "ref": "main" }, "head": { "ref": "al5-scratch" }, "url": "https://api.github.com/repos/OpenVibers/OpenVibe.Codes/pulls/999" }
+    ]
+  },
+  "repository": { "full_name": "OpenVibers/OpenVibe.Codes" },
+  "sender": { "login": "github-actions[bot]", "type": "Bot" }
+}

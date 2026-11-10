@@ -1,0 +1,31 @@
+{
+  "action": "completed",
+  "check_run": {
+    "id": 222,
+    "name": "codes-ci / tests",
+    "status": "completed",
+    "conclusion": "failure",
+    "head_sha": "abc123def456abc123def456abc123def456abc1",
+    "details_url": "https://github.com/OpenVibers/OpenVibe.Codes/actions/runs/111",
+    "html_url": "https://github.com/OpenVibers/OpenVibe.Codes/actions/runs/111/job/222",
+    "started_at": "2026-11-10T10:00:00Z",
+    "completed_at": "2026-11-10T10:04:12Z",
+    "output": {
+      "title": "1 failing test",
+      "summary": "test/pr-bindings.test.js failed on the branch",
+      "text": "not ok 3 - a red check wakes the worker once\n  AssertionError: expected 0 to equal 1\n      at Test.<anonymous> (test/pr-bindings.test.js:88:9)\n# tests 12\n# pass 11\n# fail 1\n",
+      "annotations_count": 0
+    },
+    "pull_requests": [
+      {
+        "id": 999,
+        "number": 999,
+        "base": { "ref": "main" },
+        "head": { "ref": "al5-scratch", "sha": "abc123def456abc123def456abc123def456abc1" },
+        "url": "https://api.github.com/repos/OpenVibers/OpenVibe.Codes/pulls/999"
+      }
+    ]
+  },
+  "repository": { "full_name": "OpenVibers/OpenVibe.Codes" },
+  "sender": { "login": "github-actions[bot]", "type": "Bot" }
+}

@@ -34,6 +34,8 @@ const PLANTED = {
     // The account-data consumer (ADR-033): the secret its own loopback subscription signs the two
     // account topics with. It is Events' own signing secret, never echoed.
     EVENTS_EVENTS_SECRET: `ovsecret-events-account-${crypto.randomBytes(12).toString('hex')}`,
+    // The GitHub webhook ingress (AL5): the HMAC secret GitHub signs deliveries with, never echoed.
+    EVENTS_GITHUB_WEBHOOK_SECRET: `ovsecret-events-github-${crypto.randomBytes(12).toString('hex')}`,
 };
 
 t('Events reads no secret from its environment but the planted ones', async () => {

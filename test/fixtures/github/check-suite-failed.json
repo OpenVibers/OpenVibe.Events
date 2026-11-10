@@ -1,0 +1,16 @@
+{
+  "action": "completed",
+  "check_suite": {
+    "id": 300,
+    "status": "completed",
+    "conclusion": "failure",
+    "head_branch": "al5-scratch",
+    "head_sha": "abc123def456abc123def456abc123def456abc1",
+    "html_url": "https://github.com/OpenVibers/OpenVibe.Codes/actions/runs/120",
+    "pull_requests": [
+      { "number": 999, "base": { "ref": "main" }, "head": { "ref": "al5-scratch", "sha": "abc123def456abc123def456abc123def456abc1" }, "url": "https://api.github.com/repos/OpenVibers/OpenVibe.Codes/pulls/999" }
+    ]
+  },
+  "repository": { "full_name": "OpenVibers/OpenVibe.Codes" },
+  "sender": { "login": "github-actions[bot]", "type": "Bot" }
+}

@@ -1,0 +1,15 @@
+{
+  "action": "edited",
+  "comment": {
+    "id": 3,
+    "body": "stop",
+    "html_url": "https://github.com/OpenVibers/OpenVibe.Codes/pull/999#issuecomment-3",
+    "user": { "login": "owner-person", "type": "User" }
+  },
+  "issue": {
+    "number": 999,
+    "pull_request": { "url": "https://api.github.com/repos/OpenVibers/OpenVibe.Codes/pulls/999" }
+  },
+  "repository": { "full_name": "OpenVibers/OpenVibe.Codes" },
+  "sender": { "login": "owner-person", "type": "User" }
+}
