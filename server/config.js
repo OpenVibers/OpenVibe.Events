@@ -66,7 +66,11 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
     // Agent (OpenVibe.Actor): agent.step.started|updated|ended. The Actor manifest declares them (contracts 0.298.0),
     // so the source has to be known here or its events are refused as events.unknown_source (found 2026-11-08 when
     // the contracts pin moved to v0.338.0). They live in the network's shared agent.* namespace, not in actor.*.
-    'actor'];
+    'actor',
+    // Meme (OpenVibe.Meme): meme.caption.created. Its manifest declared it in contracts 0.406.0, so the source has to
+    // be known here or the caption event is refused as events.unknown_source (found 2026-11-11 when the contracts pin
+    // moved to v0.406.0).
+    'meme'];
 
 /**
  * Namespaces that belong to the network rather than to one service. `provider.*` carries storage
