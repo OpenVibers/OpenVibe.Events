@@ -26,6 +26,8 @@ const ovIcons = require('openvibe-shared/ov-icons');
 const SITE_NAME = 'OpenVibe.Events';
 const NETWORK_URL = 'https://openvibe.network';
 const SOURCE = 'https://github.com/OpenVibers/OpenVibe.Events';
+// The site's own places, the same on every page. The guide lives on GitHub, so its row is named for where it goes.
+const NAV_LINKS = [{ label: 'Events', href: '/' }, { label: 'GitHub', href: `${SOURCE}#readme` }];
 const DESCRIPTION = 'The OpenVibe network\'s event bus: publish once and every subscriber gets it signed, retried and replayable, '
     + 'by webhook, pull or realtime stream.';
 
@@ -457,7 +459,7 @@ const UPDATES_FONT = "<style>:where(body){font-family:var(--ov-font,'Inter',-app
 
 /** /updates: what shipped on this site, the network's shared update log (openvibe-shared/frame updatesBody). */
 function renderUpdates({ siteUrl }) {
-    const links = [{ label: 'Guide', href: `${SOURCE}#readme` }];
+    const links = NAV_LINKS;
     return shell.page({
         name: SITE_NAME, service: 'events', lang: 'en',
         title: `What shipped on ${SITE_NAME}`,
@@ -483,7 +485,7 @@ function renderHome({ siteUrl, apiUrl, stats = null }) {
     const nav = {
         service: 'events',
         apiBase: NETWORK_URL, sessionUrl: '/auth/me', loginUrl: '/auth/login?next={path}', logoutUrl: '/auth/logout?next={url}', silentLogin: '/auth/login?silent=1&next={url}',
-        links: [{ label: 'Guide', href: `${SOURCE}#readme` }],
+        links: NAV_LINKS,
         history: { type: 'page', title: SITE_NAME },
     };
     const footer = FOOTER;
@@ -507,7 +509,7 @@ function renderHome({ siteUrl, apiUrl, stats = null }) {
             // The publisher the site's own WebSite node names by @id, so the reference resolves on the page.
             seo.jsonLd.organization(),
         ]),
-        navbar: nav, footer, home: '/', navLinks: [{ label: 'Guide', href: `${SOURCE}#readme` }],
+        navbar: nav, footer, home: '/', navLinks: NAV_LINKS,
         head: [
             appIcon.headTags({ site: 'events' }),
             `<link rel="stylesheet" href="${ovServe.url('kit.css')}"><script src="${ovServe.url('kit-web.js')}" defer></script>`,
@@ -527,7 +529,7 @@ ${sections({ apiUrl, stats })}
  */
 function renderNotFound({ siteUrl = 'https://openvibe.events' } = {}) {
     const host = String(siteUrl).replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-    const links = [{ label: 'Guide', href: `${SOURCE}#readme` }];
+    const links = NAV_LINKS;
     return shell.page({
         name: SITE_NAME, service: 'events', lang: 'en',
         title: `Page not found · ${SITE_NAME}`,
@@ -553,4 +555,4 @@ ${kit.pageHead({ title: `Page not found`, icon: 'live', back: { href: '/', label
     });
 }
 
-module.exports = { renderHome, renderUpdates, renderNotFound, HOME_CSP, DESCRIPTION, sections };
+module.exports = { renderHome, renderUpdates, renderNotFound, HOME_CSP, DESCRIPTION, sections, NAV_LINKS };

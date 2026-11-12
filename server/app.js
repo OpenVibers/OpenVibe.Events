@@ -51,7 +51,14 @@ function createApp({ config, store, auth, keys, worker, realtime, metrics, dnsLo
     // Terms, Privacy and DMCA in this site's own words (openvibe-shared/legal, profile 'service'; 11-03: the footer's
     // legal links answered 404 here). The facts must match the code: change both together.
     const legal = require('openvibe-shared/legal');
-    app.get(legal.PATHS, legal.handler({
+    // Shared's legal template starts the navbar without links, so /terms and /privacy showed its fallback
+    // (Home, My Account, Themes) instead of Events' own pages. Add Events' list to that init call.
+    const navLinks = JSON.stringify(require('./home').NAV_LINKS);
+    app.get(legal.PATHS, (req, res, next) => {
+        const send = res.send.bind(res);
+        res.send = (body) => send(String(body).replace('try{OpenVibeNavbar.init({service:', `try{OpenVibeNavbar.init({links:${navLinks},service:`));
+        next();
+    }, legal.handler({
         "host": "openvibe.events",
         "name": "OpenVibe.Events",
         "id": "events",
