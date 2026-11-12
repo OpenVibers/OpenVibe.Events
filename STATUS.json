@@ -8,7 +8,7 @@
   "port": 4300,
   "domain": "openvibe.events",
   "contracts": "openvibe-contracts v0.417.0",
-  "sdk": "openvibe-sdk v0.160.0",
+  "sdk": "openvibe-sdk v0.161.0",
   "shared": "openvibe-shared v4.225.0",
   "capabilities": [
     "events.event.publish",
