@@ -84,7 +84,7 @@ const DEFAULT_SOURCES = ['live', 'media', 'network', 'community', 'chat', 'openr
  * Developer apps can never publish a shared prefix. EVENTS_SHARED_PREFIXES (comma-separated)
  * replaces the default.
  */
-const DEFAULT_SHARED_PREFIXES = ['provider.', 'share.', 'agent.'];
+const DEFAULT_SHARED_PREFIXES = ['provider.', 'share.', 'agent.', 'agents.'];
 
 
 function sourcePrefixes(env) {

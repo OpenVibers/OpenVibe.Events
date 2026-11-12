@@ -43,7 +43,7 @@ t('config: every source prefix must start with the source', () => {
 });
 
 t('config: network-wide prefixes are shared, source namespaces stay owned', () => {
-    assert.deepStrictEqual(load({}).sharedPrefixes, ['provider.', 'share.', 'agent.']);
+    assert.deepStrictEqual(load({}).sharedPrefixes, ['provider.', 'share.', 'agent.', 'agents.']);
 
     const c = load({ EVENTS_SHARED_PREFIXES: 'provider.,storage.' });
     assert.deepStrictEqual(c.sharedPrefixes, ['provider.', 'storage.']);

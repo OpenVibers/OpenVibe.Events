@@ -12,7 +12,7 @@ const manifests = fs.readdirSync(dir).filter((f) => f.endsWith('.json')).map((f)
 const producers = manifests.filter((m) => (m.eventsProduced || []).length).map((m) => m.id || m.service).filter((id) => id !== 'events');
 const missing = producers.filter((id) => !DEFAULT_SOURCES.includes(id));
 assert.deepStrictEqual(missing, [], `producers that may not publish: ${missing.join(', ')}`);
-// A shared prefix (provider.*, share.*, agent.*) belongs to the network, not to one service, so a producer may use it.
+// A shared prefix (provider.*, share.*, agent.*, agents.*) belongs to the network, not to one service, so a producer may use it.
 const shared = DEFAULT_SHARED_PREFIXES.map((p) => p.slice(0, -1));
 const outside = manifests.flatMap((m) => (m.eventsProduced || []).filter((t) => (m.id || m.service) !== 'events' && t.split('.')[0] !== namespaceOf(m.id || m.service) && !shared.includes(t.split('.')[0])).map((t) => `${m.id || m.service}: ${t}`));
 assert.deepStrictEqual(outside, [], 'every produced event type is in its producer\'s own namespace');
