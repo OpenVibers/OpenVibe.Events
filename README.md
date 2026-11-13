@@ -454,5 +454,5 @@ Part of the [OpenVibe network](https://openvibe.network). Built in the open by [
 <!-- versions:start -->
 - openvibe-contracts: v0.419.0
 - openvibe-sdk: v0.166.0
-- openvibe-shared: v4.242.0
+- openvibe-shared: v4.244.0
 <!-- versions:end -->
