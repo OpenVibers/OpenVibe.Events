@@ -118,12 +118,12 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
         if (!outcome.ok) {
             outcome.dead = outcome.permanent || atMostOnce || attempt >= maxAttempts;
             if (!outcome.dead) outcome.nextAttemptAt = clock.now() + backoffMs[Math.min(attempt - 1, backoffMs.length - 1)];
-            if (outcome.dead) log.warn(`[worker] ${row.id} -> ${sub.id} dead after ${attempt} attempts: ${outcome.error}`);
+            if (outcome.dead) log.warn(`[worker] ${row.id} to ${sub.id} dead after ${attempt} attempts: ${outcome.error}`);
         }
         // A developer app's subscription: the attempt counts toward its project's usage (./usage.js).
         const app = sub.project_id ? { projectId: sub.project_id, env: sub.env || 'production', traceId: row.trace_id } : null;
         const kept = await store.recordAttempt(delivery.event_id, delivery.subscription_id, outcome, app, owner);
-        if (kept === false) { log.warn(`[worker] ${row.id} -> ${sub.id}: the lease expired before the attempt was recorded; the newer claim's result stands`); return; }
+        if (kept === false) { log.warn(`[worker] ${row.id} to ${sub.id}: the lease expired before the attempt was recorded; the newer claim's result stands`); return; }
         if (observe) {
             try {
                 observe.attempt(outcome.ok ? 'delivered' : outcome.dead ? 'dead' : 'retry');
@@ -165,7 +165,7 @@ function createWorker({ store, config, clock = { now: () => Date.now() }, fetchI
         busy.add(d.subscription_id);
         if (isApp) appInflight++;
         const p = send(d)
-            .catch(err => log.error(`[worker] delivery ${d.event_id} -> ${d.subscription_id} crashed: ${err.stack || err}`))
+            .catch(err => log.error(`[worker] delivery ${d.event_id} to ${d.subscription_id} crashed: ${err.stack || err}`))
             .finally(() => {
                 finished++;
                 busy.delete(d.subscription_id);

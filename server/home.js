@@ -329,7 +329,7 @@ function sections({ apiUrl, stats = null }) {
         `curl -X POST ${apiUrl}/api/v1/subscriptions \\`,
         '  -H "Authorization: Bearer $TOKEN" -H \'Content-Type: application/json\' \\',
         '  -d \'{ "topic_pattern": "app.<project_key>.*", "endpoint": "https://hooks.example.com/openvibe" }\'',
-        '# → { "id": "sub_…", "secret": "whsec_…" }  the secret is shown once',
+        '# returns { "id": "sub_…", "secret": "whsec_…" }  the secret is shown once',
     ].join('\n');
     const pull = [
         `curl "${apiUrl}/api/v1/events?topic=app.<project_key>.*&limit=100" -H "Authorization: Bearer $TOKEN"`,
