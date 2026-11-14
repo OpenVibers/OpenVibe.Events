@@ -470,7 +470,7 @@ function renderUpdates({ siteUrl }) {
         agentLayer: true,
         llms: '/llms.txt',
         robots: 'index, follow',
-        navbar: { service: 'events', apiBase: NETWORK_URL, sessionUrl: '/auth/me', loginUrl: '/auth/login?next={path}', logoutUrl: '/auth/logout?next={url}', silentLogin: '/auth/login?silent=1&next={url}', links, history: { type: 'page', title: SITE_NAME } },
+        navbar: { service: 'events', apiBase: NETWORK_URL, sessionUrl: '/auth/me', tokenUrl: '/auth/navbar-token', loginUrl: '/auth/login?next={path}', logoutUrl: '/auth/logout?next={url}', silentLogin: '/auth/login?silent=1&next={url}', links, history: { type: 'page', title: SITE_NAME } },
         footer: FOOTER, home: '/', navLinks: links,
         head: [appIcon.headTags({ site: 'events' }), UPDATES_FONT].join('\n'),
         body: `<div id="navbar-mount"></div>
@@ -484,7 +484,7 @@ ${frame.updatesBody({ service: 'events', siteName: SITE_NAME })}
 function renderHome({ siteUrl, apiUrl, stats = null }) {
     const nav = {
         service: 'events',
-        apiBase: NETWORK_URL, sessionUrl: '/auth/me', loginUrl: '/auth/login?next={path}', logoutUrl: '/auth/logout?next={url}', silentLogin: '/auth/login?silent=1&next={url}',
+        apiBase: NETWORK_URL, sessionUrl: '/auth/me', tokenUrl: '/auth/navbar-token', loginUrl: '/auth/login?next={path}', logoutUrl: '/auth/logout?next={url}', silentLogin: '/auth/login?silent=1&next={url}',
         links: NAV_LINKS,
         history: { type: 'page', title: SITE_NAME },
     };
@@ -536,7 +536,7 @@ function renderNotFound({ siteUrl = 'https://openvibe.events' } = {}) {
         siteName: SITE_NAME,
         description: `There is no page at this address on ${host}.`,
         robots: 'noindex, follow',
-        navbar: { service: 'events', apiBase: NETWORK_URL, sessionUrl: '/auth/me', loginUrl: '/auth/login?next={path}', logoutUrl: '/auth/logout?next={url}', silentLogin: '/auth/login?silent=1&next={url}', links, history: { type: 'page', title: SITE_NAME } },
+        navbar: { service: 'events', apiBase: NETWORK_URL, sessionUrl: '/auth/me', tokenUrl: '/auth/navbar-token', loginUrl: '/auth/login?next={path}', logoutUrl: '/auth/logout?next={url}', silentLogin: '/auth/login?silent=1&next={url}', links, history: { type: 'page', title: SITE_NAME } },
         footer: FOOTER, home: '/', navLinks: links,
         head: [
             appIcon.headTags({ site: 'events' }),
