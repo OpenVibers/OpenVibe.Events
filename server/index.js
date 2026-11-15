@@ -121,7 +121,6 @@ async function start({
     };
     const pruneTimer = setInterval(prune, config.pruneIntervalMs);
     pruneTimer.unref?.();
-    if (config.worker.enabled) await prune();
 
     // Project usage rollups (server/usage.js): each closed hour is stored as events.usage.recorded and
     // fanned out like a published event.
@@ -161,10 +160,14 @@ async function start({
         server.headersTimeout = 66000;
         log.log(`[events] listening on http://${config.host}:${server.address().port}`);
     }
+    // The first prune runs once the server answers, never before: it can take seconds on a big table, and a deploy's
+    // new release has 30 s to report ready (2026-11-15: a 14 s sandbox delete before listen rolled a release back).
+    const firstPrune = config.worker.enabled ? prune() : Promise.resolve();
 
     async function close() {
         if (accountSubscription) accountSubscription.stop();
         clearInterval(pruneTimer);
+        await firstPrune;
         if (usageTimer) clearInterval(usageTimer);
         await billing.stop();
         policies.stop();
@@ -180,7 +183,7 @@ async function start({
         if (!givenDb) await db.close();
     }
 
-    return { config, db, store, keys, keyLoaded, auth, worker, realtime, metrics, app, server, policies, carriers, planner, valkey, close, prune, flushUsage, billing };
+    return { config, db, store, keys, keyLoaded, auth, worker, realtime, metrics, app, server, policies, carriers, planner, valkey, close, prune, firstPrune, flushUsage, billing };
 }
 
 if (require.main === module) {

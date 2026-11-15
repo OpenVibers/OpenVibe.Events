@@ -784,7 +784,9 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
      * from `events` when the other's next batch looks. Returns how many hot rows it removed.
      */
     const moveBatch = async (cutoff, limit, now) => await db.tx(async () => {
-        const rows = await db.prepare(`SELECT * FROM events WHERE received_at < ? AND env != 'sandbox' ORDER BY seq LIMIT ?
+        // Oldest first by received_at, the order idx_events_received keeps: ordered by seq, PostgreSQL walked the seq
+        // index and tested every row's age, 6 s on 3.2 million rows when only a few dozen were due (2026-11-15).
+        const rows = await db.prepare(`SELECT * FROM events WHERE received_at < ? AND env != 'sandbox' ORDER BY received_at LIMIT ?
             FOR UPDATE SKIP LOCKED`).all(cutoff, limit);
         if (!rows.length) return 0;
         const at = (await q.epoch.get()).value;
