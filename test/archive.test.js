@@ -53,6 +53,24 @@ t('a hot-pruned event is readable through replay: by id and by pull, unchanged',
     assert.deepStrictEqual([again.body.duplicate, again.body.cursor], [true, e.cursor]);
 });
 
+t('bulk event types go after their own days, from both tiers, and are never moved to replay (11-17)', async () => {
+    const bulk = { days: 7, types: ['*.index_document.upserted', 'live.bulk_x'] };
+    const doc = await publish(live, envelope('live', { event_type: 'live.index_document.upserted' }));
+    const lit = await publish(live, envelope('live', { event_type: 'live.bulkyx' }));   // `_` is not a wildcard
+    const keep = await publish(live, envelope('live', { event_type: 'live.tier.keep' }));
+    const early = await h.store.prune({ ...tiered(3), bulk });
+    assert.strictEqual(early.bulk, 0, 'younger than its days: kept');
+    const r = await h.store.prune({ ...tiered(8), bulk });
+    assert.ok(r.bulk >= 1, JSON.stringify(r));
+    assert.deepStrictEqual([await count('events', doc.event_id), await count('events_archive', doc.event_id)], [0, 0], 'gone, not archived');
+    assert.deepStrictEqual([await count('events', lit.event_id), await count('events', keep.event_id)], [1, 1], 'other types stay hot');
+    await h.store.prune({ ...tiered(31), bulk });
+    assert.deepStrictEqual([await count('events', keep.event_id), await count('events_archive', keep.event_id)], [0, 1], 'the rest moves to replay as before');
+    assert.deepStrictEqual(load({}).bulkRetention.days, 7);
+    assert.ok(load({}).bulkRetention.types.includes('*.index_document.upserted'));
+    assert.deepStrictEqual(load({ EVENTS_BULK_TYPES: 'a.b, c.*', EVENTS_BULK_RETENTION_DAYS: '3' }).bulkRetention, { days: 3, types: ['a.b', 'c.*'] });
+});
+
 t('a cursor across the hot/replay boundary reports no false gap (pull and SSE)', async () => {
     const a = await publish(live, envelope('live', { event_type: 'live.tier.cross' }));
     const b = await publish(live, envelope('live', { event_type: 'live.tier.cross' }));

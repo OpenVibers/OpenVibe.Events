@@ -806,11 +806,30 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
      * sandboxRetentionDays (or retentionDays, if shorter). Old publish receipts go as before.
      */
     async function prune({ retentionDays = 30, replayRetentionDays = 0, receiptRetentionDays = 90, sandboxRetentionDays = retentionDays,
-        now = clock.now(), batchSize = 500, maxBatches = 200 } = {}) {
+        bulk = null, now = clock.now(), batchSize = 500, maxBatches = 200 } = {}) {
         const hotCutoff = now - retentionDays * DAY_MS;
         let events = 0;
         let archived = 0;
         let replay = 0;
+        // Bulk types (config.bulkRetention): gone after their own days, from both tiers, never moved to replay. Batched
+        // like the move (their deliveries go with them); a row another prune holds is skipped and taken next time.
+        let bulked = 0;
+        const types = bulk && Array.isArray(bulk.types) ? bulk.types.map((x) => String(x).trim()).filter(Boolean) : [];
+        if (types.length && Number(bulk.days) > 0) {
+            const pats = types.map((x) => x.replace(/[\\%_]/g, (c) => `\\${c}`).replace(/\*/g, '%'));
+            const match = pats.map(() => 'event_type LIKE ?').join(' OR ');
+            const cut = now - Number(bulk.days) * DAY_MS;
+            const size = batchSize * 10;
+            for (let i = 0; i < maxBatches; i++) {
+                const n = (await db.prepare(`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE received_at < ? AND (${match})
+                    ORDER BY received_at LIMIT ${size} FOR UPDATE SKIP LOCKED)`).run(cut, ...pats)).changes;
+                bulked += n;
+                if (n < size) break;
+            }
+            bulked += (await db.prepare(`DELETE FROM events_archive WHERE received_at < ? AND (${match}) AND (hold_until IS NULL OR hold_until < ?)`)
+                .run(cut, ...pats, now)).changes;
+            events += bulked;
+        }
         if (replayRetentionDays > 0) {
             events += (await db.prepare("DELETE FROM events WHERE env = 'sandbox' AND received_at < ?")
                 .run(now - Math.min(retentionDays, sandboxRetentionDays) * DAY_MS)).changes;
@@ -837,7 +856,7 @@ function createStore(db, { clock = { now: () => Date.now() }, maxHops = 8, usage
             SELECT 1 FROM delivery_placements q WHERE q.carrier_class = p.carrier_class
               AND q.ordering_key IS NOT DISTINCT FROM p.ordering_key AND q.decided_at > p.decided_at)`)
             .run(now - retentionDays * DAY_MS)).changes;
-        return { events, archived, replay, receipts, placements };
+        return { events, archived, replay, receipts, placements, bulk: bulked };
     }
 
     async function ping() {
