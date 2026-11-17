@@ -113,8 +113,9 @@ async function start({
             const r = await store.prune({
                 retentionDays: config.retentionDays, replayRetentionDays: config.replayRetentionDays,
                 receiptRetentionDays: config.receiptRetentionDays, sandboxRetentionDays: config.apps.sandboxRetentionDays,
+                bulk: config.bulkRetention,
             });
-            if (r.events || r.replay || r.receipts) log.log(`[retention] pruned ${r.events} hot events (${r.archived} moved to replay), ${r.replay} replay events, ${r.receipts} receipts`);
+            if (r.events || r.replay || r.receipts) log.log(`[retention] pruned ${r.events} hot events (${r.archived} moved to replay, ${r.bulk || 0} bulk events gone after ${config.bulkRetention.days} days), ${r.replay} replay events, ${r.receipts} receipts`);
         } catch (err) {
             log.error(`[retention] prune failed: ${err.message}`);
         }

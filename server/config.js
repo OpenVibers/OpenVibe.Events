@@ -193,6 +193,14 @@ function load(env = process.env) {
         // hot store, counted from receipt like retentionDays. 0: no replay tier (pruned events are deleted, as before).
         replayRetentionDays: Math.max(0, int(env.EVENTS_REPLAY_RETENTION_DAYS, 365)),
         receiptRetentionDays: int(env.EVENTS_RECEIPT_RETENTION_DAYS, 90),
+        // Bulk events (2026-11-17): projections a service rebuilds from its own data (search index documents, feed items,
+        // market observations) live EVENTS_BULK_RETENTION_DAYS and are never moved to the replay tier. At about 170,000
+        // a day they were three quarters of the store, and a year of replay at that rate would be about 80 GB on a 96 GB
+        // host. EVENTS_BULK_TYPES is a comma list of event types, `*` matching any run of characters.
+        bulkRetention: {
+            days: Math.max(1, int(env.EVENTS_BULK_RETENTION_DAYS, 7)),
+            types: list(env.EVENTS_BULK_TYPES, ['*.index_document.upserted', 'search.document.indexed', 'sources.item.created', 'sources.item.updated', 'trade.observation.created']),
+        },
         pruneIntervalMs: int(env.EVENTS_PRUNE_INTERVAL_MS, 60 * 60 * 1000),
 
         sourcePrefixes: prefixes,
