@@ -176,7 +176,7 @@ t('the server-rendered event list: title, real <time datetime>, place, descripti
     assert.strictEqual((page.match(/<link rel="canonical"/g) || []).length, 1);
     const card = /<li class="hm-event"[\s\S]*?<\/li>/.exec(page)[0];
     assert.match(card, /A channel went live on OpenVibe\.Live/, 'the event title');
-    assert.match(card, /<time datetime="2026-10-29T09:41:00\.000Z">/, 'a real <time datetime>');
+    assert.match(card, /<time datetime="2026-10-29T09:41:00\.000Z" data-ov-time="day">/, 'a real <time datetime>, said in the reader\'s own zone');
     assert.match(card, / · from <a href="https:\/\/openvibe\.live">OpenVibe\.Live<\/a> · /, 'the publisher');
     assert.match(card, /3 this week/, 'the count');
     // What every event is, said once above the list (2026-11-02: the same sentence on 24 cards made the page 9 screens).

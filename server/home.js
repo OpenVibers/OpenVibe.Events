@@ -181,7 +181,9 @@ function eventCard(r, cat) {
     const iso = isoDate(r.last);
     const url = serviceUrl(ns);
     const category = url ? `<a href="${esc(url)}">${esc(ns)}</a>` : esc(ns);
-    const when = iso ? `<time datetime="${iso}">${esc(humanDate(r.last))}</time>` : '<span class="hm-event-undated">date not recorded</span>';
+    // data-ov-time: Shared's theme loader says it in the reader's own zone and clock; the UTC words are the fallback for
+    // crawlers and no-script (plan item 13: the home printed UTC to everyone).
+    const when = iso ? `<time datetime="${iso}" data-ov-time="day">${esc(humanDate(r.last))}</time>` : '<span class="hm-event-undated">date not recorded</span>';
     // What every public event is (a signed webhook to each subscriber, a cursor for any reader) is said once, above the
     // list; each card says only its own: what happened, when it last arrived, who published it, how often, its name.
     void category;
