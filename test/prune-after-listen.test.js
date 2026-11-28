@@ -14,7 +14,7 @@ const { boot, request } = require('./helpers');
 (async () => {
     const d = await testDb();
     try {
-        const idx = await d.db.prepare("SELECT indexdef FROM pg_indexes WHERE tablename = 'events' AND indexname = 'idx_events_sandbox_received'").get();
+        const idx = await d.db.prepare("SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'events' AND indexname = 'idx_events_sandbox_received'").get();
         assert.ok(idx, 'the sandbox retention index exists after the migrations');
         assert.match(idx.indexdef, /\(received_at\) WHERE \(env = 'sandbox'::text\)/);
 

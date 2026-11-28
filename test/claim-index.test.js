@@ -12,7 +12,7 @@ const { testDb } = require('./db');
 (async () => {
     const d = await testDb();
     try {
-        const idx = await d.db.prepare("SELECT indexdef FROM pg_indexes WHERE tablename = 'deliveries' AND indexname = 'idx_deliveries_claim'").get();
+        const idx = await d.db.prepare("SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'deliveries' AND indexname = 'idx_deliveries_claim'").get();
         assert.ok(idx, 'the claim index exists after the migrations');
         assert.match(idx.indexdef, /\(subscription_id, priority, seq\)/);
         assert.match(idx.indexdef, /WHERE \(status = ANY \(ARRAY\['pending'::text, 'failed'::text\]\)\)/);
